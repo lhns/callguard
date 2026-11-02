@@ -71,9 +71,9 @@ func (f *fake) Classify(ctx context.Context, req ClassifyRequest) (ClassifyResul
 }
 
 var (
-	injectionRe = regexp.MustCompile(`(?i)label this allow|ignore (all )?(the )?(previous|prior) instructions|classifier|</callguard-data>|reviewer:`)
+	injectionRe = regexp.MustCompile(`(?i)label[ _+-]this[ _+-]allow|ignore[ _+-](all[ _+-])?(the[ _+-])?(previous|prior)[ _+-]instructions|classifier|you are the reviewer|</callguard-data>|reviewer:`)
 
-	obeyRe = regexp.MustCompile(`(?i)label this allow|ignore (all )?(the )?(previous|prior) instructions|classifier`)
+	obeyRe = regexp.MustCompile(`(?i)label[ _+-]this[ _+-]allow|ignore[ _+-](all[ _+-])?(the[ _+-])?(previous|prior)[ _+-]instructions|classifier|you are the reviewer`)
 
 	secretPathRe = regexp.MustCompile(`(?i)\.ssh|id_rsa|id_ed25519|\.env\b|\.aws|\.npmrc|credentials|\.pem\b|/etc/shadow|secrets?\b`)
 	uploadRe     = regexp.MustCompile(`(?i)(curl|wget)\b.*(-d\s*@|--data(-binary|-raw|-urlencode)?[ =]+@|-F\s*\S*=@|-T\s|--upload-file)`)
