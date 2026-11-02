@@ -46,6 +46,9 @@ func cmdDecide(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *unattended {
 		req.Unattended = true
 	}
+	if req.Tool.Name == "" {
+		return fail("request has no tool.name")
+	}
 
 	lo := callguard.LoadOptions{SystemPolicy: *policyFile, ProjectDir: callguard.ResolveProjectDir(req)}
 	lo.LogPath = *logPath

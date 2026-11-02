@@ -62,7 +62,7 @@ func TestDecideExitCodes(t *testing.T) {
 		{"unattended in request", reqJSON(t, dir, "Bash", map[string]any{"command": "git push --force"}, map[string]any{"unattended": true}), nil, 1, "deny", "rules"},
 		{"bad json", "{not json", nil, 3, "ask", "fallback"},
 		{"bad json unattended", "", []string{"--unattended"}, 3, "deny", "fallback"},
-		{"no tool", `{"cwd":"/x"}`, nil, 2, "ask", "fallback"},
+		{"no tool", `{"cwd":"/x"}`, nil, 3, "ask", "fallback"},
 		{"oversized", `{"tool":{"name":"Bash"},"pad":"` + strings.Repeat("x", 4<<20) + `"}`, nil, 3, "ask", "fallback"},
 	}
 	for _, tc := range tests {

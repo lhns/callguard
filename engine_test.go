@@ -279,6 +279,18 @@ func TestLLMFailures(t *testing.T) {
 		t.Errorf("unattended fallback: %+v", got)
 	}
 
+	// No Options.Backend: the policy's backend is built with backend.FromConfig.
+	// Whether that fails at construction or at the call depends on the backend
+	// implementation, so only layer and decision are asserted.
+	e, v := newTestEngine(t, testPolicy(), Options{}, nil)
+	e.impl.judge = func(context.Context, backend.Backend, judge.Config, judge.Input) (judge.Result, error) {
+		return judge.Result{}, errors.New("judge unavailable")
+	}
+	got = e.Decide(context.Background(), bash("go test"))
+	if got.Layer != LayerFallback || got.Decision != Ask || v.calls.Load() != 0 {
+		t.Errorf("policy backend: %+v", got)
+	}
+
 	// A failure inside the shadowed LLM layer is not enforced either.
 	e, _ = newTestEngine(t, policy.Default(), Options{}, boom)
 	got = e.Decide(context.Background(), bash("go test"))
@@ -294,7 +306,7 @@ func TestLLMFailures(t *testing.T) {
 
 	// An unconfigured backend (and no Options.Backend) is a fallback with no call.
 	p := testPolicy(func(p *policy.Policy) { p.LLM.Backend = "nope" })
-	e, v := newTestEngine(t, p, Options{}, nil)
+	e, v = newTestEngine(t, p, Options{}, nil)
 	got = e.Decide(context.Background(), bash("go test"))
 	if got.Layer != LayerFallback || got.Rule != "backend" || !strings.Contains(got.Reason, "nope") || v.calls.Load() != 0 {
 		t.Errorf("missing backend: %+v", got)
