@@ -1,0 +1,8 @@
+{
+  "harness": "opencode",
+  "tool": "bash",
+  "input": {"command": "rm -rf build"},
+  "cwd": "/home/user/my-project",
+  "session_id": "ses_9",
+  "context": {"trust": "tainted"}
+}

@@ -1,0 +1,9 @@
+{
+  "harness": "pi",
+  "tool": "read",
+  "input": {"path": "src/main.go"},
+  "cwd": "/home/user/my-project",
+  "session_id": "pi_1",
+  "project_dir": "/home/user/my-project",
+  "unattended": true
+}

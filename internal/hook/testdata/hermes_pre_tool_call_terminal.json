@@ -1,0 +1,9 @@
+{
+  "hook_event_name": "pre_tool_call",
+  "tool_name": "terminal",
+  "tool_input": {"command": "ls -la"},
+  "session_id": "sess_42",
+  "cwd": "/home/user/my-project",
+  "profile": "default",
+  "extra": {}
+}
