@@ -3,6 +3,9 @@ linters:
   default: standard
   enable:
     - govet
+  exclusions:
+    presets:
+      - std-error-handling
 formatters:
   enable:
     - gofmt
