@@ -46,6 +46,7 @@ type Match struct {
 	URL        string              `json:"url,omitempty"`
 	Field      map[string]string   `json:"field,omitempty"`
 	Path       []string            `json:"path,omitempty"`
+	NotPath    []string            `json:"not_path,omitempty"` // path must match none of these globs
 	InProject  *bool               `json:"in_project,omitempty"`
 	Context    map[string][]string `json:"context,omitempty"`
 	Unattended *bool               `json:"unattended,omitempty"`
