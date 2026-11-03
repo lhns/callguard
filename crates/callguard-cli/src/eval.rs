@@ -282,7 +282,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs other chunk"]
     fn setup_errors() {
         for (name, args) in [
             ("unknown bucket", vec!["--bucket", "no-such-bucket"]),
@@ -297,7 +296,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs other chunk"]
     fn anthropic_needs_key() {
         // ANTHROPIC_API_KEY must be unset for this test (it cannot be cleared
         // from safe Rust).
@@ -318,7 +316,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs other chunk"]
     fn facts_modes() {
         for mode in ["on", "off", "both"] {
             let (code, out, err) =

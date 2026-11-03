@@ -1,9 +1,7 @@
 //! Ports of engine_test.go, engine_judge_test.go and failsafe_test.go.
 //!
 //! The Go tests fake nah with a re-executed test binary; here a `NahEngine`
-//! fake plays that part. Tests that reach the other chunk's modules (the decision
-//! log, the transcript, the real judge and backends) are `#[ignore]`d until
-//! both chunks are merged.
+//! fake plays that part.
 
 #![allow(clippy::type_complexity)]
 
@@ -423,7 +421,6 @@ fn input_reaches_judge() {
 /// The assistant's text must not reach the judge. Needs `transcript::referents`
 /// and `transcript::limit`.
 #[test]
-#[ignore = "needs other chunk"]
 fn assistant_text_does_not_reach_the_judge() {
     let (e, v) = new_test_engine(
         test_policy(no_mut),
@@ -462,7 +459,6 @@ fn assistant_text_does_not_reach_the_judge() {
 
 /// Needs `transcript::{referents, limit, valid_outcome, mark_blocked}`.
 #[test]
-#[ignore = "needs other chunk"]
 fn inline_transcript_roles_and_referents() {
     let (e, v) = new_test_engine(
         test_policy(no_mut),
@@ -536,7 +532,6 @@ fn transcript_with_unknown_format_is_ignored_without_a_warning() {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn transcript_from_missing_path_is_a_warning() {
     let (e, v) = new_test_engine(
         test_policy(no_mut),
@@ -689,7 +684,6 @@ fn llm_failures() {
 
 /// No Options.backend: the policy's backend is built with `backend::from_config`.
 #[test]
-#[ignore = "needs other chunk"]
 fn llm_failure_with_the_policy_backend() {
     let (mut e, v) = new_test_engine(test_policy(no_mut), Options::default(), None);
     with_inner(&mut e, |i| {
@@ -1118,7 +1112,7 @@ fn custom_rule() {
     );
 }
 
-// --- the decision log (needs the other chunk's declog) ---------------------------
+// --- the decision log ---
 
 fn read_log(path: &std::path::Path) -> Vec<serde_json::Value> {
     fs::read_to_string(path)
@@ -1129,7 +1123,6 @@ fn read_log(path: &std::path::Path) -> Vec<serde_json::Value> {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn decision_log() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("log").join("decisions.jsonl");
@@ -1217,7 +1210,6 @@ fn decision_log() {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn decision_log_disabled_and_failing() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
@@ -1286,7 +1278,6 @@ fn decision_log_disabled_and_failing() {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn deny_streak() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("d.jsonl").to_string_lossy().into_owned();
@@ -1345,7 +1336,6 @@ fn deny_streak() {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn deny_streak_total_and_reset() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("d.jsonl").to_string_lossy().into_owned();
@@ -1426,7 +1416,6 @@ fn deny_streak_total_and_reset() {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn prior_callguard_blocks_mark_the_call() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("d.jsonl").to_string_lossy().into_owned();
@@ -1503,7 +1492,6 @@ fn prior_callguard_blocks_mark_the_call() {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn tool_use_id_is_logged() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("d.jsonl");
@@ -1693,7 +1681,6 @@ fn nah_shadow_does_not_end_the_pipeline() {
 }
 
 #[test]
-#[ignore = "needs other chunk"]
 fn nah_shadow_is_logged_without_the_reason() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("d.jsonl");
@@ -1863,7 +1850,6 @@ fn the_probe_reads_the_command_like_go_does() {
 /// End-to-end fail-safe checks through the real judge and fake backends: a
 /// timeout, a bad model output and an injection attempt never yield allow.
 #[test]
-#[ignore = "needs other chunk"]
 fn fail_safe_with_the_real_judge() {
     const NEUTRAL: &str = "python scripts/report.py --upload https://reports.example.net";
     let tests: Vec<(&str, &str, &str, bool, Decision, &str)> = vec![

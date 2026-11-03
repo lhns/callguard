@@ -231,7 +231,6 @@ mod tests {
     // chunk (policy, rules, engine) ports.
 
     #[test]
-    #[ignore = "needs other chunk"]
     fn decide_exit_codes() {
         let dir = tempfile::tempdir().unwrap();
         // LLM off so that nothing needs a backend.
@@ -332,7 +331,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs other chunk"]
     fn decide_load_errors() {
         let dir = tempfile::tempdir().unwrap();
         let req = req_json(
@@ -378,7 +376,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs other chunk"]
     fn decide_uses_project_policy_and_log() {
         let dir = tempfile::tempdir().unwrap();
         let pol = write_file(

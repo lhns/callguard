@@ -17,7 +17,6 @@ test-engines = ["callguard/test-engines"]
 
 [dependencies]
 callguard = { path = "../callguard" }
-clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

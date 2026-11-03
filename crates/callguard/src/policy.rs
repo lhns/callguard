@@ -432,8 +432,17 @@ fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
     if data.starts_with(b"\xef\xbb\xbf") {
         data.drain(..3);
     }
-    let policy: Policy =
-        serde_json::from_slice(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
+    let parse = |d: &[u8]| serde_json::from_slice::<Policy>(d);
+    let mut policy = parse(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
+    // Go's encoding/json matches struct keys case-insensitively, so "Rules"
+    // still reaches `rules` (while `unknown` below still reports it). Rewrite
+    // such keys and parse again; otherwise a deny rule would be dropped.
+    if let Ok(mut raw) = serde_json::from_slice::<Value>(&data)
+        && fold_keys(&mut raw, Ty::Obj(Obj::Policy))
+    {
+        let folded = serde_json::to_vec(&raw).expect("a Value serializes");
+        policy = parse(&folded).map_err(|e| fail(false, format!("{path}: {e}")))?;
+    }
     if policy.policy_version != VERSION {
         return Err(fail(
             false,
@@ -604,6 +613,49 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
         Obj::DenyStreak => &[("consecutive", Leaf), ("total", Leaf)],
         Obj::Log => &[("path", Leaf), ("include_input", Leaf), ("disabled", Leaf)],
     }
+}
+
+/// Renames keys that match a struct field only case-insensitively (Go's
+/// decoding rule; an exact key wins). Returns whether anything changed.
+fn fold_keys(raw: &mut Value, ty: Ty) -> bool {
+    let mut changed = false;
+    match (ty, raw) {
+        (Ty::Obj(o), Value::Object(m)) => {
+            let known = schema_fields(o);
+            for key in m.keys().cloned().collect::<Vec<_>>() {
+                let field = match known.iter().find(|(name, _)| *name == key) {
+                    Some(f) => *f,
+                    None => match known
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(&key))
+                    {
+                        Some(f) if !m.contains_key(f.0) => {
+                            let v = m.remove(&key).expect("key exists");
+                            m.insert(f.0.to_owned(), v);
+                            changed = true;
+                            *f
+                        }
+                        _ => continue,
+                    },
+                };
+                if let Some(v) = m.get_mut(field.0) {
+                    changed |= fold_keys(v, field.1);
+                }
+            }
+        }
+        (Ty::List(o), Value::Array(a)) => {
+            for el in a {
+                changed |= fold_keys(el, Ty::Obj(o));
+            }
+        }
+        (Ty::Map(o), Value::Object(m)) => {
+            for v in m.values_mut() {
+                changed |= fold_keys(v, Ty::Obj(o));
+            }
+        }
+        _ => {}
+    }
+    changed
 }
 
 fn walk_unknown(raw: &Value, ty: Ty, path: &str, out: &mut Vec<String>) {
@@ -822,15 +874,9 @@ fn opt_go_float<S: Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error>
 }
 
 /// The bytes Go's `json.Marshal` writes for `p`: fields in declaration order,
-/// maps sorted, and `<`, `>`, `&`, U+2028 and U+2029 escaped as Go does.
+/// maps sorted, HTML-escaped as Go does (see `gojson`).
 fn canonical_json(p: &Policy) -> String {
-    let json = serde_json::to_string(p).unwrap_or_default();
-    // These characters occur only inside JSON strings, so a plain replace is safe.
-    json.replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029")
+    crate::gojson::to_string(p).unwrap_or_default()
 }
 
 /// "sha256:<hex>" of the canonical JSON of `p`. It must equal the Go binary's

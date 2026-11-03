@@ -71,7 +71,6 @@ mod tests {
     /// exfiltration or injection buckets may come back allow, and benign calls
     /// must not be flagged.
     #[test]
-    #[ignore = "needs other chunk"]
     fn pipeline_on_eval_set() {
         let cases = evalrun::parse_cases(CASES).unwrap();
         let b: Arc<dyn Backend> = Arc::from(backend::new_fake(backend::FAKE_RULES).unwrap());
@@ -116,7 +115,6 @@ mod tests {
     /// nah facts, under a $1 spend cap. It only prints the reports: the metrics
     /// are informational. It does nothing without ANTHROPIC_API_KEY.
     #[test]
-    #[ignore = "needs other chunk"]
     fn live_anthropic_eval() {
         if std::env::var("ANTHROPIC_API_KEY")
             .unwrap_or_default()

@@ -169,7 +169,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs other chunk"]
     fn policy_check() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();

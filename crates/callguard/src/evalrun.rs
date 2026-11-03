@@ -339,15 +339,6 @@ fn score(cases: &[&Case], outs: &[Outcome]) -> Report {
     rep
 }
 
-/// Go's `encoding/json` HTML-escapes `<`, `>`, `&` and the line separators.
-fn html_escape(json: &str) -> String {
-    json.replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('&', "\\u0026")
-        .replace('\u{2028}', "\\u2028")
-        .replace('\u{2029}', "\\u2029")
-}
-
 fn pct_str(p: Option<f64>) -> String {
     p.map_or_else(|| "-".to_owned(), |p| format!("{:.0}%", p * 100.0))
 }
@@ -356,8 +347,8 @@ impl Report {
     /// Writes the report as indented JSON, as Go's `json.Encoder` with
     /// `SetIndent("", "  ")` does.
     pub fn write_json(&self, w: &mut dyn Write) -> io::Result<()> {
-        let json = serde_json::to_string_pretty(self).map_err(io::Error::other)?;
-        w.write_all(html_escape(&json).as_bytes())?;
+        let json = crate::gojson::to_string_indent(self).map_err(io::Error::other)?;
+        w.write_all(json.as_bytes())?;
         w.write_all(b"\n")
     }
 

@@ -1,13 +1,15 @@
 //! Differential test: the last Go binary against the Rust binary, over
-//! evals/cases.jsonl and every internal/hook/testdata fixture. Ignored until
-//! the port lands; run with `cargo test -p callguard-cli --test differential
-//! -- --ignored`.
+//! evals/cases.jsonl and every internal/hook/testdata fixture.
 //!
 //! Both binaries run with a scrubbed environment: PATH holds an empty
 //! directory (so no `nah`, no `git`), HOME and the config/state dirs are a
 //! fresh temp dir, and the system policy file names no `nah.path`. The judge
 //! is the fake backend, so the `judge` bucket (which only a real model can
 //! decide) is skipped.
+//!
+//! Besides decision, layer, rule and exit code, it compares `policy_rev` (same
+//! policy, so the same hash), the output of `callguard plugin`, and a few
+//! hand-written edge cases (deep nesting, duplicate keys, wrong-case keys).
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -16,11 +18,13 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-/// Listed expected differences: (case or fixture id, why). Empty until a
-/// difference is understood and accepted.
-/// Known so far: serde_json refuses JSON nested deeper than 128 levels, Go
-/// accepts it; the Rust side takes the fail-safe path.
-const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[];
+/// Listed expected differences: (case or fixture id, why). Only intended ones.
+/// JSON nested past 128 levels is intended too, but the edge cases show no
+/// difference (the tool input is kept raw), so it has no entry.
+const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[(
+    "hook-duplicate-tool-name",
+    "Rust rejects a duplicate struct field (strict) and takes the fail-safe ask; Go keeps the last one",
+)];
 
 const POLICY: &str =
     r#"{"policy_version":1,"llm":{"backend":"fake"},"backends":{"fake":{"type":"fake"}}}"#;
@@ -142,6 +146,7 @@ fn verdict_summary(code: i32, stdout: &str) -> Value {
     serde_json::json!({
         "exit": code,
         "decision": v["decision"], "layer": v["layer"], "rule": v["rule"],
+        "policy_rev": v["policy_rev"],
     })
 }
 
@@ -153,7 +158,6 @@ fn expected_difference(id: &str) -> Option<&'static str> {
 }
 
 #[test]
-#[ignore = "until the Rust port lands"]
 fn go_and_rust_agree() {
     let sb = Sandbox::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -219,6 +223,125 @@ fn go_and_rust_agree() {
         compared += 1;
         if a != b && expected_difference(&name).is_none() {
             diffs.insert(format!("fixture {name}"), (a, b));
+        }
+    }
+
+    // the plugin sources
+    for harness in ["opencode", "pi", "vim", ""] {
+        let args: Vec<&str> = ["plugin"]
+            .into_iter()
+            .chain(Some(harness).filter(|h| !h.is_empty()))
+            .collect();
+        let (gc, go_out) = sb.run(&go, &args, "");
+        let (rc, rust_out) = sb.run(&rust, &args, "");
+        compared += 1;
+        if (gc, &go_out) != (rc, &rust_out) {
+            diffs.insert(
+                format!("plugin {harness}"),
+                (
+                    serde_json::json!({"exit": gc, "len": go_out.len()}),
+                    serde_json::json!({"exit": rc, "len": rust_out.len()}),
+                ),
+            );
+        }
+    }
+
+    // edge cases: (id, policy file body, stdin)
+    let request = |input: &str| {
+        format!(
+            r#"{{"harness":"claude","cwd":"/work/app","project_dir":"/work/app","tool":{{"name":"Bash","input":{input}}}}}"#
+        )
+    };
+    let deep_ok = format!("{}1{}", "[".repeat(100), "]".repeat(100));
+    let deep_129 = format!("{}1{}", "[".repeat(200), "]".repeat(200));
+    let wrong_case_policy = r#"{"policy_version":1,"llm":{"backend":"fake"},"backends":{"fake":{"type":"fake"}},"Rules":[{"id":"no-ls","decision":"deny","match":{"command":"^ls"}}]}"#;
+    let edge: Vec<(&str, &str, String)> = vec![
+        (
+            "edge-nesting-100",
+            POLICY,
+            request(&format!(r#"{{"command":"ls","x":{deep_ok}}}"#)),
+        ),
+        (
+            "edge-nesting-129",
+            POLICY,
+            request(&format!(r#"{{"command":"ls","x":{deep_129}}}"#)),
+        ),
+        (
+            "edge-duplicate-keys",
+            POLICY,
+            request(r#"{"command":"rm -rf /","command":"ls"}"#),
+        ),
+        (
+            "edge-wrong-case-input-key",
+            POLICY,
+            request(r#"{"Command":"rm -rf /"}"#),
+        ),
+        (
+            "edge-policy-Rules-wrong-case",
+            wrong_case_policy,
+            request(r#"{"command":"ls"}"#),
+        ),
+    ];
+    for (id, pol, stdin) in edge {
+        let pol_path = sb.policy.with_file_name(format!("{id}.json"));
+        std::fs::write(&pol_path, pol).unwrap();
+        let args = [
+            "decide",
+            "--policy",
+            pol_path.to_str().unwrap(),
+            "--no-user-policy",
+            "--log",
+            "-",
+        ];
+        let (gc, go_out) = sb.run(&go, &args, &stdin);
+        let (rc, rust_out) = sb.run(&rust, &args, &stdin);
+        let (a, b) = (verdict_summary(gc, &go_out), verdict_summary(rc, &rust_out));
+        compared += 1;
+        if a != b && expected_difference(id).is_none() {
+            diffs.insert(format!("edge {id}"), (a, b));
+        }
+    }
+
+    // the same malformed shapes through the Claude hook
+    let hook = |input: &str, extra: &str| {
+        format!(
+            r#"{{"cwd":"/work/app","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{input}{extra}}}"#
+        )
+    };
+    let hook_edge: Vec<(&str, String)> = vec![
+        (
+            "hook-nesting-129",
+            hook(&format!(r#"{{"command":"ls","x":{deep_129}}}"#), ""),
+        ),
+        (
+            "hook-duplicate-keys",
+            hook(r#"{"command":"rm -rf /","command":"ls"}"#, ""),
+        ),
+        (
+            "hook-duplicate-tool-name",
+            hook(r#"{"command":"ls"}"#, r#","tool_name":"Read""#),
+        ),
+        (
+            "hook-wrong-case-input-key",
+            hook(r#"{"Command":"rm -rf /"}"#, ""),
+        ),
+    ];
+    let hook_args = [
+        "hook",
+        "claude",
+        "--policy",
+        policy,
+        "--no-user-policy",
+        "--log",
+        "-",
+    ];
+    for (id, stdin) in hook_edge {
+        let (gc, go_out) = sb.run(&go, &hook_args, &stdin);
+        let (rc, rust_out) = sb.run(&rust, &hook_args, &stdin);
+        let (a, b) = (summarize(gc, &go_out), summarize(rc, &rust_out));
+        compared += 1;
+        if a != b && expected_difference(id).is_none() {
+            diffs.insert(format!("edge {id}"), (a, b));
         }
     }
 
