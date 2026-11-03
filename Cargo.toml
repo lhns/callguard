@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/callguard", "crates/callguard-cli"]
+# crates/callguard-nah joins in Phase 2.
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.91"
+license = "Apache-2.0"
+repository = "https://github.com/lhns/callguard"
+publish = false
+
+# Every dependency any phase-1 module needs is pinned here, so porting workers
+# never edit a Cargo.toml or Cargo.lock.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+# No preserve_order: without it a serde_json Value keeps object keys sorted, as
+# Go's map[string]any marshals them, and the judge prompt renders from such values.
+serde_json = { version = "1", features = ["raw_value"] }
+regex = "1"
+sha2 = "0.10"
+hex = "0.4"
+clap = { version = "4", features = ["derive"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+thiserror = "2"
+time = { version = "0.3", features = ["formatting"] }
+getrandom = "0.3"
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
