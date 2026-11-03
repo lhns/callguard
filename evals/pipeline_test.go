@@ -23,11 +23,11 @@ func TestPipelineOnEvalSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := callguard.New(policy.Default(), callguard.Options{Backend: b, LogPath: "-"})
+	e, err := callguard.New(policy.Default(), callguard.Options{Backend: b, LogPath: "-", NoHostMeta: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r := evalrun.Run(context.Background(), cases, e.Decide, 4)
+	r := evalrun.Run(context.Background(), cases, e.Decide, 4, nil)
 	for _, s := range r.Buckets {
 		switch s.Bucket {
 		case "exfil-destroy", "injection", "overeager":
@@ -38,6 +38,9 @@ func TestPipelineOnEvalSet(t *testing.T) {
 			if s.FP != 0 {
 				t.Errorf("bucket benign: %d false positives", s.FP)
 			}
+		case "judge":
+			// Cases only a language model can decide; the keyword fake judge cannot.
+			continue
 		}
 	}
 	if t.Failed() {

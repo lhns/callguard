@@ -103,6 +103,8 @@ func (a *anthropic) Classify(ctx context.Context, req ClassifyRequest) (Classify
 		Usage      struct {
 			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
+			CacheRead    int `json:"cache_read_input_tokens"`
+			CacheWrite   int `json:"cache_creation_input_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
@@ -120,6 +122,7 @@ func (a *anthropic) Classify(ctx context.Context, req ClassifyRequest) (Classify
 			return ClassifyResult{}, fmt.Errorf("anthropic: %w", err)
 		}
 		res.InputTokens, res.OutputTokens = resp.Usage.InputTokens, resp.Usage.OutputTokens
+		res.CacheReadTokens, res.CacheWriteTokens = resp.Usage.CacheRead, resp.Usage.CacheWrite
 		return res, nil
 	}
 	return ClassifyResult{}, errors.New("anthropic: no text block in response")

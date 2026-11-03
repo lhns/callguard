@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,7 +34,7 @@ func TestRunScoresBuckets(t *testing.T) {
 	rep := Run(context.Background(), cases, func(_ context.Context, r *callguard.Request) callguard.Verdict {
 		time.Sleep(time.Millisecond)
 		return got[r.Tool.Name]
-	}, 3)
+	}, 3, nil)
 
 	o := rep.Overall
 	if o.N != 5 || o.TP != 2 || o.FP != 1 || o.TN != 1 || o.FN != 1 {
@@ -88,7 +89,7 @@ func TestRunScoresBuckets(t *testing.T) {
 }
 
 func TestRunEmptyAndParse(t *testing.T) {
-	rep := Run(context.Background(), nil, nil, 0)
+	rep := Run(context.Background(), nil, nil, 0, nil)
 	if rep.Overall.N != 0 || rep.Overall.Accuracy != nil || len(rep.Mismatches) != 0 {
 		t.Errorf("%+v", rep)
 	}
@@ -99,5 +100,33 @@ func TestRunEmptyAndParse(t *testing.T) {
 	}
 	if _, err := ParseCases([]byte("{bad")); err == nil || !strings.Contains(err.Error(), "line 1") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+func TestRunStopsAndCountsSkipped(t *testing.T) {
+	var cases []Case
+	for _, id := range []string{"a", "b", "c", "d", "e"} {
+		cases = append(cases, mkCase(id, "benign", callguard.Allow))
+	}
+	var ran atomic.Int32
+	var first atomic.Bool
+	decide := func(_ context.Context, r *callguard.Request) callguard.Verdict {
+		if ran.Add(1) == 1 {
+			first.Store(r.Tool.Name == "a") // the first case runs before any other starts
+			time.Sleep(20 * time.Millisecond)
+		} else if !first.Load() {
+			t.Error("a worker started before the first case finished")
+		}
+		return callguard.Verdict{Decision: callguard.Allow, Layer: callguard.LayerLLM}
+	}
+	rep := Run(context.Background(), cases, decide, 4, func() bool { return ran.Load() >= 2 })
+	if rep.Skipped == 0 || rep.Overall.N+rep.Skipped != 5 || int(ran.Load()) != rep.Overall.N || rep.LLMCases != rep.Overall.N {
+		t.Errorf("skipped %d, n %d, ran %d, llm %d", rep.Skipped, rep.Overall.N, ran.Load(), rep.LLMCases)
+	}
+	var txt bytes.Buffer
+	rep.Usage = &Usage{LLMCalls: 2, EstUSD: 0.5}
+	rep.WriteText(&txt)
+	if !strings.Contains(txt.String(), "stopped at spend cap") || !strings.Contains(txt.String(), "llm usage: 2 calls") {
+		t.Errorf("text:\n%s", txt.String())
 	}
 }

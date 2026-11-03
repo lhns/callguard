@@ -18,7 +18,7 @@ import (
 )
 
 // Buckets in report order.
-var Buckets = []string{"benign", "overeager", "exfil-destroy", "tainted", "injection"}
+var Buckets = []string{"benign", "overeager", "exfil-destroy", "tainted", "injection", "judge"}
 
 // Case is one row of cases.jsonl.
 type Case struct {
@@ -61,6 +61,11 @@ type Report struct {
 	Overall    Stats      `json:"overall"`
 	Buckets    []Stats    `json:"buckets"`
 	Mismatches []Mismatch `json:"mismatches"`
+	// Skipped cases were not run because the spend cap stopped the run; they are
+	// not in any metric. LLMCases is how many run cases reached the llm layer.
+	Skipped  int    `json:"skipped"`
+	LLMCases int    `json:"llm_cases"`
+	Usage    *Usage `json:"usage,omitempty"`
 }
 
 // ParseCases reads JSON lines, skipping blank lines and lines starting with //.
@@ -87,15 +92,37 @@ type outcome struct {
 	layer   string
 	rule    string
 	latency time.Duration
+	llm     bool // the case reached the llm layer
 }
 
-// Run decides every case with up to concurrency parallel calls and scores
-// the results. Case order does not depend on completion order.
-func Run(ctx context.Context, cases []Case, decide func(context.Context, *callguard.Request) callguard.Verdict, concurrency int) Report {
+// Run decides the cases with up to concurrency parallel calls and scores the
+// results. Case order does not depend on completion order. The first case runs
+// alone, so a prompt cache is warm before the workers start. stop, if set, is
+// checked before each case is dispatched; once it reports true the remaining
+// cases are skipped: counted in Report.Skipped and left out of the metrics.
+func Run(ctx context.Context, cases []Case, decide func(context.Context, *callguard.Request) callguard.Verdict, concurrency int, stop func() bool) Report {
 	if concurrency < 1 {
 		concurrency = 1
 	}
 	outs := make([]outcome, len(cases))
+	done := make([]bool, len(cases))
+	one := func(i int) {
+		req := cases[i].Request
+		start := time.Now()
+		v := decide(ctx, &req)
+		o := outcome{got: v.Decision, layer: v.Layer, rule: v.Rule, latency: time.Since(start), llm: v.Layer == callguard.LayerLLM || v.Backend != ""}
+		if v.Layer == callguard.LayerNone {
+			o.got = callguard.Allow // nothing decided: not flagged
+		}
+		outs[i], done[i] = o, true
+	}
+	stopped := func() bool { return stop != nil && stop() }
+
+	next := 0
+	if len(cases) > 0 && !stopped() {
+		one(0)
+		next = 1
+	}
 	idx := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < concurrency; w++ {
@@ -103,23 +130,31 @@ func Run(ctx context.Context, cases []Case, decide func(context.Context, *callgu
 		go func() {
 			defer wg.Done()
 			for i := range idx {
-				req := cases[i].Request
-				start := time.Now()
-				v := decide(ctx, &req)
-				o := outcome{got: v.Decision, layer: v.Layer, rule: v.Rule, latency: time.Since(start)}
-				if v.Layer == callguard.LayerNone {
-					o.got = callguard.Allow // nothing decided: not flagged
-				}
-				outs[i] = o
+				one(i) // each case writes its own slots
 			}
 		}()
 	}
-	for i := range cases {
-		idx <- i
+	for ; next < len(cases) && !stopped(); next++ {
+		idx <- next
 	}
 	close(idx)
 	wg.Wait()
-	return score(cases, outs)
+
+	var ran []Case
+	var ranOuts []outcome
+	for i := range cases {
+		if done[i] {
+			ran, ranOuts = append(ran, cases[i]), append(ranOuts, outs[i])
+		}
+	}
+	rep := score(ran, ranOuts)
+	rep.Skipped = len(cases) - len(ran)
+	for _, o := range ranOuts {
+		if o.llm {
+			rep.LLMCases++
+		}
+	}
+	return rep
 }
 
 type acc struct {
@@ -235,6 +270,12 @@ func (r Report) WriteText(w io.Writer) {
 		row(s)
 	}
 	row(r.Overall)
+	if r.Skipped > 0 {
+		fmt.Fprintf(w, "\nstopped at spend cap: %d cases skipped, not counted above\n", r.Skipped)
+	}
+	if r.Usage != nil {
+		r.Usage.write(w)
+	}
 	if len(r.Mismatches) == 0 {
 		fmt.Fprintln(w, "\nno mismatches")
 		return
@@ -250,4 +291,29 @@ func pctStr(p *float64) string {
 		return "-"
 	}
 	return fmt.Sprintf("%.0f%%", *p*100)
+}
+
+// WriteComparison prints the headline metrics of two runs side by side.
+func WriteComparison(w io.Writer, labelA string, a Report, labelB string, b Report) {
+	fmt.Fprintf(w, "%-14s %12s %12s\n", "", labelA, labelB)
+	row := func(name, x, y string) { fmt.Fprintf(w, "%-14s %12s %12s\n", name, x, y) }
+	row("precision", pctStr(a.Overall.Precision), pctStr(b.Overall.Precision))
+	row("recall", pctStr(a.Overall.Recall), pctStr(b.Overall.Recall))
+	row("fpr", pctStr(a.Overall.FPR), pctStr(b.Overall.FPR))
+	row("accuracy", pctStr(a.Overall.Accuracy), pctStr(b.Overall.Accuracy))
+	tokens := func(r Report) string {
+		if r.Usage == nil {
+			return "-"
+		}
+		return fmt.Sprintf("%.0f", r.Usage.TokensPerCase)
+	}
+	usd := func(r Report) string {
+		if r.Usage == nil {
+			return "-"
+		}
+		return fmt.Sprintf("$%.4f", r.Usage.EstUSD)
+	}
+	row("tokens/case", tokens(a), tokens(b))
+	row("est. usd", usd(a), usd(b))
+	row("cases run", fmt.Sprint(a.Overall.N), fmt.Sprint(b.Overall.N))
 }

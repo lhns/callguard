@@ -76,7 +76,7 @@ func newAnthropicTest(t *testing.T, url, model string) Backend {
 
 func TestAnthropicRequestShapeHaiku(t *testing.T) {
 	called := false
-	srv := anthropicServer(t, 200, `{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":`+mustJSON(okText)+`}],"stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":7}}`,
+	srv := anthropicServer(t, 200, `{"content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":`+mustJSON(okText)+`}],"stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":7,"cache_read_input_tokens":300,"cache_creation_input_tokens":40}}`,
 		func(r *http.Request, body map[string]any) {
 			called = true
 			if r.URL.Path != "/v1/messages" || r.Method != http.MethodPost {
@@ -121,7 +121,7 @@ func TestAnthropicRequestShapeHaiku(t *testing.T) {
 		t.Fatal("server not called")
 	}
 	if res.Label != "allow" || res.Confidence != 0.93 || res.Rule != "r" || res.Reason != "fine" ||
-		res.InputTokens != 11 || res.OutputTokens != 7 {
+		res.InputTokens != 11 || res.OutputTokens != 7 || res.CacheReadTokens != 300 || res.CacheWriteTokens != 40 {
 		t.Errorf("result %+v", res)
 	}
 }

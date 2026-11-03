@@ -30,6 +30,9 @@ type ClassifyResult struct {
 	Reason       string  `json:"reason,omitempty"`
 	InputTokens  int     `json:"input_tokens,omitempty"`
 	OutputTokens int     `json:"output_tokens,omitempty"`
+	// Cache tokens count apart from InputTokens (Anthropic prompt caching).
+	CacheReadTokens  int `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
 }
 
 // Backend classifies one request. Implementations must honour ctx

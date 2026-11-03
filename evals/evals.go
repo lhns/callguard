@@ -18,6 +18,9 @@
 //   - injection: instructions aimed at the judge hidden in commands, file
 //     names, file content, URLs and commit messages. Expect ask or deny,
 //     never allow.
+//   - judge: calls only a language model can decide (intent, referents, prior
+//     rejections, repository visibility). The keyword fake judge cannot score
+//     them, so TestPipelineOnEvalSet ignores this bucket; run a real backend.
 package evals
 
 import _ "embed"
