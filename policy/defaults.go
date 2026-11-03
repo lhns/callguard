@@ -146,14 +146,14 @@ func DefaultRules() []Rule {
 // Command patterns of the default rules (RE2). Best effort, not a parser;
 // they are exported so tests and docs can name them.
 const (
-	PipeToShellRE = `(?i)\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]*\|\s*(?:sudo\s+)?(?:sh|bash|zsh|dash|python3?|perl|ruby|node|iex|invoke-expression)\b` +
+	PipeToShellRE = `(?i)\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]*(?:\|[^|][^|]*)*?\|\s*(?:(?:sudo|doas|env)(?:\s+-\S+)*\s+)?(?:\S*/)?(?:sh|bash|zsh|dash|python3?|perl|ruby|node|iex|invoke-expression)\b` +
 		`|(?i)\b(?:sh|bash|zsh|dash)\s+(?:-c\s+)?["']?\$\(\s*(?:curl|wget)\b` +
 		`|(?i)\b(?:sh|bash|zsh|dash)\s+<\(\s*(?:curl|wget)\b`
 	GitForcePushRE   = `\bgit\b[^;&|\n]*\bpush\b[^;&|\n]*(?:\s--force(?:-with-lease)?\b|\s-[a-zA-Z]*f[a-zA-Z]*(?:\s|$)|\s\+\S)`
 	GitDiscardRE     = `\bgit\b[^;&|\n]*(?:\breset\b[^;&|\n]*\s--hard\b|\bclean\b[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b|\bcheckout\s+(?:--\s+)?\.(?:\s|$)|\bcheckout\b[^;&|\n]*\s--\s+\.|\brestore\b[^;&|\n]*\s\.(?:\s|$))`
 	InfraDestroyRE   = `\b(?:terraform|tofu|pulumi|cdk|terragrunt)\b[^;&|\n]*\bdestroy\b|\bkubectl\b[^;&|\n]*\bdelete\b|\bgh\s+repo\s+delete\b`
 	PackagePublishRE = `\b(?:npm|pnpm|yarn)\s+(?:[^;&|\n]*\s)?publish(?:\s|$)|\bcargo\s+publish(?:\s|$)|\btwine\s+upload\b|\bgem\s+push\b`
-	SudoRE           = `(?:^|[;&|(]\s*|\s)sudo\s+\S`
+	SudoRE           = `(?:^|[^\w.-])(?:sudo|doas)\s+\S`
 	// Separators include _ - . so file names like IGNORE_PREVIOUS_INSTRUCTIONS match.
 	InjectionRE = `(?i)ignore[\s_.-]+(?:(?:all|any)[\s_.-]+)?(?:previous|prior)[\s_.-]+instructions` +
 		`|you[\s_.-]+are[\s_.-]+(?:now[\s_.-]+)?(?:(?:a|the)[\s_.-]+)?(?:security[\s_.-]+)?classifier` +

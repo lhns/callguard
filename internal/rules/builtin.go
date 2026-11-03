@@ -1,8 +1,11 @@
 package rules
 
 import (
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/lhns/callguard/policy"
@@ -28,38 +31,93 @@ var protectedGlobs = []string{
 var protectedShell = regexp.MustCompile(`(?i)\.claude/settings(?:\.local)?\.json|\.callguard\b|/etc/callguard|programdata/callguard` +
 	`|\.hermes/(?:config\.yaml|shell-hooks-allowlist\.json)|\.config/opencode/plugins|\.opencode/plugins|\.pi/(?:agent/)?extensions`)
 
+// diskDevRE matches the names of whole-disk and partition block devices.
+const diskDevRE = `(?:sd|hd|vd|xvd|nvme|mmcblk|disk)`
+
 var (
 	diskWipe = []*regexp.Regexp{
-		regexp.MustCompile(`(?m)(?:^|[;&|])\s*(?:sudo\s+)?mkfs(?:\.\w+)?\b`),
-		regexp.MustCompile(`\bdd\b[^;&|\n]*\bof=/dev/(?:sd|nvme|disk|hd)`),
-		regexp.MustCompile(`>\s*/dev/(?:sd|nvme|disk|hd)`),
+		regexp.MustCompile(`(?m)(?:^|[;&|(])\s*(?:(?:sudo|doas)\b[^;&|\n]*\s)?(?:\S*/)?mkfs(?:\.\w+)?\b`),
+		regexp.MustCompile(`\bdd\b[^;&|\n]*\bof=/dev/` + diskDevRE),
+		regexp.MustCompile(`>\s*/dev/` + diskDevRE),
 		regexp.MustCompile(`(?i)(?:^|[;&|])\s*format(?:\.com)?\s+[a-z]:`),
 	}
 	forkBomb = regexp.MustCompile(`:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:`)
 
-	segmentSplit = regexp.MustCompile(`[;&|\n]+`)
+	// segmentSplit cuts a command line at separators, subshells and command
+	// substitutions, so each piece starts at a command position.
+	segmentSplit = regexp.MustCompile("[;&|\\n\\r()`]+")
 	rmDanger     = regexp.MustCompile(`(?i)^(?:/+\*?|~/?\*?|(?:\$home|\$\{home\}|\$env:(?:userprofile|home)|%userprofile%)/?\*?|(?:\./)?\.git/?|[a-z]:/?\*?)$`)
-	shortFlags   = regexp.MustCompile(`^-[a-zA-Z]{1,4}$`) // -rf, -Rf; not PowerShell's -Force
+	unixFlags    = regexp.MustCompile(`^-[a-zA-Z]+$`) // -rf, -Rfv
 	winFlag      = regexp.MustCompile(`^/[a-zA-Z]$`)
+	unquote      = strings.NewReplacer(`"`, "", `'`, "")
 )
 
-// removers are commands that delete files; wrappers run another command.
-var (
-	removers = map[string]bool{"rm": true, "rmdir": true, "rd": true, "del": true, "erase": true, "remove-item": true, "ri": true}
-	wrappers = map[string]bool{"sudo": true, "doas": true, "env": true, "command": true, "exec": true, "nohup": true, "time": true, "nice": true, "xargs": true}
-)
+// removers are commands that delete files.
+var removers = map[string]bool{"rm": true, "rmdir": true, "rd": true, "del": true, "erase": true, "remove-item": true, "ri": true}
+
+// wrappers run the rest of their arguments as a command (shells with -c
+// too). The value lists the options that take a separate argument, and
+// "#n" says that n positional arguments precede the command.
+var wrappers = map[string][]string{
+	"sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-T", "-U", "--user", "--group", "--chdir", "--chroot",
+		"--close-from", "--host", "--prompt", "--role", "--type", "--command-timeout", "--other-user"},
+	"doas": {"-u", "-C"}, "env": {"-u", "-C", "-S", "--unset", "--chdir", "--split-string"},
+	"nice": {"-n", "--adjustment"}, "ionice": {"-c", "-n", "-p"}, "timeout": {"-s", "-k", "--signal", "--kill-after", "#1"},
+	"stdbuf": {"-i", "-o", "-e"}, "chroot": {"#1"}, "xargs": {"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"},
+	"exec": {"-a"}, "time": {"-f", "-o"}, "command": nil, "nohup": nil, "setsid": nil, "busybox": nil,
+	"sh": nil, "bash": nil, "zsh": nil, "dash": nil, "{": nil, "!": nil, "if": nil, "then": nil, "else": nil, "do": nil,
+}
+
+// commandName is the lower-case base name of a command word.
+func commandName(tok string) string {
+	return strings.ToLower(strings.TrimSuffix(path.Base(strings.ReplaceAll(tok, `\`, "/")), ".exe"))
+}
+
+// skipWrapper returns the index of the command a wrapper at toks[i] runs.
+func skipWrapper(toks []string, i int, valued []string) int {
+	positional := 0
+	for _, o := range valued {
+		if strings.HasPrefix(o, "#") {
+			positional, _ = strconv.Atoi(o[1:])
+		}
+	}
+	for i < len(toks) {
+		t := toks[i]
+		switch {
+		case t == "--":
+			return i + 1
+		case strings.HasPrefix(t, "-") && len(t) > 1:
+			i++
+			if slices.Contains(valued, t) {
+				i++ // the option's value
+			}
+		case strings.Contains(t, "="): // env VAR=value
+			i++
+		case positional > 0:
+			positional--
+			i++
+		default:
+			return i
+		}
+	}
+	return i
+}
 
 // RmRoot reports whether a shell command recursively deletes a root-like
 // target (/, ~, $HOME, a drive root, .git) or passes --no-preserve-root.
-// It looks at the command position of each ;, &, | or newline separated
-// segment, so text inside a quoted argument does not fire it.
+// It looks at the command position of each separated segment (after
+// wrappers such as sudo, timeout or sh -c), so text inside an ordinary
+// argument does not fire it.
 func RmRoot(command string) bool {
 	for _, seg := range segmentSplit.Split(command, -1) {
-		toks := strings.Fields(seg)
+		toks := strings.Fields(unquote.Replace(seg))
 		i := 0
 		for i < len(toks) {
-			t := strings.Trim(toks[i], `"'`)
-			if wrappers[strings.ToLower(t)] || strings.HasPrefix(t, "-") || strings.Contains(t, "=") {
+			if valued, ok := wrappers[commandName(toks[i])]; ok {
+				i = skipWrapper(toks, i+1, valued)
+				continue
+			}
+			if strings.Contains(toks[i], "=") { // VAR=value prefix
 				i++
 				continue
 			}
@@ -68,24 +126,26 @@ func RmRoot(command string) bool {
 		if i >= len(toks) {
 			continue
 		}
-		name := strings.ToLower(strings.TrimSuffix(filepath.Base(strings.ReplaceAll(strings.Trim(toks[i], `"'`), `\`, "/")), ".exe"))
+		name := commandName(toks[i])
 		if !removers[name] {
 			continue
 		}
 		recursive := false
 		var targets []string
 		for _, t := range toks[i+1:] {
-			t = strings.Trim(t, `"'`)
+			lower := strings.ToLower(t)
 			switch {
 			case t == "--no-preserve-root":
 				return true
-			case t == "--recursive" || strings.EqualFold(t, "-recurse") || shortFlags.MatchString(t) && strings.ContainsAny(t, "rR"):
+			case t == "--recursive",
+				len(t) > 1 && strings.HasPrefix("-recurse", lower), // PowerShell accepts -r, -rec, ...
+				(name == "rm" || name == "rmdir") && unixFlags.MatchString(t) && strings.ContainsAny(t, "rR"):
 				recursive = true
 			case strings.HasPrefix(t, "-"):
 			case winFlag.MatchString(t) && name != "rm":
-				recursive = recursive || strings.EqualFold(t, "/s")
+				recursive = recursive || lower == "/s"
 			default:
-				targets = append(targets, strings.ReplaceAll(t, `\`, "/"))
+				targets = append(targets, path.Clean(strings.ReplaceAll(t, `\`, "/")))
 			}
 		}
 		if !recursive {

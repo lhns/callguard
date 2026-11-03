@@ -35,6 +35,10 @@ type Call struct {
 	ProjectDir string
 }
 
+// joinContinuations joins shell (backslash) and PowerShell (backtick) line
+// continuations, so a command split over lines is matched as one line.
+var joinContinuations = strings.NewReplacer("\\\r\n", " ", "\\\n", " ", "`\r\n", " ", "`\n", " ")
+
 var pathKeys = []string{"file_path", "path", "notebook_path", "filePath"}
 
 // NewCall extracts command, URL and path from the tool input.
@@ -75,6 +79,7 @@ func NewCall(in CallInput, env Env) Call {
 		if c.Command == "" && in.Tool == "execute_code" {
 			c.Command = c.Fields["code"]
 		}
+		c.Command = joinContinuations.Replace(c.Command)
 	}
 	c.URL = c.Fields["url"]
 	rawPath := ""
