@@ -40,7 +40,18 @@ switch (req.tool) {
 );
 process.env.CALLGUARD_BIN = process.execPath;
 process.env.CALLGUARD_BIN_ARGS = JSON.stringify([stub]);
-process.env.CALLGUARD_TIMEOUT_MS = "10000"; // bounds the "hang" scenario; generous because node start can take seconds on a loaded host
+// Generous: node start can take seconds on a loaded host. The "hang"
+// scenarios lower it around themselves (the plugins read it per call).
+process.env.CALLGUARD_TIMEOUT_MS = "60000";
+async function withShortTimeout(scenario, fn) {
+  if (scenario !== "hang") return fn();
+  process.env.CALLGUARD_TIMEOUT_MS = "3000";
+  try {
+    return await fn();
+  } finally {
+    process.env.CALLGUARD_TIMEOUT_MS = "60000";
+  }
+}
 
 let failures = 0;
 async function test(name, fn) {
@@ -126,7 +137,7 @@ await test("opencode: unknown session location sends an empty cwd", async () => 
 for (const scenario of ["garbage", "no-decision", "bad-decision", "exit1", "huge", "hang", "unknown-exit70"]) {
   await test(`opencode: ${scenario} blocks`, async () => {
     const run = await opencodeHook();
-    await assert.rejects(run(scenario === "unknown-exit70" ? "other" : scenario), blocked);
+    await withShortTimeout(scenario, () => assert.rejects(run(scenario === "unknown-exit70" ? "other" : scenario), blocked));
   });
 }
 await test("opencode: missing binary blocks", async () => {
@@ -183,7 +194,7 @@ await test("pi: cwd falls back to process.cwd()", async () => {
 for (const scenario of ["garbage", "no-decision", "bad-decision", "exit1", "huge", "hang"]) {
   await test(`pi: ${scenario} blocks`, async () => {
     const ctx = { cwd: "/w", hasUI: true, ui: { confirm: async () => true } };
-    const r = await piHandler()(scenario, ctx);
+    const r = await withShortTimeout(scenario, () => piHandler()(scenario, ctx));
     assert.equal(r.block, true);
     assert.match(r.reason, /^callguard: /);
   });

@@ -145,7 +145,7 @@ Layers, lowest to highest authority:
 3. **User**: `<user config dir>/callguard/policy.json`.
 4. **Project**: `<project>/.callguard/policy.json`.
 
-User and project layers **can only tighten**: they may add `deny` and `ask` rules, append to `llm.block`, and raise `llm.min_confidence`. Everything else in them (allow rules, `environment`, `allow_exceptions`, backends, mode, timeouts) is dropped with a warning that `callguard policy check` reports. With `"final": true` the system file stops the merge and user and project files are not read at all.
+A system rule with the id of a default rule replaces it. User and project layers **can only tighten**: they may add `deny` and `ask` rules, append to `llm.block`, and raise `llm.min_confidence`. Everything else in them (allow rules, `environment`, `allow_exceptions`, backends, mode, timeouts) is dropped with a warning that `callguard policy check` reports. With `"final": true` the system file stops the merge and user and project files are not read at all.
 
 This is deliberately stricter than Claude Code's additive `autoMode` merge (§1): in a shared or managed setup the agent's uid usually owns `~` and the repo, so those layers must not loosen. A single developer who wants to configure backends without root passes their own file with `--policy` in the hook command; that file sits in harness config the agent should not edit (and self-protection guards it).
 
@@ -179,7 +179,7 @@ Single stage in v0. A two-stage mode (cheap filter, then reasoning only for flag
 
 ### Backends (ADR 0005)
 Interface: `Classify(ctx, ClassifyRequest{System, Prompt, Labels, Schema, Input}) → {Label, Confidence, Rule, Reason, Usage}`. `Input` is the structured view so non-generative plugins can use it.
-- `anthropic`: Messages API over `net/http`, `anthropic-version: 2026-10-21`, default model `claude-haiku-5-5`, `output_config: {effort: "low", format: {type: "json_schema", schema}}`, `thinking: {type: "disabled"}`, `max_tokens` 1024, content blocks parsed by type; prompt caching on the system block. `base_url` is configurable (for a credential-injecting gateway).
+- `anthropic`: Messages API over `net/http`, `anthropic-version: 2026-10-21`, default model `claude-haiku-5-5`, `output_config.format: {type: "json_schema", schema}`, and for `claude-haiku-5*` models `thinking: {type: "disabled"}` and `output_config.effort: "low"` (other models reject one or the other and run with their defaults), `max_tokens` 1024, content blocks parsed by type; prompt caching on the system block. `base_url` is configurable (for a credential-injecting gateway).
 - `openai`: OpenAI-compatible `/chat/completions` (llama.cpp server, vLLM, Ollama) with `response_format: {type: "json_schema"}`; the reply is parsed as JSON either way.
 - `exec`: runs a configured command, writes `{"schema":"callguard/classify/v1", ...}` on stdin, reads `{"label","confidence","rule","reason"}`. For choice models (Jev-like) or anything else.
 - `fake`: deterministic, for tests and offline eval.
