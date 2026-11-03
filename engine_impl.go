@@ -90,9 +90,15 @@ func Load(opts LoadOptions) (*Engine, error) {
 	}
 	o := opts.Options
 	o.Warnings = append(append([]string(nil), o.Warnings...), l.Warnings...)
-	if opts.SystemPolicy != "" {
-		if abs, err := filepath.Abs(opts.SystemPolicy); err == nil {
-			o.ProtectPaths = append(append([]string(nil), o.ProtectPaths...), abs)
+	// The system default directory is protected by a built-in glob; an
+	// explicit --policy file and the user layer file are protected here.
+	o.ProtectPaths = append([]string(nil), o.ProtectPaths...)
+	for _, p := range []string{opts.SystemPolicy, policy.UserPath(opts.UserConfigDir)} {
+		if p == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(p); err == nil {
+			o.ProtectPaths = append(o.ProtectPaths, abs)
 		}
 	}
 	return New(l.Policy, o)

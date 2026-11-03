@@ -813,6 +813,24 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+func TestLoadProtectsPolicyFiles(t *testing.T) {
+	d := t.TempDir()
+	sys := filepath.Join(d, "sys.json")
+	_ = os.WriteFile(sys, []byte(`{"policy_version":1}`), 0o600)
+	userDir := filepath.Join(d, "config")
+	e, err := Load(LoadOptions{SystemPolicy: sys, UserConfigDir: userDir, Options: Options{LogPath: "-", Backend: answer("allow", 1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	userFile, _ := json.Marshal(map[string]string{"file_path": filepath.Join(userDir, "callguard", "policy.json"), "content": "{}"})
+	if got := e.Decide(context.Background(), call("Write", string(userFile))); got.Decision != Deny || got.Rule != "self-protect-write" {
+		t.Errorf("write to the user policy: %+v", got)
+	}
+	if got := e.Decide(context.Background(), bash("echo {} > "+filepath.ToSlash(sys))); got.Decision != Ask || got.Rule != "self-protect-shell" {
+		t.Errorf("shell naming the --policy file: %+v", got)
+	}
+}
+
 func TestResolveProjectDir(t *testing.T) {
 	root := t.TempDir()
 	sub := filepath.Join(root, "a", "b")

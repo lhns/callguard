@@ -28,8 +28,9 @@ var protectedGlobs = []string{
 }
 
 // protectedShell finds those paths in a slash-normalized command line.
-var protectedShell = regexp.MustCompile(`(?i)\.claude/settings(?:\.local)?\.json|\.callguard\b|/etc/callguard|programdata/callguard` +
-	`|\.hermes/(?:config\.yaml|shell-hooks-allowlist\.json)|\.config/opencode/plugins|\.opencode/plugins|\.pi/(?:agent/)?extensions`)
+// A glob in the file name (`.claude/*.json`) counts as naming them.
+var protectedShell = regexp.MustCompile(`(?i)\.claude/(?:settings|[^/\s]*[*?\[])|\.callguard\b|/etc/callguard|programdata/callguard` +
+	`|\.hermes/(?:config\.yaml|shell-hooks-allowlist\.json|[^/\s]*[*?\[])|\.config/opencode/plugins|\.opencode/plugins|\.pi/(?:agent/)?extensions`)
 
 // diskDevRE matches the names of whole-disk and partition block devices.
 const diskDevRE = `(?:sd|hd|vd|xvd|nvme|mmcblk|disk)`
@@ -164,7 +165,8 @@ func RmRoot(command string) bool {
 type Builtin struct {
 	env       Env
 	disabled  map[string]bool
-	protected []*regexp.Regexp
+	protected []*regexp.Regexp // write targets
+	extra     []string         // extra files as they may appear in a command, folded
 }
 
 // NewBuiltin compiles the built-in rules, minus the disabled ids. extra are
@@ -184,21 +186,49 @@ func NewBuiltin(env Env, disabled []string, extra ...string) (*Builtin, error) {
 		b.protected = append(b.protected, re)
 	}
 	for _, p := range extra {
-		pat := "^" + regexp.QuoteMeta(env.slash(p)) + "$"
-		if env.Windows {
+		p = env.slash(p)
+		pat := "^" + regexp.QuoteMeta(p) + "$"
+		if env.caseless() {
 			pat = "(?i)" + pat
 		}
 		b.protected = append(b.protected, regexp.MustCompile(pat))
+		b.extra = append(b.extra, env.fold(p))
+		if home := strings.TrimSuffix(env.slash(env.Home), "/"); home != "" && env.InDir(p, home) && len(p) >= len(home) {
+			rest := p[len(home):]
+			b.extra = append(b.extra, env.fold("~"+rest), env.fold("$HOME"+rest))
+		}
 	}
 	return b, nil
+}
+
+// namesProtected reports whether text (a command line or a tool input)
+// names a hook or policy file.
+func (b *Builtin) namesProtected(text string) bool {
+	text = b.env.slash(text)
+	if protectedShell.MatchString(text) {
+		return true
+	}
+	folded := b.env.fold(text)
+	for _, p := range b.extra {
+		if strings.Contains(folded, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // Check returns the first built-in rule that fires for c. Hard denies are
 // checked before the self-protection ask.
 func (b *Builtin) Check(c Call) (Hit, bool) {
 	on := func(id string) bool { return !b.disabled[id] }
-	if c.Kind == KindWrite && c.Path != "" && on("self-protect-write") && anyMatch(b.protected, c.Path) {
-		return Hit{"self-protect-write", "deny", "callguard denies edits to hook and policy files (" + c.Path + "); ask the user to change them"}, true
+	if c.Kind == KindWrite && on("self-protect-write") {
+		if c.Path != "" && anyMatch(b.protected, c.Path) {
+			return Hit{"self-protect-write", "deny", "callguard denies edits to hook and policy files (" + c.Path + "); ask the user to change them"}, true
+		}
+		// Patch tools carry their target paths inside the input.
+		if c.Path == "" && b.namesProtected(c.Whole) {
+			return Hit{"self-protect-write", "ask", "edit names a hook or policy file; a human should confirm"}, true
+		}
 	}
 	if c.Kind == KindShell && c.Command != "" {
 		cmd := c.Command
@@ -215,7 +245,7 @@ func (b *Builtin) Check(c Call) (Hit, bool) {
 		if on("fork-bomb") && forkBomb.MatchString(cmd) {
 			return Hit{"fork-bomb", "deny", "fork bomb"}, true
 		}
-		if on("self-protect-shell") && protectedShell.MatchString(b.env.slash(cmd)) {
+		if on("self-protect-shell") && b.namesProtected(cmd) {
 			return Hit{"self-protect-shell", "ask", "command names a hook or policy file; a human should confirm"}, true
 		}
 	}

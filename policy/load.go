@@ -67,6 +67,22 @@ func SystemPath() string {
 	return "/etc/callguard/policy.json"
 }
 
+// UserPath is the user layer file under configDir ("" means
+// os.UserConfigDir()), or "" when the layer is skipped ("-") or the
+// directory is unknown.
+func UserPath(configDir string) string {
+	if configDir == "-" {
+		return ""
+	}
+	if configDir == "" {
+		configDir, _ = os.UserConfigDir()
+		if configDir == "" {
+			return ""
+		}
+	}
+	return filepath.Join(configDir, "callguard", "policy.json")
+}
+
 // ReadFile parses one policy file. It fails on I/O errors, JSON errors and a
 // wrong policy_version; other findings are recorded in the File.
 func ReadFile(path, layer string) (File, error) {
@@ -122,15 +138,9 @@ func Load(o LoadOptions) (Loaded, error) {
 	if out.Policy.Final {
 		return out, nil
 	}
-	if o.UserConfigDir != "-" {
-		dir := o.UserConfigDir
-		if dir == "" {
-			dir, _ = os.UserConfigDir() // empty on failure: the layer is skipped
-		}
-		if dir != "" {
-			if _, err := apply(filepath.Join(dir, "callguard", "policy.json"), LayerUser, false); err != nil {
-				return out, err
-			}
+	if path := UserPath(o.UserConfigDir); path != "" {
+		if _, err := apply(path, LayerUser, false); err != nil {
+			return out, err
 		}
 	}
 	if o.ProjectDir != "" {

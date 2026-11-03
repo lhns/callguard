@@ -13,15 +13,18 @@ import (
 // Env carries what path handling needs from the host. Symlinks are never
 // resolved: a link inside the project that points outside it counts as inside.
 type Env struct {
-	Home    string // user home directory, "" if unknown
-	Windows bool   // backslash separators, drive letters, case-insensitive paths
+	Home     string // user home directory, "" if unknown
+	Windows  bool   // backslash separators, drive letters, case-insensitive paths
+	FoldCase bool   // case-insensitive paths on other hosts (macOS default file systems)
 }
 
 // DefaultEnv describes the running host.
 func DefaultEnv() Env {
 	home, _ := os.UserHomeDir()
-	return Env{Home: home, Windows: runtime.GOOS == "windows"}
+	return Env{Home: home, Windows: runtime.GOOS == "windows", FoldCase: runtime.GOOS == "darwin"}
 }
+
+func (e Env) caseless() bool { return e.Windows || e.FoldCase }
 
 func (e Env) slash(s string) string {
 	if e.Windows {
@@ -56,7 +59,7 @@ func (e Env) Normalize(p, cwd string) string {
 }
 
 func (e Env) fold(s string) string {
-	if e.Windows {
+	if e.caseless() {
 		return strings.ToLower(s)
 	}
 	return s
@@ -81,7 +84,7 @@ func (e Env) CompileGlob(glob string) (*regexp.Regexp, error) {
 		g = e.slash(e.Home) + g[1:]
 	}
 	var b strings.Builder
-	if e.Windows {
+	if e.caseless() {
 		b.WriteString("(?i)")
 	}
 	b.WriteString("^")

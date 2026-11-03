@@ -2,6 +2,7 @@ package rules
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/lhns/callguard/policy"
@@ -228,6 +229,13 @@ func TestBuiltin(t *testing.T) {
 		{"echo into callguard", "Bash", bashInput("echo {} > .callguard/policy.json"), "self-protect-shell", "ask"},
 		{"cp plugin", "Bash", bashInput("cp x ~/.config/opencode/plugins/"), "self-protect-shell", "ask"},
 		{"cat etc callguard", "Bash", bashInput("cat /etc/callguard/policy.json"), "self-protect-shell", "ask"},
+		{"sed settings glob", "Bash", bashInput("sed -i 's/a/b/' ~/.claude/settings.*"), "self-protect-shell", "ask"},
+		{"sed claude json glob", "Bash", bashInput("sed -i 's/a/b/' .claude/*.json"), "self-protect-shell", "ask"},
+		{"ls claude agents", "Bash", bashInput("ls .claude/agents"), "", ""},
+		{"patch names settings", "patch", json.RawMessage(`{"patchText":"*** Update File: .claude/settings.json
++x"}`), "self-protect-write", "ask"},
+		{"patch ordinary file", "patch", json.RawMessage(`{"patchText":"*** Update File: src/a.go
++x"}`), "", ""},
 		{"ordinary shell", "Bash", bashInput("go test ./..."), "", ""},
 	}
 	for _, tc := range tests {
@@ -294,5 +302,56 @@ func TestBuiltinProtectsExtraPaths(t *testing.T) {
 	}
 	if _, ok := b.Check(NewCall(CallInput{Tool: "Write", Input: fileInput("/opt/cg/other.json"), Cwd: "/w/p", ProjectDir: "/w/p"}, unix)); ok {
 		t.Fatal("unrelated file must not be protected")
+	}
+	hit, ok = b.Check(NewCall(CallInput{Tool: "Bash", Input: bashInput("echo {} > /opt/cg/my-policy.json")}, unix))
+	if !ok || hit.ID != "self-protect-shell" || hit.Decision != "ask" {
+		t.Fatalf("shell naming the extra file: %+v %v", hit, ok)
+	}
+
+	home, err := NewBuiltin(unix, nil, "/home/u/.config/callguard/policy.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hit, ok := home.Check(NewCall(CallInput{Tool: "Bash", Input: bashInput("rm ~/.config/callguard/policy.json")}, unix)); !ok || hit.ID != "self-protect-shell" {
+		t.Fatalf("shell naming the extra file under ~: %+v %v", hit, ok)
+	}
+}
+
+func TestBuiltinFoldsCaseOnMacOS(t *testing.T) {
+	mac := Env{Home: "/Users/u", FoldCase: true}
+	b, err := NewBuiltin(mac, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := NewCall(CallInput{Tool: "Write", Input: fileInput("/w/p/.Claude/Settings.json"), Cwd: "/w/p", ProjectDir: "/w/p"}, mac)
+	if h, ok := b.Check(c); !ok || h.ID != "self-protect-write" {
+		t.Errorf("case-folded settings write: %+v %v", h, ok)
+	}
+	set := mustCompile(t, mac, policy.DefaultRules()...)
+	c = NewCall(CallInput{Tool: "Write", Input: fileInput("/w/p/.GIT/hooks/pre-commit"), Cwd: "/w/p", ProjectDir: "/w/p"}, mac)
+	if r, ok := set.Match(c); ok {
+		t.Errorf(".GIT is .git on macOS and must not be auto-allowed: %+v", r)
+	}
+}
+
+func TestBuiltinIDsMatchPolicy(t *testing.T) {
+	b, err := NewBuiltin(unix, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []CallInput{
+		{Tool: "Bash", Input: bashInput("rm -rf /")},
+		{Tool: "Bash", Input: bashInput("mkfs /dev/sda")},
+		{Tool: "Bash", Input: bashInput(":(){ :|:& };:")},
+		{Tool: "Bash", Input: bashInput("cat .callguard/policy.json")},
+		{Tool: "Write", Input: fileInput("/w/.callguard/policy.json")},
+	} {
+		h, ok := b.Check(NewCall(in, unix))
+		if !ok || !slices.Contains(policy.BuiltinIDs, h.ID) {
+			t.Errorf("%s: hit %+v (%v) is not in policy.BuiltinIDs", in.Input, h, ok)
+		}
+	}
+	if got := len(policy.BuiltinIDs); got != 5 {
+		t.Errorf("policy.BuiltinIDs has %d ids; update this test with the new rule", got)
 	}
 }
