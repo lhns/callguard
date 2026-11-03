@@ -1,17 +1,19 @@
 //! callguard's policy file format (policy_version 1) and its layered,
-//! tighten-only merge (docs/design.md section 5, ADR 0003). Types are ported
-//! in full; functions are stubs (worker A).
+//! tighten-only merge (docs/design.md section 5, ADR 0003).
 //!
 //! Go's unset-vs-zero distinction (pointers, nil slices) is kept with
 //! `Option`. Go `int` fields are `i64`, so `Validate` can still report
 //! negative values. Paths stay `String`, with "" meaning "default", as in Go.
-//! The default-rule regex constants (`PipeToShellRE` ... `SecretExfilRE`) are
-//! not copied yet; worker A ports them with `default_rules`.
-#![allow(unused_variables)]
+//! Policy regexes are Go RE2; `rules::compile_regex` makes the `regex` crate
+//! read them the way Go does.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
+use serde_json::Value;
+use serde_json::value::RawValue;
+use sha2::{Digest, Sha256};
 
 use crate::serde_util::{is_false, is_zero, nullable};
 
@@ -153,7 +155,17 @@ pub struct Match {
 impl Match {
     /// Whether `self` has no condition at all (an invalid rule).
     pub fn is_empty(&self) -> bool {
-        todo!("port Match.IsEmpty")
+        self.tool.is_empty()
+            && self.kind.is_empty()
+            && self.command.is_empty()
+            && self.url.is_empty()
+            && self.field.is_empty()
+            && self.path.is_empty()
+            && self.not_path.is_empty()
+            && self.in_project.is_none()
+            && self.context.is_empty()
+            && self.unattended.is_none()
+            && self.harness.is_empty()
     }
 }
 
@@ -203,7 +215,10 @@ pub struct Llm {
     #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
     pub timeout_ms: i64,
     /// Default 0.7.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "opt_go_float"
+    )]
     pub min_confidence: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<TranscriptLimits>,
@@ -292,7 +307,7 @@ pub struct Log {
 impl Policy {
     /// Whether the LLM layer is on (default true).
     pub fn llm_enabled(&self) -> bool {
-        todo!("port Policy.LLMEnabled")
+        self.llm.as_ref().is_none_or(|l| l.enabled.unwrap_or(true))
     }
 }
 
@@ -329,7 +344,10 @@ pub struct Loaded {
 impl Loaded {
     /// The structural problems of all files, each prefixed with its path.
     pub fn problems(&self) -> Vec<String> {
-        todo!("port Loaded.Problems")
+        self.files
+            .iter()
+            .flat_map(|f| f.problems.iter().map(move |p| format!("{}: {p}", f.path)))
+            .collect()
     }
 }
 
@@ -338,68 +356,918 @@ impl Loaded {
 #[error("{0}")]
 pub struct PolicyError(pub String);
 
-/// The platform default system policy path.
-pub fn system_path() -> String {
-    todo!("port policy.SystemPath")
+/// The user's home directory (Go's `os.UserHomeDir`), None if unknown.
+pub(crate) fn home_dir() -> Option<String> {
+    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var(key).ok().filter(|h| !h.is_empty())
 }
 
-/// The user policy file path under `config_dir` ("" = the user config dir).
+/// Go's `os.UserConfigDir`, None if unknown.
+fn user_config_dir() -> Option<String> {
+    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    if cfg!(windows) {
+        env("AppData")
+    } else if cfg!(target_os = "macos") {
+        env("HOME").map(|h| format!("{h}/Library/Application Support"))
+    } else {
+        match env("XDG_CONFIG_HOME") {
+            Some(d) if Path::new(&d).is_absolute() => Some(d),
+            Some(_) => None,
+            None => env("HOME").map(|h| format!("{h}/.config")),
+        }
+    }
+}
+
+fn path_string(p: PathBuf) -> String {
+    p.to_string_lossy().into_owned()
+}
+
+/// The platform default system policy path.
+pub fn system_path() -> String {
+    if cfg!(windows) {
+        let pd = std::env::var("ProgramData")
+            .ok()
+            .filter(|p| !p.is_empty())
+            .unwrap_or_else(|| r"C:\ProgramData".into());
+        path_string(Path::new(&pd).join("callguard").join("policy.json"))
+    } else {
+        "/etc/callguard/policy.json".into()
+    }
+}
+
+/// The user policy file path under `config_dir` ("" = the user config dir), or
+/// "" when the layer is skipped ("-") or the directory is unknown.
 pub fn user_path(config_dir: &str) -> String {
-    todo!("port policy.UserPath")
+    if config_dir == "-" {
+        return String::new();
+    }
+    let dir = if config_dir.is_empty() {
+        match user_config_dir() {
+            Some(d) => d,
+            None => return String::new(),
+        }
+    } else {
+        config_dir.to_owned()
+    };
+    path_string(Path::new(&dir).join("callguard").join("policy.json"))
+}
+
+/// A read failure; `not_found` is Go's `errors.Is(err, fs.ErrNotExist)`.
+struct ReadFail {
+    not_found: bool,
+    err: PolicyError,
+}
+
+fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
+    let fail = |not_found, msg: String| ReadFail {
+        not_found,
+        err: PolicyError(msg),
+    };
+    let mut data = std::fs::read(path).map_err(|e| {
+        fail(
+            e.kind() == std::io::ErrorKind::NotFound,
+            format!("open {path}: {e}"),
+        )
+    })?;
+    if data.starts_with(b"\xef\xbb\xbf") {
+        data.drain(..3);
+    }
+    let policy: Policy =
+        serde_json::from_slice(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
+    if policy.policy_version != VERSION {
+        return Err(fail(
+            false,
+            format!(
+                "{path}: unsupported policy_version {} (want {VERSION})",
+                policy.policy_version
+            ),
+        ));
+    }
+    let problems = validate(&policy, false);
+    Ok(File {
+        path: path.to_owned(),
+        layer: layer.to_owned(),
+        policy,
+        unknown: unknown_keys(&data),
+        problems,
+    })
 }
 
 /// Parses one policy file. Fails on I/O errors, JSON errors and a wrong
 /// policy_version; other findings are recorded in the `File`.
 pub fn read_file(path: &str, layer: &str) -> Result<File, PolicyError> {
-    todo!("port policy.ReadFile")
+    read_file_inner(path, layer).map_err(|f| f.err)
+}
+
+/// Reads one layer into `out`. A missing file is skipped unless `must_exist`.
+fn apply(out: &mut Loaded, path: &str, layer: &str, must_exist: bool) -> Result<(), PolicyError> {
+    let f = match read_file_inner(path, layer) {
+        Ok(f) => f,
+        Err(e) if e.not_found && !must_exist => return Ok(()),
+        Err(e) => return Err(e.err),
+    };
+    for k in &f.unknown {
+        out.warnings
+            .push(format!("{path}: unknown key {} ignored", go_quote(k)));
+    }
+    if layer == LAYER_SYSTEM {
+        out.policy = merge_system(&out.policy, &f.policy);
+    } else {
+        let (p, w) = merge_tighten(&out.policy, &f.policy, path);
+        out.policy = p;
+        out.warnings.extend(w);
+    }
+    out.files.push(f);
+    Ok(())
 }
 
 /// Reads the system, user and project files and merges them over [`default`].
 pub fn load(o: &LoadOptions) -> Result<Loaded, PolicyError> {
-    todo!("port policy.Load")
+    let mut out = Loaded {
+        policy: default(),
+        ..Default::default()
+    };
+    let explicit = !o.system_policy.is_empty();
+    let sys_path = if explicit {
+        o.system_policy.clone()
+    } else {
+        system_path()
+    };
+    apply(&mut out, &sys_path, LAYER_SYSTEM, explicit)?;
+    if out.policy.r#final {
+        return Ok(out);
+    }
+    let user = user_path(&o.user_config_dir);
+    if !user.is_empty() {
+        apply(&mut out, &user, LAYER_USER, false)?;
+    }
+    if !o.project_dir.is_empty() {
+        let p = path_string(
+            Path::new(&o.project_dir)
+                .join(".callguard")
+                .join("policy.json"),
+        );
+        apply(&mut out, &p, LAYER_PROJECT, false)?;
+    }
+    Ok(out)
 }
 
-/// Unknown keys of a policy file, as dotted paths.
+/// The type of a JSON value in the policy schema, for [`unknown_keys`].
+#[derive(Clone, Copy)]
+enum Ty {
+    Leaf,
+    Obj(Obj),
+    List(Obj),
+    Map(Obj),
+}
+
+#[derive(Clone, Copy)]
+enum Obj {
+    Policy,
+    Rule,
+    Match,
+    Nah,
+    Llm,
+    Transcript,
+    Backend,
+    DenyStreak,
+    Log,
+}
+
+/// The JSON keys of each struct (its serde names), with their types.
+fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
+    use Ty::{Leaf, List, Map, Obj as O};
+    match o {
+        Obj::Policy => &[
+            ("policy_version", Leaf),
+            ("final", Leaf),
+            ("mode", Leaf),
+            ("defaults", Leaf),
+            ("disable_builtin", Leaf),
+            ("unattended_ask", Leaf),
+            ("rules", List(Obj::Rule)),
+            ("nah", O(Obj::Nah)),
+            ("llm", O(Obj::Llm)),
+            ("backends", Map(Obj::Backend)),
+            ("deny_streak", O(Obj::DenyStreak)),
+            ("deadline_ms", Leaf),
+            ("log", O(Obj::Log)),
+        ],
+        Obj::Rule => &[
+            ("id", Leaf),
+            ("description", Leaf),
+            ("decision", Leaf),
+            ("match", O(Obj::Match)),
+        ],
+        Obj::Match => &[
+            ("tool", Leaf),
+            ("kind", Leaf),
+            ("command", Leaf),
+            ("url", Leaf),
+            ("field", Leaf),
+            ("path", Leaf),
+            ("not_path", Leaf),
+            ("in_project", Leaf),
+            ("context", Leaf),
+            ("unattended", Leaf),
+            ("harness", Leaf),
+        ],
+        Obj::Nah => &[
+            ("enabled", Leaf),
+            ("path", Leaf),
+            ("require", Leaf),
+            ("timeout_ms", Leaf),
+            ("mode", Leaf),
+        ],
+        Obj::Llm => &[
+            ("enabled", Leaf),
+            ("mode", Leaf),
+            ("backend", Leaf),
+            ("timeout_ms", Leaf),
+            ("min_confidence", Leaf),
+            ("transcript", O(Obj::Transcript)),
+            ("environment", Leaf),
+            ("block", Leaf),
+            ("allow_exceptions", Leaf),
+        ],
+        Obj::Transcript => &[("max_messages", Leaf), ("max_bytes", Leaf)],
+        Obj::Backend => &[
+            ("type", Leaf),
+            ("model", Leaf),
+            ("base_url", Leaf),
+            ("api_key_env", Leaf),
+            ("command", Leaf),
+            ("max_tokens", Leaf),
+            ("data_classes", Leaf),
+            ("fake_mode", Leaf),
+        ],
+        Obj::DenyStreak => &[("consecutive", Leaf), ("total", Leaf)],
+        Obj::Log => &[("path", Leaf), ("include_input", Leaf), ("disabled", Leaf)],
+    }
+}
+
+fn walk_unknown(raw: &Value, ty: Ty, path: &str, out: &mut Vec<String>) {
+    match ty {
+        Ty::Leaf => {}
+        Ty::Obj(o) => {
+            let Some(m) = raw.as_object() else { return };
+            let known = schema_fields(o);
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort(); // serde_json's map is sorted already; Go sorted explicitly
+            for k in keys {
+                let p = if path.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{path}.{k}")
+                };
+                match known.iter().find(|(name, _)| name == k) {
+                    Some((_, ft)) => walk_unknown(&m[k], *ft, &p, out),
+                    None => out.push(p),
+                }
+            }
+        }
+        Ty::List(o) => {
+            let Some(arr) = raw.as_array() else { return };
+            for (i, el) in arr.iter().enumerate() {
+                walk_unknown(el, Ty::Obj(o), &format!("{path}[{i}]"), out);
+            }
+        }
+        Ty::Map(o) => {
+            let Some(m) = raw.as_object() else { return };
+            for (k, v) in m {
+                walk_unknown(v, Ty::Obj(o), &format!("{path}.{k}"), out);
+            }
+        }
+    }
+}
+
+/// Unknown keys of a policy file, as dotted paths ("rules[0].match.foo"),
+/// sorted within each object.
 pub fn unknown_keys(data: &[u8]) -> Vec<String> {
-    todo!("port policy.UnknownKeys")
+    let Ok(raw) = serde_json::from_slice::<Value>(data) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    walk_unknown(&raw, Ty::Obj(Obj::Policy), "", &mut out);
+    out
+}
+
+/// Go's `%q` for a string.
+pub(crate) fn go_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\x07' => out.push_str("\\a"),
+            '\x08' => out.push_str("\\b"),
+            '\x0c' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\x0b' => out.push_str("\\v"),
+            c if (c as u32) < 0x20 || c == '\x7f' => out.push_str(&format!("\\x{:02x}", c as u32)),
+            c if c.is_control() => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Structural problems of `p`. Regexes and globs are checked by
 /// `rules::Set::compile`. With `merged`, cross-references (llm.backend) are
 /// checked too.
 pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
-    todo!("port policy.Validate")
+    let mut out: Vec<String> = Vec::new();
+    let one_of = |v: &str, ok: &[&str]| v.is_empty() || ok.contains(&v);
+    if !one_of(&p.mode, &[MODE_ENFORCE, MODE_SHADOW]) {
+        out.push(format!(
+            "mode {} must be enforce or shadow",
+            go_quote(&p.mode)
+        ));
+    }
+    if !one_of(&p.unattended_ask, &["deny", "ask"]) {
+        out.push(format!(
+            "unattended_ask {} must be deny or ask",
+            go_quote(&p.unattended_ask)
+        ));
+    }
+    if p.deadline_ms < 0 {
+        out.push("deadline_ms must not be negative".into());
+    }
+    for id in &p.disable_builtin {
+        if !BUILTIN_IDS.contains(&id.as_str()) {
+            out.push(format!(
+                "disable_builtin: unknown built-in rule {}",
+                go_quote(id)
+            ));
+        }
+    }
+    for (i, r) in p.rules.iter().enumerate() {
+        let mut name = format!("rules[{i}]");
+        if !r.id.is_empty() {
+            name.push_str(&format!(" ({})", r.id));
+        }
+        if r.id.is_empty() {
+            out.push(format!("{name}: missing id"));
+        }
+        if !["allow", "ask", "deny"].contains(&r.decision.as_str()) {
+            out.push(format!(
+                "{name}: decision {} must be allow, ask or deny",
+                go_quote(&r.decision)
+            ));
+        }
+        if r.r#match.is_empty() {
+            out.push(format!("{name}: rule has no match conditions"));
+        }
+    }
+    if let Some(n) = &p.nah {
+        if !one_of(&n.mode, &[MODE_ENFORCE, MODE_SHADOW]) {
+            out.push(format!(
+                "nah.mode {} must be enforce or shadow",
+                go_quote(&n.mode)
+            ));
+        }
+        if n.timeout_ms < 0 {
+            out.push("nah.timeout_ms must not be negative".into());
+        }
+    }
+    if let Some(l) = &p.llm {
+        if !one_of(&l.mode, &[MODE_ENFORCE, MODE_SHADOW]) {
+            out.push(format!(
+                "llm.mode {} must be enforce or shadow",
+                go_quote(&l.mode)
+            ));
+        }
+        if l.min_confidence.is_some_and(|c| !(0.0..=1.0).contains(&c)) {
+            out.push("llm.min_confidence must be in [0,1]".into());
+        }
+        if l.timeout_ms < 0 {
+            out.push("llm.timeout_ms must not be negative".into());
+        }
+        if merged
+            && p.llm_enabled()
+            && !l.backend.is_empty()
+            && !p.backends.contains_key(&l.backend)
+        {
+            out.push(format!(
+                "llm.backend {} is not defined in backends",
+                go_quote(&l.backend)
+            ));
+        }
+    }
+    for (k, b) in &p.backends {
+        match b.r#type.as_str() {
+            "anthropic" | "openai" | "fake" => {}
+            "exec" => {
+                if b.command.is_empty() {
+                    out.push(format!("backends.{k}: exec backend needs command"));
+                }
+            }
+            t => out.push(format!(
+                "backends.{k}: unknown type {} (anthropic, openai, exec, fake)",
+                go_quote(t)
+            )),
+        }
+        if b.model.ends_with("-latest") {
+            out.push(format!(
+                "backends.{k}: model {} is a moving alias; use an exact model id",
+                go_quote(&b.model)
+            ));
+        }
+    }
+    if let Some(d) = &p.deny_streak
+        && (d.consecutive < 0 || d.total < 0)
+    {
+        out.push("deny_streak values must not be negative".into());
+    }
+    out
 }
 
-/// "sha256:<hex>" of the canonical JSON of `p`.
+/// Go's float formatting in `encoding/json` ('f' form, 'e' form below 1e-6 or
+/// from 1e21, no fraction for whole numbers, "e-7" not "e-07").
+pub(crate) fn go_f64(v: f64) -> String {
+    let abs = v.abs();
+    if v == 0.0 {
+        return "0".into();
+    }
+    if !(1e-6..1e21).contains(&abs) {
+        let s = format!("{v:e}"); // "5e-7", "1.2345e21"
+        let (mantissa, exp) = s.split_once('e').unwrap_or((&s, "0"));
+        let exp: i32 = exp.parse().unwrap_or(0);
+        return if exp < 0 {
+            format!("{mantissa}e-{}", -exp)
+        } else {
+            format!("{mantissa}e+{exp:02}")
+        };
+    }
+    format!("{v}")
+}
+
+/// Serializes `v` as Go would write a float64.
+pub(crate) fn go_float_raw<S: Serializer>(v: f64, s: S) -> Result<S::Ok, S::Error> {
+    match RawValue::from_string(go_f64(v)) {
+        Ok(raw) => raw.serialize(s),
+        Err(_) => s.serialize_f64(v), // NaN or infinity
+    }
+}
+
+fn opt_go_float<S: Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
+    match v {
+        Some(f) => go_float_raw(*f, s),
+        None => s.serialize_none(),
+    }
+}
+
+/// The bytes Go's `json.Marshal` writes for `p`: fields in declaration order,
+/// maps sorted, and `<`, `>`, `&`, U+2028 and U+2029 escaped as Go does.
+fn canonical_json(p: &Policy) -> String {
+    let json = serde_json::to_string(p).unwrap_or_default();
+    // These characters occur only inside JSON strings, so a plain replace is safe.
+    json.replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+}
+
+/// "sha256:<hex>" of the canonical JSON of `p`. It must equal the Go binary's
+/// value, which crosses into Switchboard's logs.
 pub fn rev(p: &Policy) -> String {
-    todo!("port policy.Rev")
+    format!(
+        "sha256:{}",
+        hex::encode(Sha256::digest(canonical_json(p).as_bytes()))
+    )
+}
+
+/// Replaces the rule with the same id in place, else appends.
+fn upsert_rule(rules: &mut Vec<Rule>, r: &Rule) {
+    match rules.iter_mut().find(|x| x.id == r.id) {
+        Some(slot) => *slot = r.clone(),
+        None => rules.push(r.clone()),
+    }
 }
 
 /// Applies the system layer over `base` with full authority. A rule whose id is
 /// already present replaces that rule; others are appended.
 pub fn merge_system(base: &Policy, sys: &Policy) -> Policy {
-    todo!("port policy.MergeSystem")
+    let mut out = base.clone();
+    if sys.r#final {
+        out.r#final = true;
+    }
+    if !sys.mode.is_empty() {
+        out.mode = sys.mode.clone();
+    }
+    if let Some(d) = sys.defaults {
+        out.defaults = Some(d);
+        if !d {
+            out.rules.clear(); // base holds only the default rules at this point
+        }
+    }
+    out.disable_builtin = [base.disable_builtin.clone(), sys.disable_builtin.clone()].concat();
+    if !sys.unattended_ask.is_empty() {
+        out.unattended_ask = sys.unattended_ask.clone();
+    }
+    if sys.deadline_ms > 0 {
+        out.deadline_ms = sys.deadline_ms;
+    }
+    for r in &sys.rules {
+        upsert_rule(&mut out.rules, r);
+    }
+    if let Some(sn) = &sys.nah {
+        let mut n = base.nah.clone().unwrap_or_default();
+        n.enabled = sn.enabled;
+        n.require = sn.require;
+        if !sn.path.is_empty() {
+            n.path = sn.path.clone();
+        }
+        if sn.timeout_ms > 0 {
+            n.timeout_ms = sn.timeout_ms;
+        }
+        if !sn.mode.is_empty() {
+            n.mode = sn.mode.clone();
+        }
+        out.nah = Some(n);
+    }
+    if let Some(sl) = &sys.llm {
+        out.llm = Some(merge_llm(base.llm.clone().unwrap_or_default(), sl));
+    }
+    if !sys.backends.is_empty() {
+        out.backends = base.backends.clone();
+        out.backends.extend(sys.backends.clone());
+    }
+    if let Some(d) = &sys.deny_streak {
+        out.deny_streak = Some(d.clone());
+    }
+    if let Some(l) = &sys.log {
+        out.log = Some(l.clone());
+    }
+    out
+}
+
+fn merge_llm(mut b: Llm, s: &Llm) -> Llm {
+    if s.enabled.is_some() {
+        b.enabled = s.enabled;
+    }
+    if !s.mode.is_empty() {
+        b.mode = s.mode.clone();
+    }
+    if !s.backend.is_empty() {
+        b.backend = s.backend.clone();
+    }
+    if s.timeout_ms > 0 {
+        b.timeout_ms = s.timeout_ms;
+    }
+    if s.min_confidence.is_some() {
+        b.min_confidence = s.min_confidence;
+    }
+    if let Some(st) = &s.transcript {
+        let mut t = b.transcript.clone().unwrap_or_default();
+        if st.max_messages > 0 {
+            t.max_messages = st.max_messages;
+        }
+        if st.max_bytes > 0 {
+            t.max_bytes = st.max_bytes;
+        }
+        b.transcript = Some(t);
+    }
+    // Go tells `null`/absent (nil) from `[]` here; both mean "not set" after
+    // omitempty round trips, and an explicit empty list never loosened anything.
+    if !s.environment.is_empty() {
+        b.environment = s.environment.clone();
+    }
+    b.block.extend(s.block.iter().cloned());
+    if !s.allow_exceptions.is_empty() {
+        b.allow_exceptions = s.allow_exceptions.clone();
+    }
+    b
 }
 
 /// Applies a user or project layer: it may add deny/ask rules, append
 /// `llm.block` and raise `llm.min_confidence`; everything else is dropped, each
 /// drop reported as a warning naming `src` and the key.
 pub fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy, Vec<String>) {
-    todo!("port policy.MergeTighten")
+    const ONLY: &str =
+        "this layer can only add deny/ask rules, append llm.block and raise llm.min_confidence";
+    let mut warns: Vec<String> = Vec::new();
+    let mut dropped = |key: &str, why: &str| warns.push(format!("{src}: {key} ignored: {why}"));
+    let mut out = base.clone();
+    if layer.r#final {
+        dropped("final", ONLY);
+    }
+    if !layer.mode.is_empty() {
+        dropped("mode", ONLY);
+    }
+    if layer.defaults.is_some() {
+        dropped("defaults", ONLY);
+    }
+    if !layer.disable_builtin.is_empty() {
+        dropped("disable_builtin", ONLY);
+    }
+    if !layer.unattended_ask.is_empty() {
+        dropped("unattended_ask", ONLY);
+    }
+    if layer.nah.is_some() {
+        dropped("nah", ONLY);
+    }
+    if !layer.backends.is_empty() {
+        dropped("backends", ONLY);
+    }
+    if layer.deny_streak.is_some() {
+        dropped("deny_streak", ONLY);
+    }
+    if layer.deadline_ms != 0 {
+        dropped("deadline_ms", ONLY);
+    }
+    if layer.log.is_some() {
+        dropped("log", ONLY);
+    }
+    for r in &layer.rules {
+        if r.decision == "allow" {
+            dropped(
+                &format!("rules.{}", r.id),
+                "allow rules are not accepted from this layer",
+            );
+            continue;
+        }
+        out.rules.push(r.clone()); // never replaces a lower layer's rule by id
+    }
+    if let Some(l) = &layer.llm {
+        let mut cp = base.llm.clone().unwrap_or_default();
+        if l.enabled.is_some() {
+            dropped("llm.enabled", ONLY);
+        }
+        if !l.mode.is_empty() {
+            dropped("llm.mode", ONLY);
+        }
+        if !l.backend.is_empty() {
+            dropped("llm.backend", ONLY);
+        }
+        if l.timeout_ms != 0 {
+            dropped("llm.timeout_ms", ONLY);
+        }
+        if l.transcript.is_some() {
+            dropped("llm.transcript", ONLY);
+        }
+        if !l.environment.is_empty() {
+            dropped("llm.environment", ONLY);
+        }
+        if !l.allow_exceptions.is_empty() {
+            dropped("llm.allow_exceptions", ONLY);
+        }
+        cp.block.extend(l.block.iter().cloned());
+        if let Some(c) = l.min_confidence {
+            if c > cp.min_confidence.unwrap_or(0.0) {
+                cp.min_confidence = Some(c);
+            } else {
+                dropped("llm.min_confidence", "may only be raised");
+            }
+        }
+        out.llm = Some(cp);
+    }
+    (out, warns)
 }
 
 /// The built-in policy: the default rules plus the default of every setting.
 pub fn default() -> Policy {
-    todo!("port policy.Default")
+    with_defaults(Policy {
+        policy_version: VERSION,
+        rules: default_rules(),
+        ..Default::default()
+    })
 }
 
 /// Fills every unset setting with its default. Does not add rules.
-pub fn with_defaults(p: Policy) -> Policy {
-    todo!("port policy.WithDefaults")
+pub fn with_defaults(mut p: Policy) -> Policy {
+    if p.policy_version == 0 {
+        p.policy_version = VERSION;
+    }
+    if p.mode.is_empty() {
+        p.mode = MODE_ENFORCE.into();
+    }
+    if p.unattended_ask.is_empty() {
+        p.unattended_ask = "deny".into();
+    }
+    if p.deadline_ms == 0 {
+        p.deadline_ms = 8000;
+    }
+    let mut nah = p.nah.take().unwrap_or_default();
+    if nah.path.is_empty() {
+        nah.path = "nah".into();
+    }
+    if nah.timeout_ms == 0 {
+        nah.timeout_ms = 2000;
+    }
+    if nah.mode.is_empty() {
+        nah.mode = MODE_ENFORCE.into();
+    }
+    p.nah = Some(nah);
+
+    let mut llm = p.llm.take().unwrap_or_default();
+    if llm.enabled.is_none() {
+        llm.enabled = Some(true);
+    }
+    if llm.mode.is_empty() {
+        llm.mode = MODE_SHADOW.into();
+    }
+    if llm.backend.is_empty() {
+        llm.backend = "anthropic".into();
+    }
+    if llm.timeout_ms == 0 {
+        llm.timeout_ms = 3000;
+    }
+    if llm.min_confidence.is_none() {
+        llm.min_confidence = Some(0.7);
+    }
+    let mut tr = llm.transcript.take().unwrap_or_default();
+    if tr.max_messages == 0 {
+        tr.max_messages = 20;
+    }
+    if tr.max_bytes == 0 {
+        tr.max_bytes = 24000;
+    }
+    llm.transcript = Some(tr);
+    p.llm = Some(llm);
+
+    p.backends
+        .entry("anthropic".into())
+        .or_insert_with(|| Backend {
+            r#type: "anthropic".into(),
+            model: "claude-haiku-5-5".into(),
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            base_url: "https://api.anthropic.com".into(),
+            data_classes: vec!["open".into(), "private".into()],
+            ..Default::default()
+        });
+    p
 }
 
-/// The default rules.
-pub fn default_rules() -> Vec<Rule> {
-    todo!("port policy.DefaultRules")
+fn strings(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| (*s).to_owned()).collect()
 }
+
+/// The default rules (design section 4, "Default rules").
+pub fn default_rules() -> Vec<Rule> {
+    let secret_paths = strings(&[
+        "**/.ssh/**",
+        "**/.aws/**",
+        "**/.env",
+        "**/.env.*",
+        "**/*.pem",
+        "**/id_rsa*",
+        "**/id_ed25519*",
+        "**/.netrc",
+    ]);
+    let sh = || strings(&["shell"]);
+    let rule = |id: &str, decision: &str, description: &str, m: Match| Rule {
+        id: id.into(),
+        description: description.into(),
+        decision: decision.into(),
+        r#match: m,
+    };
+    let shell_cmd = |command: &str| Match {
+        kind: sh(),
+        command: command.into(),
+        ..Default::default()
+    };
+    vec![
+        rule(
+            "read-in-project",
+            "allow",
+            "reads inside the project need no review",
+            Match {
+                kind: strings(&["read"]),
+                in_project: Some(true),
+                ..Default::default()
+            },
+        ),
+        rule(
+            "write-in-project",
+            "allow",
+            "writes inside the project (outside protected directories) need no review",
+            Match {
+                kind: strings(&["write"]),
+                in_project: Some(true),
+                not_path: strings(PROTECTED_DIRS),
+                ..Default::default()
+            },
+        ),
+        rule(
+            "secret-read",
+            "ask",
+            "reads a common secret location",
+            Match {
+                kind: strings(&["read"]),
+                path: secret_paths,
+                ..Default::default()
+            },
+        ),
+        rule(
+            "secret-read-shell",
+            "ask",
+            "shell command touches a common secret location",
+            shell_cmd(r"\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc"),
+        ),
+        rule(
+            "secret-exfil",
+            "deny",
+            "sends a common secret location over the network",
+            shell_cmd(SECRET_EXFIL_RE),
+        ),
+        rule(
+            "pipe-to-shell",
+            "deny",
+            "downloads and runs remote code without review (pipe to a shell or interpreter)",
+            shell_cmd(PIPE_TO_SHELL_RE),
+        ),
+        rule(
+            "git-force-push",
+            "ask",
+            "force push rewrites shared history",
+            shell_cmd(GIT_FORCE_PUSH_RE),
+        ),
+        rule(
+            "git-discard",
+            "ask",
+            "discards uncommitted work",
+            shell_cmd(GIT_DISCARD_RE),
+        ),
+        rule(
+            "infra-destroy",
+            "ask",
+            "destroys infrastructure or remote resources",
+            shell_cmd(INFRA_DESTROY_RE),
+        ),
+        rule(
+            "package-publish",
+            "ask",
+            "publishes a package to a public registry",
+            shell_cmd(PACKAGE_PUBLISH_RE),
+        ),
+        rule(
+            "sudo",
+            "ask",
+            "runs a command with elevated privileges",
+            shell_cmd(SUDO_RE),
+        ),
+        rule(
+            "classifier-injection",
+            "ask",
+            "tool input contains instruction-like text aimed at a classifier",
+            Match {
+                field: BTreeMap::from([("*".to_owned(), INJECTION_RE.to_owned())]),
+                ..Default::default()
+            },
+        ),
+    ]
+}
+
+// Command patterns of the default rules (Go RE2 syntax, compiled with
+// `rules::compile_regex`). Best effort, not a parser; they are public so tests
+// and docs can name them.
+
+macro_rules! net_tools_re {
+    () => {
+        "curl|wget|scp|rsync|sftp|ftp|nc|ncat|socat|iwr|invoke-webrequest|invoke-restmethod"
+    };
+}
+macro_rules! secret_shell_re {
+    () => {
+        r"(?:\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc|\.env\b|\.pem\b)"
+    };
+}
+
+pub const PIPE_TO_SHELL_RE: &str = concat!(
+    r#"(?i)\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]*(?:\|[^|][^|]*)*?\|\s*(?:(?:sudo|doas|env)(?:\s+-\S+)*\s+)?(?:\S*/)?(?:sh|bash|zsh|dash|python3?|perl|ruby|node|iex|invoke-expression)\b"#,
+    r#"|(?i)\b(?:sh|bash|zsh|dash)\s+(?:-c\s+)?["']?\$\(\s*(?:curl|wget)\b"#,
+    r"|(?i)\b(?:sh|bash|zsh|dash)\s+<\(\s*(?:curl|wget)\b"
+);
+pub const GIT_FORCE_PUSH_RE: &str = r"\bgit\b[^;&|\n]*\bpush\b[^;&|\n]*(?:\s--force(?:-with-lease)?\b|\s-[a-zA-Z]*f[a-zA-Z]*(?:\s|$)|\s\+\S)";
+pub const GIT_DISCARD_RE: &str = r"\bgit\b[^;&|\n]*(?:\breset\b[^;&|\n]*\s--hard\b|\bclean\b[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b|\bcheckout\s+(?:--\s+)?\.(?:\s|$)|\bcheckout\b[^;&|\n]*\s--\s+\.|\brestore\b[^;&|\n]*\s\.(?:\s|$))";
+pub const INFRA_DESTROY_RE: &str = r"\b(?:terraform|tofu|pulumi|cdk|terragrunt)\b[^;&|\n]*\bdestroy\b|\bkubectl\b[^;&|\n]*\bdelete\b|\bgh\s+repo\s+delete\b";
+pub const PACKAGE_PUBLISH_RE: &str = r"\b(?:npm|pnpm|yarn)\s+(?:[^;&|\n]*\s)?publish(?:\s|$)|\bcargo\s+publish(?:\s|$)|\btwine\s+upload\b|\bgem\s+push\b";
+pub const SUDO_RE: &str = r"(?:^|[^\w.-])(?:sudo|doas)\s+\S";
+/// Separators include _ - . so file names like IGNORE_PREVIOUS_INSTRUCTIONS match.
+pub const INJECTION_RE: &str = concat!(
+    r"(?i)ignore[\s_.-]+(?:(?:all|any)[\s_.-]+)?(?:previous|prior)[\s_.-]+instructions",
+    r"|you[\s_.-]+are[\s_.-]+(?:now[\s_.-]+)?(?:(?:a|the)[\s_.-]+)?(?:security[\s_.-]+)?classifier",
+    r"|(?:label|classify|mark|rate)[\s_.-]+(?:this|it|the)(?:[\s_.-]+call)?[\s_.-]+(?:as[\s_.-]+)?(?:allow|safe|benign)",
+    r"|callguard\W+(?:allow|approve)|callguard-data"
+);
+/// A network tool and a common secret location in one command.
+pub const SECRET_EXFIL_RE: &str = concat!(
+    r"(?i)\b(?:",
+    net_tools_re!(),
+    r")\b[^;&\n]*",
+    secret_shell_re!(),
+    r"|(?i)",
+    secret_shell_re!(),
+    r"[^;&\n]*\b(?:",
+    net_tools_re!(),
+    r")\b"
+);
+
+#[cfg(test)]
+mod tests;

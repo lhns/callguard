@@ -1,0 +1,1 @@
+{"policy_version":1,"rules":[{"id":"a\u003cb\u003e\u0026c","description":"x\u2028y\u2029z \u0001\b\f\n\r\t\"q\\ é  😀","decision":"ask","match":{"command":"a\u003cb|c\u003e\u0026d\\s","field":{"a":"\u0026","z":"\u003c"},"in_project":true,"context":{"k":["\u003c"]},"unattended":false}}]}

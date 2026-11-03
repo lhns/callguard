@@ -1,0 +1,1 @@
+{"policy_version":1,"nah":{"enabled":true,"path":"/x/nah","require":true,"timeout_ms":9},"disable_builtin":["rm-root"],"final":true,"mode":"shadow","unattended_ask":"ask"}

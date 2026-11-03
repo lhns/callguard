@@ -1,0 +1,1 @@
+{"policy_version":1,"llm":{"min_confidence":0.85,"block":["a&b"]},"backends":{"z":{"type":"exec","command":["x","<y>"]},"b":{"type":"fake","fake_mode":"slow"}},"log":{"include_input":true},"deny_streak":{"consecutive":3},"defaults":false}
