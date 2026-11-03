@@ -104,3 +104,28 @@ func TestLimit(t *testing.T) {
 		t.Errorf("input truncation: %+v", got)
 	}
 }
+
+// Harness-generated user-role text (background task results, shell output,
+// local command caveats) and sidechain entries (a subagent prompt written by
+// the assistant) are not the user's words and must not reach the judge.
+func TestReadClaudeJSONLDropsNonUserText(t *testing.T) {
+	lines := []string{
+		`{"type":"user","message":{"role":"user","content":"<task-notification>\n<summary>LEAK1</summary>\n</task-notification>"}}`,
+		`{"type":"user","message":{"role":"user","content":"<local-command-caveat>LEAK2</local-command-caveat>"}}`,
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<bash-stdout>LEAK3</bash-stdout>"}]}}`,
+		`{"type":"user","message":{"role":"user","content":"<bash-stderr>LEAK4</bash-stderr>"}}`,
+		`{"type":"user","isSidechain":true,"message":{"role":"user","content":"LEAK5 written by the assistant"}}`,
+		`{"type":"user","message":{"role":"user","content":"keep me"}}`,
+	}
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := ReadClaudeJSONL(p, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Text != "keep me" {
+		t.Errorf("got %+v, want only the user's message", msgs)
+	}
+}

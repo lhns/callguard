@@ -27,12 +27,17 @@ type Message struct {
 	Input json.RawMessage `json:"input,omitempty"`
 }
 
-// ignoredUserPrefixes mark harness-injected text in user-role messages.
-var ignoredUserPrefixes = []string{"<system-reminder>", "<local-command-stdout>", "<command-"}
+// ignoredUserPrefixes mark harness-injected text in user-role messages:
+// reminders, slash-command echoes, shell and local command output, and
+// background task results.
+var ignoredUserPrefixes = []string{
+	"<system-reminder>", "<command-", "<local-command-", "<bash-stdout>", "<bash-stderr>", "<task-notification>",
+}
 
 type entry struct {
 	Type             string `json:"type"`
 	IsMeta           bool   `json:"isMeta"`
+	IsSidechain      bool   `json:"isSidechain"` // a subagent's turn: its "user" text is the assistant's prompt
 	IsCompactSummary bool   `json:"isCompactSummary"`
 	Message          struct {
 		Content json.RawMessage `json:"content"`
@@ -95,7 +100,7 @@ func ReadClaudeJSONL(path string, maxMessages, maxBytes int) ([]Message, error) 
 
 func parseLine(line []byte) []Message {
 	var e entry
-	if json.Unmarshal(line, &e) != nil || e.IsMeta || e.IsCompactSummary {
+	if json.Unmarshal(line, &e) != nil || e.IsMeta || e.IsSidechain || e.IsCompactSummary {
 		return nil
 	}
 	if e.Type != "user" && e.Type != "assistant" {
