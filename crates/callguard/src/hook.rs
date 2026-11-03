@@ -900,7 +900,7 @@ mod tests {
         let (ok_decider, _) = capture(verdict(Decision::Allow, true));
         let bash = payload("claude_pretooluse_bash.json");
         let oversize = format!("{{\"x\":\"{}\"}}", "a".repeat(MAX_INPUT));
-        let cases: Vec<(&str, String, &(dyn Fn(&Request) -> Verdict + Sync))> = vec![
+        let cases: Vec<(&str, String, Decider)> = vec![
             ("garbage", "this is not json".into(), &ok_decider),
             ("empty body", String::new(), &ok_decider),
             ("empty object", "{}".into(), &ok_decider),
@@ -1171,7 +1171,7 @@ mod tests {
     fn hermes_never_fails_open() {
         let (ok, _) = capture(verdict(Decision::Allow, true));
         let term = payload("hermes_pre_tool_call_terminal.json");
-        let cases: Vec<(&str, String, &(dyn Fn(&Request) -> Verdict + Sync))> = vec![
+        let cases: Vec<(&str, String, Decider)> = vec![
             ("garbage", "nope".into(), &ok),
             ("empty", String::new(), &ok),
             ("array", "[1]".into(), &ok),
@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn generic_never_fails_open() {
         let (ok, _) = capture(verdict(Decision::Allow, true));
-        let cases: Vec<(&str, String, &(dyn Fn(&Request) -> Verdict + Sync))> = vec![
+        let cases: Vec<(&str, String, Decider)> = vec![
             ("garbage", "nope".into(), &ok),
             ("empty", String::new(), &ok),
             ("array", "[]".into(), &ok),

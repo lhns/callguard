@@ -10,13 +10,13 @@ use serde::Serialize;
 
 /// `json.Compact`: drops whitespace outside strings. `s` must be valid JSON.
 pub fn compact(s: &str) -> String {
-    rewrite(s, false)
+    rewrite(s, true, false)
 }
 
 /// Compacts and HTML-escapes valid JSON text, as `json.Marshal` does for its
 /// output (raw messages included).
 pub fn escape(s: &str) -> String {
-    rewrite(s, true)
+    rewrite(s, true, true)
 }
 
 /// `json.Marshal(v)`.
@@ -24,7 +24,12 @@ pub fn to_string<T: Serialize + ?Sized>(v: &T) -> Result<String, serde_json::Err
     serde_json::to_string(v).map(|s| escape(&s))
 }
 
-fn rewrite(s: &str, html: bool) -> String {
+/// `json.MarshalIndent(v, "", "  ")`.
+pub fn to_string_indent<T: Serialize + ?Sized>(v: &T) -> Result<String, serde_json::Error> {
+    serde_json::to_string_pretty(v).map(|s| rewrite(&s, false, true))
+}
+
+fn rewrite(s: &str, compact: bool, html: bool) -> String {
     let mut out = String::with_capacity(s.len());
     let (mut in_str, mut esc) = (false, false);
     for c in s.chars() {
@@ -32,7 +37,7 @@ fn rewrite(s: &str, html: bool) -> String {
             if c == '"' {
                 in_str = true;
                 out.push(c);
-            } else if !matches!(c, ' ' | '\t' | '\n' | '\r') {
+            } else if !compact || !matches!(c, ' ' | '\t' | '\n' | '\r') {
                 out.push(c);
             }
             continue;
