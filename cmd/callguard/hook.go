@@ -37,15 +37,19 @@ func (k kvFlags) Set(s string) error {
 	return nil
 }
 
+// cmdHook runs a hook adapter. A misconfigured hook must still block, so
+// every usage error exits 2: Claude and Hermes treat exit 2 as a block and
+// any other non-zero exit as "run the tool"; the plugins block on any
+// non-zero exit.
 func cmdHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprint(stderr, hookUsage)
-		return 64
+		return 2
 	}
 	name := args[0]
 	if name != "claude" && name != "hermes" && name != "generic" {
-		fmt.Fprintf(stderr, "callguard hook: unknown harness %q\n\n%s", name, hookUsage)
-		return 64
+		fmt.Fprintf(stderr, "callguard hook: unknown harness %q; blocking the call\n\n%s", name, hookUsage)
+		return 2
 	}
 
 	fs := flag.NewFlagSet("hook "+name, flag.ContinueOnError)
@@ -63,26 +67,15 @@ func cmdHook(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		// A misconfigured hook must still block: Claude and Hermes treat
-		// exit 2 as a block and every other non-zero exit as "run the tool".
-		if name == "generic" {
-			return 64
-		}
 		fmt.Fprintln(stderr, "callguard hook: bad flags; blocking the call")
 		return 2
 	}
 	if fs.NArg() > 0 {
-		fmt.Fprintf(stderr, "callguard hook: unexpected argument %q\n", fs.Arg(0))
-		if name == "generic" {
-			return 64
-		}
+		fmt.Fprintf(stderr, "callguard hook: unexpected argument %q; blocking the call\n", fs.Arg(0))
 		return 2
 	}
 	if *allowInAuto && name != "claude" {
-		fmt.Fprintln(stderr, "callguard hook: --allow-in-auto applies to claude only")
-		if name == "generic" {
-			return 64
-		}
+		fmt.Fprintln(stderr, "callguard hook: --allow-in-auto applies to claude only; blocking the call")
 		return 2
 	}
 

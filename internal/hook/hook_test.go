@@ -224,6 +224,12 @@ func TestClaudeNeverFailsOpen(t *testing.T) {
 	}
 }
 
+func TestClaudeBadPayloadInDontAskDenies(t *testing.T) {
+	okDecider, _ := capture(verdict(callguard.Allow, true))
+	out, errOut, code := runClaude(`{"hook_event_name":"PreToolUse","permission_mode":"dontAsk"}`, Options{}, okDecider)
+	assertClaudeSafe(t, out, errOut, code, "deny")
+}
+
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, errors.New("closed") }

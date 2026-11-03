@@ -44,7 +44,6 @@ func Claude(in io.Reader, out, errOut io.Writer, opt Options, d Decider) (code i
 	}()
 
 	req := newRequest("claude")
-	req.Unattended = opt.Unattended
 	var v callguard.Verdict
 	var in0 claudeInput
 
@@ -54,6 +53,8 @@ func Claude(in io.Reader, out, errOut io.Writer, opt Options, d Decider) (code i
 			err = fmt.Errorf("missing hook_event_name")
 		}
 	}
+	// Set before any fallback, so a malformed payload in dontAsk still denies.
+	req.Unattended = opt.Unattended || in0.PermissionMode == "dontAsk"
 	switch {
 	case err != nil:
 		v = fallback(req, "bad hook input: "+err.Error())
@@ -67,7 +68,6 @@ func Claude(in io.Reader, out, errOut io.Writer, opt Options, d Decider) (code i
 		req.Cwd = in0.Cwd
 		req.Tool = callguard.ToolCall{Name: in0.ToolName, Input: in0.ToolInput}
 		req.PermissionMode = in0.PermissionMode
-		req.Unattended = opt.Unattended || in0.PermissionMode == "dontAsk"
 		if in0.TranscriptPath != "" {
 			req.Transcript = &callguard.Transcript{Path: in0.TranscriptPath, Format: "claude-jsonl"}
 		}

@@ -27,23 +27,24 @@ func TestHookUsageErrors(t *testing.T) {
 		var out, errOut bytes.Buffer
 		return cmdHook(args, strings.NewReader(""), &out, &errOut)
 	}
-	if c := run(); c != 64 {
+	// Every usage error must block (exit 2), never exit 1 or 64, which Claude
+	// and Hermes treat as "run the tool".
+	if c := run(); c != 2 {
 		t.Errorf("no harness: %d", c)
 	}
-	if c := run("emacs"); c != 64 {
+	if c := run("claud"); c != 2 {
 		t.Errorf("unknown harness: %d", c)
 	}
-	// Bad flags must block in Claude and Hermes (exit 2), never exit 1/64.
-	for _, h := range []string{"claude", "hermes"} {
+	for _, h := range []string{"claude", "hermes", "generic"} {
 		if c := run(h, "--bogus"); c != 2 {
 			t.Errorf("%s bad flag: %d", h, c)
 		}
 		if c := run(h, "--context", "novalue"); c != 2 {
 			t.Errorf("%s bad context: %d", h, c)
 		}
-	}
-	if c := run("generic", "--bogus"); c != 64 {
-		t.Errorf("generic bad flag: %d", c)
+		if c := run(h, "extra"); c != 2 {
+			t.Errorf("%s extra argument: %d", h, c)
+		}
 	}
 	if c := run("hermes", "--allow-in-auto"); c != 2 {
 		t.Errorf("hermes --allow-in-auto: %d", c)
