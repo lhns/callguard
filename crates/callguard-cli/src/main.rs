@@ -1,6 +1,7 @@
 //! The `callguard` command. See README.md.
 
 mod decide;
+mod engine_child;
 mod eval;
 mod flags;
 mod hook;
@@ -34,6 +35,8 @@ const VERSION: &str = match option_env!("CALLGUARD_VERSION") {
 };
 
 fn main() {
+    // Before anything starts a process: the harness's pipes stay ours.
+    callguard_nah::isolate_std_handles();
     // A panic anywhere is caught in `guarded`; this only words the message.
     std::panic::set_hook(Box::new(|info| {
         let _ = writeln!(io::stderr(), "callguard: internal error: {info}");
@@ -136,6 +139,8 @@ fn run(
         "decide" => decide::run(rest, stdin, stdout, stderr),
         "hook" => hook::run(rest, stdin, stdout, stderr),
         "plugin" => plugin::run(rest, stdout, stderr),
+        // Hidden: the nah child process of callguard::supervisor.
+        callguard::supervisor::ENGINE_VERB => engine_child::run(rest, stdin, stdout),
         "policy" => policy::run(rest, stdout, stderr),
         "eval" => eval::run(rest, stdout, stderr),
         "version" | "--version" => {

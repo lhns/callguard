@@ -316,9 +316,61 @@ fn new_call_decodes_like_go() {
     assert_eq!(c.command, "echo \u{fffd}\nrm -rf /");
     let b = Builtin::new(unix.clone(), &[], &[]).unwrap();
     assert_eq!(b.check(&c).map(|h| h.id), Some("rm-root".to_owned()));
-    // Field names are case-sensitive here, as the map lookup is in Go.
-    let c = Call::new(input("Bash", r#"{"Command":"ls"}"#), &unix);
-    assert_eq!(c.command, "");
+}
+
+/// Go: TestInputKeysInAnyCase. A harness may read input keys in any case, so a
+/// wrong-case key must not hide the call from the rules.
+#[test]
+fn input_keys_in_any_case() {
+    let unix = unix();
+    let b = Builtin::new(unix.clone(), &[], &[]).unwrap();
+    for (name, tool, json, id) in [
+        ("command", "Bash", r#"{"Command":"rm -rf /"}"#, "rm-root"),
+        (
+            "upper command",
+            "Bash",
+            r#"{"COMMAND":"rm -rf /"}"#,
+            "rm-root",
+        ),
+        (
+            "hidden behind a harmless exact key",
+            "Bash",
+            r#"{"command":"ls","Command":"rm -rf /"}"#,
+            "rm-root",
+        ),
+        (
+            "harmless exact key behind it",
+            "Bash",
+            r#"{"Command":"ls","command":"rm -rf /"}"#,
+            "rm-root",
+        ),
+        (
+            "path",
+            "Write",
+            r#"{"File_Path":"/w/.claude/settings.json"}"#,
+            "self-protect-write",
+        ),
+    ] {
+        let c = Call::new(input(tool, json), &unix);
+        assert_eq!(b.check(&c).map(|h| h.id), Some(id.to_owned()), "{name}");
+    }
+    let c = Call::new(input("WebFetch", r#"{"URL":"https://x.example"}"#), &unix);
+    assert_eq!(c.url, "https://x.example");
+    let c = Call::new(input("Bash", r#"{"command":"ls"}"#), &unix);
+    assert_eq!(c.command, "ls");
+    let c = Call::new(input("Bash", r#"{"Command":"ls","command":"ls"}"#), &unix);
+    assert_eq!(c.command, "ls", "same value twice");
+    // The exact spelling first, then the others in sorted key order.
+    let c = Call::new(
+        input("Bash", r#"{"command":"a","Command":"b","COMMAND":"c"}"#),
+        &unix,
+    );
+    assert_eq!(
+        c.command,
+        "a
+c
+b"
+    );
 }
 
 #[test]

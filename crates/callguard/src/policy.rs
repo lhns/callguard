@@ -169,23 +169,32 @@ impl Match {
     }
 }
 
-/// Configures the nah layer (ADR 0004). The Go fields `path`, `require` and
-/// `mode` are kept for reading old files; Phase 2 decides which survive (the
-/// plan refuses `path`, `require` and `engine`).
+/// Configures the nah layer. nah is linked into callguard and on by default.
+/// `path`, `require` and `engine` belong to the Go era: they still parse so
+/// that [`validate`] can refuse them by name.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Nah {
-    #[serde(deserialize_with = "nullable")]
-    pub enabled: bool,
-    /// Default "nah".
+    /// Default true; `false` is for debugging.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    /// Refused.
     #[serde(
         skip_serializing_if = "String::is_empty",
         deserialize_with = "nullable"
     )]
     pub path: String,
+    /// Refused.
     #[serde(skip_serializing_if = "is_false", deserialize_with = "nullable")]
     pub require: bool,
-    /// Default 2000.
+    /// Refused.
+    #[serde(
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "nullable"
+    )]
+    pub engine: String,
+    /// The hard deadline for the nah process. Default 10000: walking `/` takes
+    /// 6 to 9 s on Windows, and a kill before that loses the block.
     #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
     pub timeout_ms: i64,
     #[serde(
@@ -193,6 +202,26 @@ pub struct Nah {
         deserialize_with = "nullable"
     )]
     pub mode: String,
+    /// nah's own analysis budget. Default 2000, provisional until the load
+    /// run reports; it must not exceed `timeout_ms`, the hard kill.
+    #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
+    pub budget_ms: i64,
+    /// Shipped nah guards by name: `true` turns a default-off guard on. Every
+    /// default-off guard is otherwise passed to nah as explicitly off, so a
+    /// repo's `.nah/project.toml` cannot enable one. User and project layers
+    /// can only enable.
+    #[serde(
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "nullable"
+    )]
+    pub guards: BTreeMap<String, bool>,
+}
+
+impl Nah {
+    /// Whether the layer runs (default true).
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.unwrap_or(true)
+    }
 }
 
 /// Configures the judge layer.
@@ -585,8 +614,11 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("enabled", Leaf),
             ("path", Leaf),
             ("require", Leaf),
+            ("engine", Leaf),
             ("timeout_ms", Leaf),
             ("mode", Leaf),
+            ("budget_ms", Leaf),
+            ("guards", Leaf),
         ],
         Obj::Llm => &[
             ("enabled", Leaf),
@@ -785,6 +817,26 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
         if n.timeout_ms < 0 {
             out.push("nah.timeout_ms must not be negative".into());
         }
+        if n.budget_ms < 0 {
+            out.push("nah.budget_ms must not be negative".into());
+        }
+        if n.budget_ms > 0 && n.timeout_ms > 0 && n.budget_ms > n.timeout_ms {
+            out.push(format!(
+                "nah.budget_ms {} must not exceed nah.timeout_ms {}",
+                n.budget_ms, n.timeout_ms
+            ));
+        }
+        for (field, set) in [
+            ("path", !n.path.is_empty()),
+            ("require", n.require),
+            ("engine", !n.engine.is_empty()),
+        ] {
+            if set {
+                out.push(format!(
+                    "nah.{field} is no longer supported: nah is built into callguard; remove it"
+                ));
+            }
+        }
     }
     if let Some(l) = &p.llm {
         if !one_of(&l.mode, &[MODE_ENFORCE, MODE_SHADOW]) {
@@ -924,13 +976,15 @@ pub fn merge_system(base: &Policy, sys: &Policy) -> Policy {
     }
     if let Some(sn) = &sys.nah {
         let mut n = base.nah.clone().unwrap_or_default();
-        n.enabled = sn.enabled;
-        n.require = sn.require;
-        if !sn.path.is_empty() {
-            n.path = sn.path.clone();
+        if sn.enabled.is_some() {
+            n.enabled = sn.enabled;
         }
+        n.guards.extend(sn.guards.clone());
         if sn.timeout_ms > 0 {
             n.timeout_ms = sn.timeout_ms;
+        }
+        if sn.budget_ms > 0 {
+            n.budget_ms = sn.budget_ms;
         }
         if !sn.mode.is_empty() {
             n.mode = sn.mode.clone();
@@ -1015,8 +1069,32 @@ pub fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy, Vec<S
     if !layer.unattended_ask.is_empty() {
         dropped("unattended_ask", ONLY);
     }
-    if layer.nah.is_some() {
-        dropped("nah", ONLY);
+    if let Some(n) = &layer.nah {
+        // Guards can only be switched on: that tightens nah.
+        let mut cp = out.nah.take().unwrap_or_default();
+        for (name, on) in &n.guards {
+            if *on {
+                cp.guards.insert(name.clone(), true);
+            } else {
+                dropped(
+                    &format!("nah.guards.{name}"),
+                    "a guard can only be switched on from this layer",
+                );
+            }
+        }
+        out.nah = Some(cp);
+        if n.enabled.is_some() {
+            dropped("nah.enabled", ONLY);
+        }
+        if n.timeout_ms != 0 {
+            dropped("nah.timeout_ms", ONLY);
+        }
+        if n.budget_ms != 0 {
+            dropped("nah.budget_ms", ONLY);
+        }
+        if !n.mode.is_empty() {
+            dropped("nah.mode", ONLY);
+        }
     }
     if !layer.backends.is_empty() {
         dropped("backends", ONLY);
@@ -1076,6 +1154,17 @@ pub fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy, Vec<S
     (out, warns)
 }
 
+/// The whole call's deadline. It has to fit nah's hard deadline and the judge
+/// after it, yet stay under the 12 s timeout of the opencode and pi plugins,
+/// which block the call when it passes.
+pub const DEFAULT_DEADLINE_MS: i64 = 11_000;
+
+/// The hard deadline for the nah process (see [`Nah::timeout_ms`]).
+pub const DEFAULT_NAH_TIMEOUT_MS: i64 = 10_000;
+
+/// nah's analysis budget (provisional until the load run reports).
+pub const DEFAULT_NAH_BUDGET_MS: i64 = 2_000;
+
 /// The built-in policy: the default rules plus the default of every setting.
 pub fn default() -> Policy {
     with_defaults(Policy {
@@ -1097,14 +1186,17 @@ pub fn with_defaults(mut p: Policy) -> Policy {
         p.unattended_ask = "deny".into();
     }
     if p.deadline_ms == 0 {
-        p.deadline_ms = 8000;
+        p.deadline_ms = DEFAULT_DEADLINE_MS;
     }
     let mut nah = p.nah.take().unwrap_or_default();
-    if nah.path.is_empty() {
-        nah.path = "nah".into();
+    if nah.enabled.is_none() {
+        nah.enabled = Some(true);
     }
     if nah.timeout_ms == 0 {
-        nah.timeout_ms = 2000;
+        nah.timeout_ms = DEFAULT_NAH_TIMEOUT_MS;
+    }
+    if nah.budget_ms == 0 {
+        nah.budget_ms = DEFAULT_NAH_BUDGET_MS.min(nah.timeout_ms);
     }
     if nah.mode.is_empty() {
         nah.mode = MODE_ENFORCE.into();

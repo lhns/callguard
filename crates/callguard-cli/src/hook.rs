@@ -9,6 +9,7 @@ use callguard::fallback::fallback_verdict;
 use callguard::hook::{self, Options};
 use callguard::schema::{Request, Verdict};
 
+use crate::engine_child;
 use crate::flags::{self, FlagError, Kind, spec};
 
 const USAGE: &str = "usage: callguard hook claude|hermes|generic [flags]
@@ -51,6 +52,8 @@ pub fn run(
             spec("no-user-policy", Kind::Bool),
             spec("log", Kind::Str),
             spec("unattended", Kind::Bool),
+            #[cfg(feature = "test-engines")]
+            spec("test-engine", Kind::Str),
             spec("context", Kind::Pair),
             spec("context-file", Kind::Str),
             spec("allow-in-auto", Kind::Bool),
@@ -90,6 +93,7 @@ pub fn run(
         allow_in_auto: f.bool("allow-in-auto"),
     };
     let policy_path = f.str("policy");
+    let test_engine = f.str("test-engine");
     let no_user = f.bool("no-user-policy");
     let log_path = f.str("log");
     // The engine is built per request, because the project policy layer
@@ -99,10 +103,7 @@ pub fn run(
             system_policy: policy_path.clone(),
             project_dir: engine::resolve_project_dir(req),
             user_config_dir: if no_user { "-".into() } else { String::new() },
-            options: engine::Options {
-                log_path: log_path.clone(),
-                ..Default::default()
-            },
+            options: engine_child::options(&log_path, &test_engine),
         };
         match Engine::load(lo) {
             Ok(eng) => eng.decide(req),

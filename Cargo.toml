@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/callguard", "crates/callguard-cli"]
-# crates/callguard-nah joins in Phase 2.
+members = ["crates/callguard", "crates/callguard-nah", "crates/callguard-cli"]
 
 [workspace.package]
 version = "0.0.0"
@@ -26,6 +25,15 @@ thiserror = "2"
 time = { version = "0.3", features = ["formatting"] }
 getrandom = "0.3"
 tempfile = "3"
+# nah is publish = false, so a git pin: our fork, which is nah v1.7.0 plus
+# decide_with_budget (spike/nah-native/nah-budget.patch). Only callguard-nah depends on it.
+nah-cli = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
+nah-proto = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
+nah-observe = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# nah's own `[patch.crates-io]` does not carry over to its dependents.
+[patch.crates-io]
+gosyn = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }

@@ -592,6 +592,23 @@ fn join_continuations(s: &str) -> String {
     out
 }
 
+/// The distinct non-empty values of `key` in any letter case: the exact
+/// spelling first, then the others in sorted key order (Go: `fieldValues`).
+fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<String> {
+    let others = fields
+        .keys()
+        .filter(|k| k.as_str() != key && k.eq_ignore_ascii_case(key));
+    let mut values: Vec<String> = Vec::new();
+    for k in std::iter::once(&key.to_owned()).chain(others) {
+        if let Some(v) = fields.get(k).filter(|v| !v.is_empty())
+            && !values.contains(v)
+        {
+            values.push(v.clone());
+        }
+    }
+    values
+}
+
 impl Call {
     /// Extracts command, URL and path from the tool input.
     pub fn new(input: CallInput, env: &Env) -> Call {
@@ -630,19 +647,27 @@ impl Call {
                 c.whole.push_str(&leaves.join("\n"));
             }
         }
-        let field = |c: &Call, k: &str| c.fields.get(k).cloned().unwrap_or_default();
         if kind == KIND_SHELL {
-            c.command = field(&c, "command");
+            // Every spelling counts: we can't know which one the harness reads.
+            c.command = field_values(&c.fields, "command").join(
+                "
+",
+            );
             if c.command.is_empty() && input.tool == "execute_code" {
-                c.command = field(&c, "code");
+                c.command = field_values(&c.fields, "code").join(
+                    "
+",
+                );
             }
             c.command = join_continuations(&c.command);
         }
-        c.url = field(&c, "url");
+        c.url = field_values(&c.fields, "url")
+            .into_iter()
+            .next()
+            .unwrap_or_default();
         let mut raw_path = PATH_KEYS
             .iter()
-            .map(|k| field(&c, k))
-            .find(|v| !v.is_empty())
+            .find_map(|k| field_values(&c.fields, k).into_iter().next())
             .unwrap_or_default();
         if raw_path.is_empty() && kind == KIND_READ {
             raw_path = input.cwd.clone(); // Glob, Grep and LS default to the working directory

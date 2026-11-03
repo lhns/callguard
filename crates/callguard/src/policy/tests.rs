@@ -54,9 +54,9 @@ fn nah(p: &Policy) -> &Nah {
 #[test]
 fn default_values() {
     let p = default();
-    assert!(p.mode == "enforce" && p.unattended_ask == "deny" && p.deadline_ms == 8000);
+    assert!(p.mode == "enforce" && p.unattended_ask == "deny" && p.deadline_ms == 11000);
     let n = nah(&p);
-    assert!(!n.enabled && n.path == "nah" && n.timeout_ms == 2000);
+    assert!(n.is_enabled() && n.timeout_ms == 10000);
     let l = llm(&p);
     assert!(p.llm_enabled());
     assert!(l.mode == "shadow" && l.backend == "anthropic" && l.timeout_ms == 3000);
@@ -93,7 +93,7 @@ fn merge_system_applies_over_defaults() {
     let (_d, o) = layers(
         r#"{"policy_version":1,"mode":"shadow","unattended_ask":"ask","deadline_ms":500,
         "rules":[{"id":"mine","decision":"allow","match":{"kind":["fetch"]}},{"id":"sudo","decision":"deny","match":{"command":"sudo"}}],
-        "nah":{"enabled":true,"path":"/x/nah"},
+        "nah":{"enabled":false,"timeout_ms":3000,"guards":{"a":true}},
         "llm":{"mode":"enforce","min_confidence":0.9,"block":["no prod"],"transcript":{"max_messages":5}},
         "backends":{"local":{"type":"openai","model":"m","base_url":"http://x"}},
         "disable_builtin":["fork-bomb"]}"#,
@@ -104,7 +104,7 @@ fn merge_system_applies_over_defaults() {
     let p = &l.policy;
     assert!(p.mode == "shadow" && p.unattended_ask == "ask" && p.deadline_ms == 500);
     let n = nah(p);
-    assert!(n.enabled && n.path == "/x/nah" && n.timeout_ms == 2000);
+    assert!(!n.is_enabled() && n.timeout_ms == 3000 && n.guards["a"]);
     let lm = llm(p);
     let t = lm.transcript.as_ref().unwrap();
     assert!(lm.mode == "enforce" && lm.min_confidence == Some(0.9) && t.max_messages == 5);
@@ -152,9 +152,9 @@ fn tighten_only() {
     let p = &l.policy;
     assert!(
         p.mode == "enforce"
-            && !nah(p).enabled
+            && nah(p).is_enabled()
             && p.unattended_ask == "deny"
-            && p.deadline_ms == 8000
+            && p.deadline_ms == 11000
             && !p.r#final
             && p.deny_streak.is_none()
             && p.log.is_none()
@@ -199,7 +199,7 @@ fn tighten_only() {
         "unattended_ask",
         "deadline_ms",
         "final",
-        "nah",
+        "nah.enabled",
         "backends",
         "deny_streak",
         "log",
@@ -397,8 +397,26 @@ fn golden(name: &str) -> (Policy, String) {
     let dir = format!("{}/testdata/rev", env!("CARGO_MANIFEST_DIR"));
     let src = fs::read_to_string(format!("{dir}/{name}.src.json")).unwrap();
     let marshal = fs::read_to_string(format!("{dir}/{name}.marshal.json")).unwrap();
-    let p: Policy = serde_json::from_str(&src).unwrap();
-    (with_defaults(p), marshal)
+    let raw: Policy = serde_json::from_str(&src).unwrap();
+    let mut p = with_defaults(raw.clone());
+    // The Go binary's defaults, for the settings Rust changed on purpose: nah
+    // is on, its deadline is 10 s and the call's 11 s.
+    if raw.deadline_ms == 0 {
+        p.deadline_ms = 8000;
+    }
+    let n = p.nah.as_mut().unwrap();
+    let rn = raw.nah.unwrap_or_default();
+    if rn.enabled.is_none() {
+        n.enabled = Some(false);
+    }
+    if rn.path.is_empty() {
+        n.path = "nah".into();
+    }
+    if rn.timeout_ms == 0 {
+        n.timeout_ms = 2000;
+    }
+    n.budget_ms = 0;
+    (p, marshal)
 }
 
 // Revs printed by the Go binary's policy.Rev (go1.26, 2026-11-03) for the
@@ -439,11 +457,14 @@ fn rev_matches_the_go_binary() {
     }
 }
 
+/// Not the Go binary's value (11ed5b44...): nah is on by default, its timeout
+/// is 10 s, the call's deadline 11 s, and `nah.path` is gone. Switchboard
+/// treats the rev as opaque.
 #[test]
-fn default_policy_rev_matches_the_go_binary() {
+fn default_policy_rev_is_pinned() {
     assert_eq!(
         rev(&default()),
-        "sha256:11ed5b44df9c3d7eeae631048919c5a45c4e2b33348314d023bb5455992ac775"
+        "sha256:5125995b7e1b3faf4a9addf060e1a2f300c8b11f452e820bde1e373d30a4a957"
     );
 }
 
@@ -480,4 +501,59 @@ fn default_rules_all_have_descriptions() {
             r.id
         );
     }
+}
+
+#[test]
+fn nah_path_require_and_engine_are_refused_by_name() {
+    for (field, json) in [
+        ("nah.path", r#""path":"/x/nah""#),
+        ("nah.require", r#""require":true"#),
+        ("nah.engine", r#""engine":"wasm""#),
+    ] {
+        let sys = format!(r#"{{"policy_version":1,"nah":{{{json}}}}}"#);
+        let (_d, o) = layers(&sys, "", "");
+        let l = load(&o).unwrap();
+        let problems = l.problems().join("; ");
+        assert!(
+            problems.contains(&format!("{field} is no longer supported")),
+            "{field}: {problems}"
+        );
+    }
+    // Also from a project layer.
+    let (_d, o) = layers(
+        r#"{"policy_version":1}"#,
+        "",
+        r#"{"policy_version":1,"nah":{"path":"/evil/nah"}}"#,
+    );
+    let l = load(&o).unwrap();
+    assert!(
+        l.problems().join(";").contains("nah.path is no longer supported"),
+        "{:?}",
+        l.problems()
+    );
+}
+
+#[test]
+fn nah_guards_can_only_be_enabled_by_user_and_project_layers() {
+    let (_d, o) = layers(
+        r#"{"policy_version":1,"nah":{"guards":{"sys-on":true,"sys-off":false}}}"#,
+        r#"{"policy_version":1,"nah":{"guards":{"user-on":true,"sys-on":false}}}"#,
+        r#"{"policy_version":1,"nah":{"guards":{"proj-on":true,"sys-off":true},"enabled":false}}"#,
+    );
+    let l = load(&o).unwrap();
+    let n = nah(&l.policy);
+    let want: std::collections::BTreeMap<String, bool> = [
+        ("proj-on", true),
+        ("sys-off", true), // a project may enable what the system disabled
+        ("sys-on", true),
+        ("user-on", true),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v))
+    .collect();
+    assert_eq!(n.guards, want);
+    assert!(n.is_enabled(), "a project cannot switch nah off");
+    let w = l.warnings.join("\n");
+    assert!(w.contains("nah.guards.sys-on ignored"), "{w}");
+    assert!(w.contains("nah.enabled ignored"), "{w}");
 }

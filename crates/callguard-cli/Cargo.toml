@@ -13,10 +13,13 @@ name = "callguard"
 path = "src/main.rs"
 
 [features]
+# Crash-test engines for the nah child: `--test-engine panic|abort|hang|overflow|garbage|oom`.
+# Never in a release build.
 test-engines = ["callguard/test-engines"]
 
 [dependencies]
 callguard = { path = "../callguard" }
+callguard-nah = { path = "../callguard-nah" }
 serde.workspace = true
 serde_json.workspace = true
 

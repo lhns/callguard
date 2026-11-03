@@ -9,6 +9,7 @@ use callguard::fallback::fallback_verdict;
 use callguard::gojson;
 use callguard::schema::{Decision, Request};
 
+use crate::engine_child;
 use crate::flags::{self, FlagError, Kind, spec};
 
 const MAX_REQUEST_BYTES: usize = 4 << 20;
@@ -34,6 +35,8 @@ pub fn run(
             spec("no-user-policy", Kind::Bool),
             spec("log", Kind::Str),
             spec("unattended", Kind::Bool),
+            #[cfg(feature = "test-engines")]
+            spec("test-engine", Kind::Str),
         ],
         args,
     ) {
@@ -106,10 +109,7 @@ pub fn run(
         } else {
             String::new()
         },
-        options: engine::Options {
-            log_path: f.str("log"),
-            ..Default::default()
-        },
+        options: engine_child::options(&f.str("log"), &f.str("test-engine")),
     };
     let eng = match Engine::load(lo) {
         Ok(e) => e,

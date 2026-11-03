@@ -63,6 +63,29 @@ pub struct RepoVisibility {
 /// the process environment; the call must not outlive `deadline`.
 pub type Runner = dyn Fn(&[String], &str, &[&str], Instant) -> io::Result<Vec<u8>> + Sync;
 
+/// A program ran and exited unsuccessfully (carried inside an `io::Error`).
+#[derive(Debug)]
+pub struct ExitFailure {
+    pub name: String,
+    pub code: Option<i32>,
+    status: String,
+}
+
+impl std::fmt::Display for ExitFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} exited with {}", self.name, self.status)
+    }
+}
+
+impl std::error::Error for ExitFailure {}
+
+impl ExitFailure {
+    /// The exit code of a failed run, if `e` is one.
+    pub fn code_of(e: &io::Error) -> Option<i32> {
+        e.get_ref()?.downcast_ref::<ExitFailure>()?.code
+    }
+}
+
 /// The `Runner` that starts real processes.
 pub fn exec_runner(
     env: &[String],
@@ -70,7 +93,36 @@ pub fn exec_runner(
     args: &[&str],
     deadline: Instant,
 ) -> io::Result<Vec<u8>> {
+    run_process(false, env, name, args, deadline)
+}
+
+/// Like [`exec_runner`], but the process inherits none of the caller's `GIT_*`
+/// variables, as nah's own git calls do: git then answers for the repository it
+/// is pointed at.
+pub fn exec_runner_without_git_env(
+    env: &[String],
+    name: &str,
+    args: &[&str],
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
+    run_process(true, env, name, args, deadline)
+}
+
+fn run_process(
+    strip_git_env: bool,
+    env: &[String],
+    name: &str,
+    args: &[&str],
+    deadline: Instant,
+) -> io::Result<Vec<u8>> {
     let mut cmd = Command::new(name);
+    if strip_git_env {
+        for (k, _) in std::env::vars_os() {
+            if k.to_string_lossy().starts_with("GIT_") {
+                cmd.env_remove(k);
+            }
+        }
+    }
     cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -82,10 +134,11 @@ pub fn exec_runner(
     }
     let mut child = cmd.spawn()?;
     let mut stdout = child.stdout.take().expect("stdout is piped");
-    let reader = std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stdout.read_to_end(&mut buf);
-        buf
+        let _ = tx.send(buf);
     });
     let status = loop {
         if let Some(st) = child.try_wait()? {
@@ -100,11 +153,19 @@ pub fn exec_runner(
         }
         std::thread::sleep(Duration::from_millis(2));
     };
-    let out = reader.join().unwrap_or_default();
+    // The pipe can stay open in a grandchild after the process is gone: wait
+    // for its end only until the deadline.
+    let out = rx
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "output pipe stayed open"))?;
     if status.success() {
         Ok(out)
     } else {
-        Err(io::Error::other(format!("{name} exited with {status}")))
+        Err(io::Error::other(ExitFailure {
+            name: name.to_owned(),
+            code: status.code(),
+            status: status.to_string(),
+        }))
     }
 }
 
@@ -152,21 +213,17 @@ pub fn probe(
 }
 
 /// Runs git status in `cwd`. Any failure is `None`.
+///
+/// The repository's own filter drivers are switched off first
+/// ([`crate::gitfilter`]): a clean filter in `.git/config` is a shell command
+/// that `git status` would run. If the config cannot be listed, there is no
+/// status.
 pub fn status(run: &Runner, cwd: &str, deadline: Instant) -> Option<GitStatus> {
-    let raw = run(
-        &["GIT_OPTIONAL_LOCKS=0".to_owned()],
-        "git",
-        &[
-            "-C",
-            cwd,
-            "-c",
-            "core.fsmonitor=false",
-            "status",
-            "--porcelain=v1",
-        ],
-        deadline,
-    )
-    .ok()?;
+    let filters = crate::gitfilter::overrides(run, cwd, deadline).ok()?;
+    let mut args: Vec<&str> = vec!["-C", cwd, "-c", "core.fsmonitor=false"];
+    args.extend(filters.iter().map(String::as_str));
+    args.extend(["status", "--porcelain=v1"]);
+    let raw = run(&["GIT_OPTIONAL_LOCKS=0".to_owned()], "git", &args, deadline).ok()?;
     Some(parse_status(&String::from_utf8_lossy(&raw)))
 }
 
@@ -554,6 +611,10 @@ mod tests {
             args: &[&str],
             _dl: Instant,
         ) -> io::Result<Vec<u8>> {
+            if args.contains(&"--get-regexp") {
+                // The filter-driver listing (gitfilter): the repo defines none.
+                return Ok(Vec::new());
+            }
             self.calls.fetch_add(1, Ordering::SeqCst);
             let key = format!("{name} {}", args.join(" "));
             match self.answers.get(key.as_str()) {

@@ -1,0 +1,24 @@
+[package]
+name = "callguard-nah"
+description = "nah linked in: the engine callguard's child process runs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+callguard = { path = "../callguard" }
+nah-cli.workspace = true
+nah-proto.workspace = true
+nah-observe.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# The one crate that may use unsafe (harden.rs); the workspace forbids it.
+[lints.rust]
+unsafe_code = "deny"

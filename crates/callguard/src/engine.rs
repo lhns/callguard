@@ -3,11 +3,10 @@
 //!
 //! Go's `Decide(ctx, req)` becomes `decide(&self, req)`: the deadline is the
 //! policy's `deadline_ms`, counted from the call. Nah is a [`NahEngine`] held
-//! in `Options`; the default is [`DelegatingEngine`] until Phase 2. Go's
-//! `Options.NahPath` is gone (the plan removes `nah.path`).
+//! in `Options`; the default is a supervised child process running nah.
 
 use std::any::Any;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 use std::sync::{Arc, mpsc};
@@ -21,7 +20,7 @@ use crate::declog::{self, ShadowVerdict};
 use crate::fallback::{fallback_verdict, new_id};
 use crate::hostmeta::{self, Meta};
 use crate::judge::{self, JudgeError, JudgeResult};
-use crate::nah::{DelegatingEngine, NahEngine, NahRequest, NahResult, NahVerdict};
+use crate::nah::{NahEngine, NahRequest, NahResult, NahVerdict};
 use crate::policy::{self, Policy, go_quote};
 use crate::rules::{self, Builtin, Call, CallInput, Env, Set, input_string_field};
 use crate::schema::{
@@ -37,7 +36,7 @@ pub struct Options {
     pub backend: Option<Arc<dyn Backend>>,
     /// Overrides the policy's decision log path; "-" disables logging.
     pub log_path: String,
-    /// The nah engine; `None` means [`crate::nah::DelegatingEngine`].
+    /// The nah engine; `None` means a supervised child process.
     pub nah_engine: Option<Arc<dyn NahEngine>>,
     /// The clock; `None` means the system clock.
     pub now: Option<Arc<dyn Fn() -> SystemTime + Send + Sync>>,
@@ -255,10 +254,7 @@ impl Engine {
         let logger = Some(log_path(&pol, &opts))
             .filter(|p| !p.is_empty())
             .map(|p| declog::Logger::new(&p));
-        let nah = opts
-            .nah_engine
-            .clone()
-            .unwrap_or_else(|| Arc::new(DelegatingEngine));
+        let nah = opts.nah_engine.clone().unwrap_or_else(default_nah_engine);
         let rev = policy::rev(&pol);
         Ok(Engine {
             inner: Arc::new(Inner {
@@ -369,6 +365,40 @@ impl Engine {
                 )
             },
         )
+    }
+}
+
+/// nah in a child process of this executable. This crate's own tests must not
+/// start one, so they get the stand-in that delegates.
+#[cfg(not(test))]
+fn default_nah_engine() -> Arc<dyn NahEngine> {
+    Arc::new(crate::supervisor::SupervisedEngine::current())
+}
+
+#[cfg(test)]
+fn default_nah_engine() -> Arc<dyn NahEngine> {
+    Arc::new(crate::nah::DelegatingEngine)
+}
+
+/// Time left for the rest of the pipeline when nah's hard deadline is cut to fit
+/// the call's.
+const NAH_MARGIN_MS: u64 = 200;
+
+/// What nah gave when it gave no answer: a delegate that records the gap, with
+/// partial coverage.
+fn no_parse(cause: &str) -> NahResult {
+    NahResult {
+        verdict: NahVerdict::Delegate,
+        rule: String::new(),
+        reason: cause.to_owned(),
+        coverage: "partial".into(),
+        facts: Some(Facts {
+            source: "nah".into(),
+            coverage: "partial".into(),
+            gaps: vec![format!("nah gave no analysis: {cause}")],
+            ..Default::default()
+        }),
+        warnings: Vec::new(),
     }
 }
 
@@ -487,36 +517,35 @@ impl Inner {
         let mut shadow: Vec<ShadowVerdict> = Vec::new();
         let mut nah_res: Option<NahResult> = None;
         let nah = self.pol.nah.clone().unwrap_or_default();
-        if nah.enabled {
+        if nah.is_enabled() {
             let shadowed = nah.mode == policy::MODE_SHADOW;
             let input = req
                 .tool
                 .input
                 .clone()
                 .unwrap_or_else(|| RawValue::from_string("null".into()).expect("null is JSON"));
+            // The hard deadline of the nah process never runs past the call's
+            // own; the rest of the call needs a little time to answer.
+            let left = deadline.saturating_duration_since(Instant::now());
+            let timeout_ms = (nah.timeout_ms.max(0) as u64)
+                .min((left.as_millis() as u64).saturating_sub(NAH_MARGIN_MS))
+                .max(1);
             let res = self.nah.decide(&NahRequest {
                 tool: req.tool.name.clone(),
                 input,
                 cwd: req.cwd.clone(),
                 project_dir: project_dir.clone(),
-                guards: BTreeMap::new(),
-                budget_ms: nah.timeout_ms.max(0) as u64,
+                guards: nah.guards.clone(),
+                budget_ms: nah.budget_ms.max(0) as u64,
+                timeout_ms,
             });
             match res {
-                Err(e) if nah.require => {
-                    let cause = format!("nah is required but failed: {e}");
-                    let v = fallback_verdict(Some(req), &cause);
-                    if !shadowed {
-                        return Outcome::new(v, true);
-                    }
-                    warns.push(format!("shadow nah: would {} (nah): {cause}", v.decision));
-                    shadow.push(ShadowVerdict {
-                        layer: LAYER_NAH.into(),
-                        decision: v.decision.as_str().into(),
-                        rule: "nah".into(),
-                    });
+                Err(e) => {
+                    // No parse: the facts say so, so nothing later treats the
+                    // call as understood.
+                    warns.push(format!("nah skipped: {e}"));
+                    nah_res = Some(no_parse(&e.to_string()));
                 }
-                Err(e) => warns.push(format!("nah skipped: {e}")),
                 Ok(res) if res.verdict == NahVerdict::Block => {
                     let rule = if res.rule.is_empty() {
                         "nah".to_owned()
@@ -526,6 +555,7 @@ impl Inner {
                     if !shadowed {
                         let mut out = decided("deny", LAYER_NAH, &rule, &res.reason);
                         out.warnings = warns;
+                        out.warnings.extend(res.warnings);
                         return out;
                     }
                     warns.push(format!("shadow nah: would deny ({rule}): {}", res.reason));
@@ -535,7 +565,10 @@ impl Inner {
                         rule,
                     });
                 }
-                Ok(res) => nah_res = Some(res),
+                Ok(mut res) => {
+                    warns.append(&mut res.warnings);
+                    nah_res = Some(res);
+                }
             }
         }
 
@@ -580,7 +613,7 @@ impl Inner {
         }
         nah_res.map(|r| {
             r.facts.clone().unwrap_or_else(|| Facts {
-                source: "nah-decide".into(),
+                source: "nah".into(),
                 coverage: r.coverage.clone(),
                 ..Default::default()
             })

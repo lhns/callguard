@@ -7,12 +7,12 @@
 //! you port it.
 
 pub mod backend;
-pub mod crashguard;
 pub mod declog;
 pub mod engine;
 pub mod evalrun;
 pub mod evals;
 pub mod fallback;
+pub mod gitfilter;
 pub mod gojson;
 pub mod hook;
 pub mod hostmeta;
@@ -22,4 +22,5 @@ pub mod policy;
 pub mod rules;
 pub mod schema;
 pub mod serde_util;
+pub mod supervisor;
 pub mod transcript;

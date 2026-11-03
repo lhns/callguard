@@ -5,6 +5,7 @@
 
 #![allow(clippy::type_complexity)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -367,7 +368,7 @@ fn verdict_fields() {
 }
 
 #[test]
-fn default_policy_rev_is_the_go_value() {
+fn default_policy_rev_is_pinned() {
     let e = Engine::new(
         policy::default(),
         Options {
@@ -378,7 +379,7 @@ fn default_policy_rev_is_the_go_value() {
     .unwrap();
     assert_eq!(
         e.policy_rev(),
-        "sha256:11ed5b44df9c3d7eeae631048919c5a45c4e2b33348314d023bb5455992ac775"
+        "sha256:5125995b7e1b3faf4a9addf060e1a2f300c8b11f452e820bde1e373d30a4a957"
     );
 }
 
@@ -894,7 +895,7 @@ fn a_panic_in_nah_or_a_rule_layer_is_a_fallback_too() {
     }
     let p = test_policy(|p| {
         p.nah = Some(Nah {
-            enabled: true,
+            enabled: Some(true),
             timeout_ms: 5000,
             ..Default::default()
         })
@@ -1534,6 +1535,7 @@ impl NahEngine for FakeNah {
                 reason: reason.into(),
                 coverage: coverage.into(),
                 facts: None,
+                warnings: Vec::new(),
             })
         };
         match self.0 {
@@ -1547,7 +1549,7 @@ impl NahEngine for FakeNah {
 
 fn nah_engine(mode: NahMode, mutate: impl FnOnce(&mut Nah), o: Options) -> (Engine, Arc<Via>) {
     let mut n = Nah {
-        enabled: true,
+        enabled: Some(true),
         timeout_ms: 5000,
         ..Default::default()
     };
@@ -1597,14 +1599,15 @@ fn nah_layer() {
         "nah failure continues with a warning: {got:?}"
     );
 
-    let (e, _) = nah_engine(NahMode::Fail, |n| n.require = true, Options::default());
-    let got = e.decide(&bash("go test"));
+    // The judge is told there was no parse.
+    let (e, via) = nah_engine(NahMode::Fail, |_| {}, Options::default());
+    e.decide(&bash("go test"));
+    let facts = via.last().facts.expect("facts").get().to_owned();
     assert!(
-        got.layer == LAYER_FALLBACK
-            && got.decision == Decision::Ask
-            && got.enforced
-            && got.reason.contains("nah"),
-        "nah required: {got:?}"
+        facts.contains(r#""source":"nah""#)
+            && facts.contains(r#""coverage":"partial""#)
+            && facts.contains("nah gave no analysis"),
+        "{facts}"
     );
 
     // A shadowed nah does not decide; the llm layer behind it does.
@@ -1621,7 +1624,12 @@ fn nah_layer() {
 
     // nah disabled: never run.
     let (e, _) = new_test_engine(
-        test_policy(no_mut),
+        test_policy(|p| {
+            p.nah = Some(Nah {
+                enabled: Some(false),
+                ..Default::default()
+            })
+        }),
         Options {
             nah_engine: Some(Arc::new(FakeNah(NahMode::Block))),
             ..Default::default()
@@ -1661,22 +1669,18 @@ fn nah_shadow_does_not_end_the_pipeline() {
         "rules after shadow nah: {got:?}"
     );
 
-    // A required nah that fails in shadow mode does not stop the call either.
+    // A failing nah in shadow mode warns the same way.
     let (e2, _) = nah_engine(
         NahMode::Fail,
-        |n| {
-            n.mode = policy::MODE_SHADOW.into();
-            n.require = true;
-        },
+        |n| n.mode = policy::MODE_SHADOW.into(),
         Options::default(),
     );
     let got = e2.decide(&bash("echo hi"));
     assert!(
         got.layer == LAYER_LLM
             && got.warnings.len() == 1
-            && got.warnings[0]
-                .starts_with("shadow nah: would ask (nah): nah is required but failed"),
-        "shadow require: {got:?}"
+            && got.warnings[0].starts_with("nah skipped"),
+        "shadow failure: {got:?}"
     );
 }
 
@@ -1723,8 +1727,8 @@ fn facts_reach_the_judge() {
     };
     assert_eq!(
         facts_of(Options::default(), None).as_deref(),
-        Some(r#"{"source":"nah-decide","coverage":"partial"}"#),
-        "nah-decide summary"
+        Some(r#"{"source":"nah","coverage":"partial"}"#),
+        "nah summary"
     );
     let host = |r: &mut Request| {
         r.facts = Some(Facts {
@@ -1751,7 +1755,12 @@ fn facts_reach_the_judge() {
     );
     // Without nah and without host facts there is nothing to show.
     let (e, v) = new_test_engine(
-        test_policy(no_mut),
+        test_policy(|p| {
+            p.nah = Some(Nah {
+                enabled: Some(false),
+                ..Default::default()
+            })
+        }),
         Options::default(),
         Some(answer("allow", 0.9)),
     );
@@ -2123,5 +2132,54 @@ fn input_hash_covers_the_raw_bytes() {
     assert_eq!(
         input_sha256(&Request::default()),
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+}
+
+/// Records the request it got and answers with a warning.
+struct SpyNah(Mutex<Vec<NahRequest>>);
+
+impl NahEngine for SpyNah {
+    fn decide(&self, req: &NahRequest) -> Result<NahResult, NahError> {
+        self.0.lock().unwrap().push(req.clone());
+        Ok(NahResult {
+            verdict: NahVerdict::Delegate,
+            rule: String::new(),
+            reason: String::new(),
+            coverage: "full".into(),
+            facts: None,
+            warnings: vec!["nah: something worth knowing".into()],
+        })
+    }
+}
+
+#[test]
+fn the_nah_request_carries_guards_and_a_deadline_inside_the_calls() {
+    let spy = Arc::new(SpyNah(Mutex::default()));
+    let p = test_policy(|p| {
+        p.deadline_ms = 3000;
+        p.nah = Some(Nah {
+            enabled: Some(true),
+            timeout_ms: 10_000,
+            guards: BTreeMap::from([("some-guard".to_owned(), true)]),
+            ..Default::default()
+        })
+    });
+    let (e, _) = new_test_engine(
+        p,
+        Options {
+            nah_engine: Some(spy.clone()),
+            ..Default::default()
+        },
+        Some(answer("allow", 0.9)),
+    );
+    let got = e.decide(&bash("go test"));
+    let seen = spy.0.lock().unwrap()[0].clone();
+    assert_eq!(seen.guards["some-guard"], true);
+    // The nah process never outlives the call's own deadline.
+    assert!(seen.timeout_ms < 3000 && seen.timeout_ms > 1000, "{seen:?}");
+    // A warning of the engine reaches the verdict.
+    assert!(
+        got.warnings.iter().any(|w| w.contains("something worth knowing")),
+        "{got:?}"
     );
 }

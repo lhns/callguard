@@ -1,7 +1,7 @@
-//! The nah engine seam. Phase 1 runs `DelegatingEngine`, which stands in for
-//! nah; Phase 2 adds `crates/callguard-nah`, the only crate that links nah, and
-//! implements `NahEngine` there. Nothing in this crate depends on nah.
-//! nah runs in the callguard process; `crashguard` makes a crash safe.
+//! The nah engine seam. `crates/callguard-nah` is the only crate that links nah
+//! and implements `NahEngine` there; this crate's pipeline talks to nah through
+//! `supervisor::SupervisedEngine`, a child process running that engine. Nothing
+//! here depends on nah.
 
 use std::collections::BTreeMap;
 
@@ -20,7 +20,11 @@ pub struct NahRequest {
     pub cwd: String,
     pub project_dir: String,
     pub guards: BTreeMap<String, bool>,
+    /// The analysis budget. The engine built on unpatched nah ignores it.
     pub budget_ms: u64,
+    /// The hard deadline of the whole call: the parent kills the child then.
+    #[serde(default)]
+    pub timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +44,9 @@ pub struct NahResult {
     pub coverage: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facts: Option<Facts>,
+    /// Things worth telling the user, such as a refused observation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Why nah gave no answer. The pipeline turns every variant into a warning
@@ -61,9 +68,8 @@ pub trait NahEngine: Send + Sync {
     fn decide(&self, req: &NahRequest) -> Result<NahResult, NahError>;
 }
 
-/// Always delegates, with coverage "none" and no facts. Phase 1 uses it in
-/// place of nah, so the judge and the rules see "no parse" and no allow rule
-/// can match on a parse that never happened.
+/// Always delegates, with coverage "none" and no facts: a stand-in for tests
+/// of this crate, which must not start a nah process. The product never uses it.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DelegatingEngine;
 
@@ -75,54 +81,8 @@ impl NahEngine for DelegatingEngine {
             reason: String::new(),
             coverage: "none".into(),
             facts: None,
+            warnings: Vec::new(),
         })
-    }
-}
-
-/// Engines that fail on purpose, for the crash tests. Only with the
-/// `test-engines` feature. The choice is made by an explicit argument of the
-/// test or CLI, never by an environment variable an agent could set.
-#[cfg(feature = "test-engines")]
-pub mod test_engines {
-    use super::*;
-
-    /// Panics.
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct PanicEngine;
-    impl NahEngine for PanicEngine {
-        fn decide(&self, _req: &NahRequest) -> Result<NahResult, NahError> {
-            panic!("test engine: panic")
-        }
-    }
-
-    /// Aborts the process, as a stack overflow does.
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct AbortEngine;
-    impl NahEngine for AbortEngine {
-        fn decide(&self, _req: &NahRequest) -> Result<NahResult, NahError> {
-            std::process::abort()
-        }
-    }
-
-    /// Never answers.
-    #[derive(Debug, Clone, Copy, Default)]
-    pub struct HangEngine;
-    impl NahEngine for HangEngine {
-        fn decide(&self, _req: &NahRequest) -> Result<NahResult, NahError> {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(3600));
-            }
-        }
-    }
-
-    /// The engine named "panic", "abort" or "hang".
-    pub fn by_name(name: &str) -> Option<Box<dyn NahEngine>> {
-        match name {
-            "panic" => Some(Box::new(PanicEngine)),
-            "abort" => Some(Box::new(AbortEngine)),
-            "hang" => Some(Box::new(HangEngine)),
-            _ => None,
-        }
     }
 }
 
@@ -139,6 +99,7 @@ mod tests {
             project_dir: "/work".into(),
             guards: BTreeMap::new(),
             budget_ms: 2000,
+            timeout_ms: 10000,
         };
         let res = DelegatingEngine.decide(&req).unwrap();
         assert_eq!(res.verdict, NahVerdict::Delegate);
@@ -148,7 +109,7 @@ mod tests {
 
     #[test]
     fn wire_format_round_trips() {
-        let text = r#"{"tool":"Bash","input":{"command":"ls"},"cwd":"/","project_dir":"/","guards":{"a":false},"budget_ms":5}"#;
+        let text = r#"{"tool":"Bash","input":{"command":"ls"},"cwd":"/","project_dir":"/","guards":{"a":false},"budget_ms":5,"timeout_ms":9}"#;
         let req: NahRequest = serde_json::from_str(text).unwrap();
         assert_eq!(serde_json::to_string(&req).unwrap(), text);
         let res: NahResult = serde_json::from_str(
