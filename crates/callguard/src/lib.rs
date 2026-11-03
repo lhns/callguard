@@ -13,6 +13,7 @@ pub mod engine;
 pub mod evalrun;
 pub mod evals;
 pub mod fallback;
+pub mod gojson;
 pub mod hook;
 pub mod hostmeta;
 pub mod judge;
