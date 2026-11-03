@@ -252,3 +252,16 @@ func TestPromptRuleIDsMatchRuleIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestPendingDuplicateDroppedDespiteKeyOrder(t *testing.T) {
+	in := input("ls")
+	in.ToolInput = json.RawMessage(`{"command":"ls","description":"list"}`)
+	in.Transcript = []transcript.Message{{Role: "tool_call", Tool: "Bash", Input: json.RawMessage(`{"description": "list", "command": "ls"}`)}}
+	s := ask()
+	if _, err := Judge(context.Background(), s, Config{}, in); err != nil {
+		t.Fatal(err)
+	}
+	if got := lines(t, s.got.Prompt); len(got) != 2 {
+		t.Errorf("the pending call must not render twice: %q", got)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/lhns/callguard/internal/transcript"
@@ -173,13 +174,15 @@ func dropPending(msgs []transcript.Message, in Input) []transcript.Message {
 	return msgs
 }
 
+// sameJSON compares two JSON documents by value, so key order and spacing
+// (which differ between the hook payload and the transcript) do not matter.
 func sameJSON(a, b json.RawMessage) bool {
 	if len(a) == 0 && len(b) == 0 {
 		return true
 	}
-	var ca, cb bytes.Buffer
-	if json.Compact(&ca, a) != nil || json.Compact(&cb, b) != nil {
+	var va, vb any
+	if json.Unmarshal(a, &va) != nil || json.Unmarshal(b, &vb) != nil {
 		return false
 	}
-	return ca.String() == cb.String()
+	return reflect.DeepEqual(va, vb)
 }
