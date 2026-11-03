@@ -263,6 +263,42 @@ func TestBuiltin(t *testing.T) {
 	}
 }
 
+// A harness may read input keys in any case, so a wrong-case key must not hide
+// the call from the rules.
+func TestInputKeysInAnyCase(t *testing.T) {
+	b, err := NewBuiltin(unix, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, tool, input, id string
+	}{
+		{"command", "Bash", `{"Command":"rm -rf /"}`, "rm-root"},
+		{"upper command", "Bash", `{"COMMAND":"rm -rf /"}`, "rm-root"},
+		{"hidden behind a harmless exact key", "Bash", `{"command":"ls","Command":"rm -rf /"}`, "rm-root"},
+		{"harmless exact key behind it", "Bash", `{"Command":"ls","command":"rm -rf /"}`, "rm-root"},
+		{"path", "Write", `{"File_Path":"/w/.claude/settings.json"}`, "self-protect-write"},
+	} {
+		c := NewCall(CallInput{Tool: tc.tool, Input: json.RawMessage(tc.input), Cwd: "/w/p", ProjectDir: "/w/p"}, unix)
+		if h, ok := b.Check(c); !ok || h.ID != tc.id {
+			t.Errorf("%s: got %+v ok=%v, want %s", tc.name, h, ok, tc.id)
+		}
+	}
+
+	c := NewCall(CallInput{Tool: "WebFetch", Input: json.RawMessage(`{"URL":"https://x.example"}`)}, unix)
+	if c.URL != "https://x.example" {
+		t.Errorf("url: %q", c.URL)
+	}
+	c = NewCall(CallInput{Tool: "Bash", Input: json.RawMessage(`{"command":"ls"}`)}, unix)
+	if c.Command != "ls" {
+		t.Errorf("exact key: %q", c.Command)
+	}
+	c = NewCall(CallInput{Tool: "Bash", Input: json.RawMessage(`{"Command":"ls","command":"ls"}`)}, unix)
+	if c.Command != "ls" {
+		t.Errorf("same value twice: %q", c.Command)
+	}
+}
+
 func TestBuiltinWindowsPaths(t *testing.T) {
 	b, err := NewBuiltin(win, nil)
 	if err != nil {
