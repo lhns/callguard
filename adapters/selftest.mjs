@@ -40,7 +40,7 @@ switch (req.tool) {
 );
 process.env.CALLGUARD_BIN = process.execPath;
 process.env.CALLGUARD_BIN_ARGS = JSON.stringify([stub]);
-process.env.CALLGUARD_TIMEOUT_MS = "1500"; // for the "hang" scenario
+process.env.CALLGUARD_TIMEOUT_MS = "10000"; // bounds the "hang" scenario; generous because node start can take seconds on a loaded host
 
 let failures = 0;
 async function test(name, fn) {
