@@ -1902,3 +1902,92 @@ fn builtin_ids_match_policy() {
         "policy::BUILTIN_IDS has changed; update this test with the new rule"
     );
 }
+
+/// The matches of the default rules and the built-ins over about 3,700 strings
+/// (every string literal of the Go rule tests and of the eval set, and
+/// variants with a non-breaking space, a tab and a non-ASCII letter next to
+/// the text), as the Go binary computed them. A regex that reads text
+/// differently from RE2 shows up here.
+#[test]
+fn matches_equal_the_go_binary_over_a_corpus() {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        s: String,
+        shell: Option<Vec<String>>,
+        builtin: String,
+        content: Option<Vec<String>>,
+        patch: String,
+        read: Option<Vec<String>>,
+        write: Option<Vec<String>>,
+        rm_root: bool,
+    }
+    let path = format!("{}/testdata/regex_corpus.json", env!("CARGO_MANIFEST_DIR"));
+    let rows: Vec<Row> = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    assert!(rows.len() > 3000);
+    let unix = unix();
+    let builtin = Builtin::new(unix.clone(), &[], &[]).unwrap();
+    let sets: Vec<(String, Set)> = policy::default_rules()
+        .into_iter()
+        .map(|r| (r.id.clone(), Set::compile(&[r], &unix).unwrap()))
+        .collect();
+    let matches = |c: &Call| -> Vec<String> {
+        sets.iter()
+            .filter(|(_, s)| s.match_call(c).is_some())
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+    let hit = |c: &Call| {
+        builtin
+            .check(c)
+            .map(|h| format!("{}/{}", h.id, h.decision))
+            .unwrap_or_default()
+    };
+    let call = |tool: &str, input: serde_json::Value| {
+        Call::new(
+            CallInput {
+                tool: tool.into(),
+                input: raw(&input.to_string()),
+                cwd: "/w/p".into(),
+                project_dir: "/w/p".into(),
+                ..Default::default()
+            },
+            &unix,
+        )
+    };
+    let mut bad = Vec::new();
+    for r in &rows {
+        let s = &r.s;
+        let sh = call("Bash", json!({ "command": s }));
+        let got = (
+            matches(&sh),
+            hit(&sh),
+            rm_root(s),
+            matches(&call(
+                "Write",
+                json!({ "file_path": "/w/p/a.md", "content": s }),
+            )),
+            hit(&call("patch", json!({ "patchText": s }))),
+            matches(&call("Read", json!({ "file_path": s }))),
+            matches(&call("Write", json!({ "file_path": s }))),
+        );
+        let want = (
+            r.shell.clone().unwrap_or_default(),
+            r.builtin.clone(),
+            r.rm_root,
+            r.content.clone().unwrap_or_default(),
+            r.patch.clone(),
+            r.read.clone().unwrap_or_default(),
+            r.write.clone().unwrap_or_default(),
+        );
+        if got != want {
+            bad.push(format!("{s:?}\n  rust {got:?}\n  go   {want:?}"));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} of {} differ:\n{}",
+        bad.len(),
+        rows.len(),
+        bad.iter().take(10).cloned().collect::<Vec<_>>().join("\n")
+    );
+}

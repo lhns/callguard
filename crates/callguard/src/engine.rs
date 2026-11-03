@@ -428,7 +428,7 @@ impl Inner {
             harness: req.harness.clone(),
             tool: req.tool.name.clone(),
             kind: rules::kind_of(&req.tool.name).into(),
-            input_sha256: hex::encode(Sha256::digest(req.tool.input_str().as_bytes())),
+            input_sha256: input_sha256(req),
             decision: v.decision.as_str().into(),
             enforced: v.enforced,
             layer: v.layer.clone(),
@@ -830,6 +830,12 @@ impl Inner {
             .map(|e| e.tool_use_id)
             .collect()
     }
+}
+
+/// SHA-256 of the input exactly as the harness sent it: the bytes are kept
+/// untouched from parse to hash, so the log ties to what the host ran.
+fn input_sha256(req: &Request) -> String {
+    hex::encode(Sha256::digest(req.tool.input_str().as_bytes()))
 }
 
 /// `req.project_dir` if set, else the nearest directory at or above `req.cwd`

@@ -2122,3 +2122,20 @@ fn go_duration_and_timestamps() {
         "2026-11-02T12:00:00Z"
     );
 }
+
+#[test]
+fn input_hash_covers_the_raw_bytes() {
+    // Odd spacing, escapes and a number spelled 1.50 must reach the hash as sent.
+    let text = r#"{ "command" :"echo  \"x\"", "n":1.50 }"#;
+    let req: Request =
+        serde_json::from_str(&format!(r#"{{"tool":{{"name":"Bash","input":{text}}}}}"#)).unwrap();
+    assert_eq!(
+        input_sha256(&req),
+        hex::encode(Sha256::digest(text.as_bytes()))
+    );
+    // No input hashes the empty string, as Go's sha256 of a nil slice does.
+    assert_eq!(
+        input_sha256(&Request::default()),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+}
