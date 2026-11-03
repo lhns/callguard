@@ -3,6 +3,7 @@ package rules
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -75,17 +76,20 @@ func NewCall(in CallInput, env Env) Call {
 		}
 	}
 	if c.Kind == KindShell {
-		c.Command = c.Fields["command"]
+		// Every spelling counts: we can't know which one the harness will read.
+		c.Command = strings.Join(fieldValues(c.Fields, "command"), "\n")
 		if c.Command == "" && in.Tool == "execute_code" {
-			c.Command = c.Fields["code"]
+			c.Command = strings.Join(fieldValues(c.Fields, "code"), "\n")
 		}
 		c.Command = joinContinuations.Replace(c.Command)
 	}
-	c.URL = c.Fields["url"]
+	if v := fieldValues(c.Fields, "url"); len(v) > 0 {
+		c.URL = v[0]
+	}
 	rawPath := ""
 	for _, k := range pathKeys {
-		if v := c.Fields[k]; v != "" {
-			rawPath = v
+		if v := fieldValues(c.Fields, k); len(v) > 0 {
+			rawPath = v[0]
 			break
 		}
 	}
@@ -99,6 +103,25 @@ func NewCall(in CallInput, env Env) Call {
 		}
 	}
 	return c
+}
+
+// fieldValues returns the distinct non-empty values of key in any letter case,
+// the exact spelling first, then the others in sorted key order.
+func fieldValues(fields map[string]string, key string) []string {
+	var others []string
+	for k := range fields {
+		if k != key && strings.EqualFold(k, key) {
+			others = append(others, k)
+		}
+	}
+	sort.Strings(others)
+	var values []string
+	for _, k := range append([]string{key}, others...) {
+		if v := fields[k]; v != "" && !slices.Contains(values, v) {
+			values = append(values, v)
+		}
+	}
+	return values
 }
 
 func collectStrings(v any, out *[]string) {
