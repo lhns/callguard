@@ -1,6 +1,6 @@
 # 0005 LLM judge: reasoning-blind input, fixed labels, raw HTTP backends
 
-Status: Accepted (2026-11-02)
+Status: Accepted (2026-11-02). Judge input superseded by ADR 0006 (assistant prose as referent, meta lines); the rest stands.
 
 ## Context
 A model in the tool-call path is a target for prompt injection and a source of latency, cost and outages. Claude Code's auto mode shows a working shape: the classifier sees user messages and tool calls only, and blocks when it cannot decide.
