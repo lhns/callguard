@@ -144,7 +144,8 @@ func DefaultRules() []Rule {
 }
 
 // Command patterns of the default rules (RE2). Best effort, not a parser;
-// they are exported so tests and docs can name them.
+// they are exported so tests and docs can name them. They live here, not in
+// internal/rules, because rules imports policy.
 const (
 	PipeToShellRE = `(?i)\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]*(?:\|[^|][^|]*)*?\|\s*(?:(?:sudo|doas|env)(?:\s+-\S+)*\s+)?(?:\S*/)?(?:sh|bash|zsh|dash|python3?|perl|ruby|node|iex|invoke-expression)\b` +
 		`|(?i)\b(?:sh|bash|zsh|dash)\s+(?:-c\s+)?["']?\$\(\s*(?:curl|wget)\b` +

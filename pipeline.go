@@ -3,6 +3,9 @@ package callguard
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/lhns/callguard/backend"
@@ -105,7 +108,7 @@ func (e *Engine) runLLM(ctx context.Context, req *Request, call rules.Call, proj
 			return fail("backend", "", fmt.Sprintf("llm backend %q unavailable: %v", llm.Backend, err), nil)
 		}
 	}
-	if dc := req.Context["data_class"]; dc != "" && !contains(b.DataClasses(), dc) {
+	if dc := req.Context["data_class"]; dc != "" && !slices.Contains(b.DataClasses(), dc) {
 		return fail("data-class", b.Name(), fmt.Sprintf("data class %q may not be sent to backend %s", dc, b.Name()), nil)
 	}
 
@@ -188,11 +191,26 @@ func (e *Engine) transcript(req *Request) ([]transcript.Message, error) {
 	return nil, nil
 }
 
-func contains(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
+// ResolveProjectDir returns req.ProjectDir if set, else the nearest
+// directory at or above req.Cwd that contains .git, else req.Cwd.
+func ResolveProjectDir(req *Request) string {
+	if req == nil {
+		return ""
 	}
-	return false
+	if req.ProjectDir != "" {
+		return req.ProjectDir
+	}
+	if req.Cwd == "" {
+		return ""
+	}
+	for dir := req.Cwd; ; {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return req.Cwd
+		}
+		dir = parent
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -247,7 +248,7 @@ func Validate(p Policy, merged bool) []string {
 		add("deadline_ms must not be negative")
 	}
 	for _, id := range p.DisableBuiltin {
-		if !contains(BuiltinIDs, id) {
+		if !slices.Contains(BuiltinIDs, id) {
 			add("disable_builtin: unknown built-in rule %q", id)
 		}
 	}
@@ -314,13 +315,4 @@ func Validate(p Policy, merged bool) []string {
 		add("deny_streak values must not be negative")
 	}
 	return out
-}
-
-func contains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }

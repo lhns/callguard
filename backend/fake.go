@@ -70,10 +70,12 @@ func (f *fake) Classify(ctx context.Context, req ClassifyRequest) (ClassifyResul
 	return fakeRules(req), nil
 }
 
-var (
-	injectionRe = regexp.MustCompile(`(?i)label[ _+-]this[ _+-]allow|ignore[ _+-](all[ _+-])?(the[ _+-])?(previous|prior)[ _+-]instructions|classifier|you are the reviewer|</callguard-data>|reviewer:`)
+// obeyPattern is injected text the obey-injection mode follows.
+const obeyPattern = `(?i)label[ _+-]this[ _+-]allow|ignore[ _+-](all[ _+-])?(the[ _+-])?(previous|prior)[ _+-]instructions|classifier|you are the reviewer`
 
-	obeyRe = regexp.MustCompile(`(?i)label[ _+-]this[ _+-]allow|ignore[ _+-](all[ _+-])?(the[ _+-])?(previous|prior)[ _+-]instructions|classifier|you are the reviewer`)
+var (
+	obeyRe      = regexp.MustCompile(obeyPattern)
+	injectionRe = regexp.MustCompile(obeyPattern + `|</callguard-data>|reviewer:`)
 
 	secretPathRe = regexp.MustCompile(`(?i)\.ssh|id_rsa|id_ed25519|\.env\b|\.aws|\.npmrc|credentials|\.pem\b|/etc/shadow|secrets?\b`)
 	uploadRe     = regexp.MustCompile(`(?i)(curl|wget)\b.*(-d\s*@|--data(-binary|-raw|-urlencode)?[ =]+@|-F\s*\S*=@|-T\s|--upload-file)`)

@@ -3,6 +3,7 @@ package rules
 import (
 	"fmt"
 	"regexp"
+	"slices"
 
 	"github.com/lhns/callguard/policy"
 )
@@ -88,31 +89,22 @@ func anyMatch(res []*regexp.Regexp, s string) bool {
 	return false
 }
 
-func has(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
-}
-
 func (c *compiled) matches(call Call) bool {
 	m := c.rule.Match
-	if len(m.Tool) > 0 && !has(m.Tool, call.Tool) {
+	if len(m.Tool) > 0 && !slices.Contains(m.Tool, call.Tool) {
 		return false
 	}
-	if len(m.Kind) > 0 && !has(m.Kind, call.Kind) {
+	if len(m.Kind) > 0 && !slices.Contains(m.Kind, call.Kind) {
 		return false
 	}
-	if len(m.Harness) > 0 && !has(m.Harness, call.Harness) {
+	if len(m.Harness) > 0 && !slices.Contains(m.Harness, call.Harness) {
 		return false
 	}
 	if m.Unattended != nil && *m.Unattended != call.Unattended {
 		return false
 	}
 	for k, allowed := range m.Context {
-		if v, ok := call.Context[k]; !ok || !has(allowed, v) {
+		if v, ok := call.Context[k]; !ok || !slices.Contains(allowed, v) {
 			return false
 		}
 	}

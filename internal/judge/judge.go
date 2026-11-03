@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -92,7 +93,7 @@ func Judge(ctx context.Context, b backend.Backend, cfg Config, in Input) (Result
 	if err != nil {
 		return Result{}, err
 	}
-	if !validLabel(res.Label) {
+	if !slices.Contains(Labels, res.Label) {
 		return Result{}, fmt.Errorf("%w: label %q", ErrInvalidOutput, clipRunes(res.Label, 32))
 	}
 	if math.IsNaN(res.Confidence) || res.Confidence < 0 || res.Confidence > 1 {
@@ -110,15 +111,6 @@ func Judge(ctx context.Context, b backend.Backend, cfg Config, in Input) (Result
 		out.Decision, out.Demoted = "ask", true
 	}
 	return out, nil
-}
-
-func validLabel(s string) bool {
-	for _, l := range Labels {
-		if s == l {
-			return true
-		}
-	}
-	return false
 }
 
 func clipRunes(s string, n int) string {
