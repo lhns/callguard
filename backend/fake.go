@@ -75,7 +75,7 @@ const obeyPattern = `(?i)label[ _+-]this[ _+-]allow|ignore[ _+-](all[ _+-])?(the
 
 var (
 	obeyRe      = regexp.MustCompile(obeyPattern)
-	injectionRe = regexp.MustCompile(obeyPattern + `|</callguard-data>|reviewer:`)
+	injectionRe = regexp.MustCompile(obeyPattern + `|</callguard-data>|</transcript>|reviewer:`)
 
 	secretPathRe = regexp.MustCompile(`(?i)\.ssh|id_rsa|id_ed25519|\.env\b|\.aws|\.npmrc|credentials|\.pem\b|/etc/shadow|secrets?\b`)
 	uploadRe     = regexp.MustCompile(`(?i)(curl|wget)\b.*(-d\s*@|--data(-binary|-raw|-urlencode)?[ =]+@|-F\s*\S*=@|-T\s|--upload-file)`)

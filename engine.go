@@ -14,6 +14,7 @@ import (
 
 	"github.com/lhns/callguard/backend"
 	"github.com/lhns/callguard/internal/declog"
+	"github.com/lhns/callguard/internal/hostmeta"
 	"github.com/lhns/callguard/internal/judge"
 	"github.com/lhns/callguard/internal/rules"
 	"github.com/lhns/callguard/policy"
@@ -36,6 +37,14 @@ type Options struct {
 	ProtectPaths []string
 	// Warnings from policy loading, copied into every verdict.
 	Warnings []string
+	// OmitFacts keeps nah facts (request.facts and the nah-decide summary) away
+	// from the judge; eval --facts off uses it.
+	OmitFacts bool
+	// NoHostMeta turns off the git and gh probing for the judge (eval and tests).
+	NoHostMeta bool
+	// LLMTimeoutMS, when > 0, replaces the policy's llm.timeout_ms (and raises the
+	// deadline to fit); eval uses it, because it measures judgement, not latency.
+	LLMTimeoutMS int
 }
 
 // LoadOptions select the policy layers for Load.
@@ -69,6 +78,9 @@ func (e *Engine) PolicyRev() string { return e.rev }
 // judgeFunc is judge.Judge; tests replace it.
 type judgeFunc func(ctx context.Context, b backend.Backend, cfg judge.Config, in judge.Input) (judge.Result, error)
 
+// probeFunc is hostmeta.Probe with its runner bound; tests replace it.
+type probeFunc func(ctx context.Context, cwd, command string, have *hostmeta.Meta) *hostmeta.Meta
+
 type engineImpl struct {
 	env     rules.Env
 	builtin *rules.Builtin
@@ -76,6 +88,7 @@ type engineImpl struct {
 	logger  *declog.Logger // nil when logging is off
 	nahArgv []string       // command prefix of nah; tests point it at a helper process
 	judge   judgeFunc
+	probe   probeFunc // host observations for the judge
 }
 
 // New builds an engine from an already merged policy. Unset settings take
@@ -83,6 +96,12 @@ type engineImpl struct {
 // default rules).
 func New(pol policy.Policy, opts Options) (*Engine, error) {
 	pol = policy.WithDefaults(pol)
+	if opts.LLMTimeoutMS > 0 {
+		llm := *pol.LLM
+		llm.TimeoutMS = opts.LLMTimeoutMS
+		pol.LLM = &llm
+		pol.DeadlineMS = max(pol.DeadlineMS, opts.LLMTimeoutMS+2000)
+	}
 	if problems := policy.Validate(pol, false); len(problems) > 0 {
 		return nil, errors.New("invalid policy: " + strings.Join(problems, "; "))
 	}
@@ -104,7 +123,13 @@ func New(pol policy.Policy, opts Options) (*Engine, error) {
 	}
 	e := &Engine{pol: pol, rev: policy.Rev(pol), opts: opts, impl: engineImpl{
 		env: env, builtin: bi, rules: set, nahArgv: []string{nahPath}, judge: judge.Judge,
+		probe: func(ctx context.Context, cwd, command string, have *hostmeta.Meta) *hostmeta.Meta {
+			return hostmeta.Probe(ctx, hostmeta.ExecRunner, cwd, command, have)
+		},
 	}}
+	if opts.NoHostMeta {
+		e.impl.probe = nil
+	}
 	if path := logPath(pol, opts); path != "" {
 		e.impl.logger = declog.New(path)
 	}
@@ -156,7 +181,8 @@ type outcome struct {
 	v             Verdict
 	layerEnforced bool // the deciding layer's own mode is enforce
 	inTok, outTok int
-	escalated     bool // llm deny turned into ask by the deny streak
+	escalated     bool                   // llm deny turned into ask by the deny streak
+	shadow        []declog.ShadowVerdict // shadow-mode layers that did not end the pipeline
 	warnings      []string
 }
 
@@ -226,12 +252,12 @@ func (e *Engine) log(req *Request, v Verdict, out outcome) error {
 	}
 	sum := sha256.Sum256(req.Tool.Input)
 	ent := declog.Entry{
-		TS: e.opts.Now().UTC().Format(time.RFC3339Nano), ID: v.ID, SessionID: req.SessionID,
+		TS: e.opts.Now().UTC().Format(time.RFC3339Nano), ID: v.ID, SessionID: req.SessionID, ToolUseID: req.ToolUseID,
 		Harness: req.Harness, Tool: req.Tool.Name, Kind: rules.KindOf(req.Tool.Name),
 		InputSHA256: hex.EncodeToString(sum[:]), Decision: string(v.Decision), Enforced: v.Enforced,
 		Layer: v.Layer, Rule: v.Rule, Confidence: v.Confidence, Backend: v.Backend,
 		PolicyRev: v.PolicyRev, LatencyMS: v.LatencyMS, Unattended: req.Unattended,
-		InputTokens: out.inTok, OutputTokens: out.outTok, Escalated: out.escalated,
+		InputTokens: out.inTok, OutputTokens: out.outTok, Escalated: out.escalated, Shadow: out.shadow,
 	}
 	includeInput := e.pol.Log != nil && e.pol.Log.IncludeInput
 	if v.Layer != LayerLLM || includeInput {

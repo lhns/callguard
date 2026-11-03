@@ -269,6 +269,15 @@ func TestContextFlagsAndFile(t *testing.T) {
 		})
 	}
 
+	t.Run("generic ignores host observations on stdin", func(t *testing.T) {
+		d, got := capture(verdict(callguard.Ask, true))
+		in := `{"harness":"opencode","tool":"bash","input":{"command":"git push"},"cwd":"/w","meta":{"git_status":{"clean":true}},"facts":{"source":"x"}}`
+		runGeneric(in, Options{}, d)
+		if got.Meta != nil || got.Facts != nil {
+			t.Fatalf("meta or facts copied from stdin: %+v %+v", got.Meta, got.Facts)
+		}
+	})
+
 	t.Run("flags override the generic request context", func(t *testing.T) {
 		d, got := capture(verdict(callguard.Ask, true))
 		runGeneric(payload(t, "generic_opencode_bash.json"), Options{Context: map[string]string{"trust": "trusted"}}, d)

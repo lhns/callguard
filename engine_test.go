@@ -92,6 +92,7 @@ func newTestEngine(t *testing.T, p policy.Policy, o Options, b backend.Backend) 
 	}
 	v := &viaBackend{}
 	e.impl.judge = v.judge
+	e.impl.probe = nil // no git or gh processes unless a test asks
 	return e, v
 }
 
@@ -703,6 +704,9 @@ func TestHelperProcess(t *testing.T) {
 	case "delegate":
 		fmt.Print(`{"schema":"nah/decide/v1","verdict":"delegate","reason":"fine"}`)
 		os.Exit(2)
+	case "delegate-partial":
+		fmt.Print(`{"schema":"nah/decide/v1","verdict":"delegate","coverage":"partial"}`)
+		os.Exit(2)
 	case "fail":
 		os.Exit(3)
 	}
@@ -750,7 +754,9 @@ func TestNahLayer(t *testing.T) {
 	}
 
 	e = nahEngine(t, "block", func(n *policy.Nah) { n.Mode = policy.ModeShadow })
-	if got := e.Decide(context.Background(), bash("echo hi")); got.Layer != LayerNah || got.Decision != Deny || got.Enforced {
+	// A shadowed nah does not decide; the llm layer behind it does (see
+	// TestNahShadowDoesNotEndThePipeline).
+	if got := e.Decide(context.Background(), bash("echo hi")); got.Layer != LayerLLM || len(got.Warnings) != 1 {
 		t.Errorf("nah shadow: %+v", got)
 	}
 
@@ -769,6 +775,46 @@ func TestNahLayer(t *testing.T) {
 	e3, _ := newTestEngine(t, testPolicy(), Options{NahPath: "/no/such"}, answer("allow", 1))
 	if got := e3.Decide(context.Background(), bash("go test")); len(got.Warnings) != 0 {
 		t.Errorf("nah off: %+v", got)
+	}
+}
+
+// A nah in shadow mode records what it would have denied and the pipeline goes
+// on: the llm layer decides, enforced by its own mode.
+func TestNahShadowDoesNotEndThePipeline(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "d.jsonl")
+	t.Setenv("NAH_FAKE", "block")
+	n := policy.Nah{Enabled: true, TimeoutMS: 5000, Mode: policy.ModeShadow}
+	e, _ := newTestEngine(t, testPolicy(func(p *policy.Policy) { p.Nah = &n }), Options{LogPath: logPath}, answer("allow", 0.9))
+	e.impl.nahArgv = []string{os.Args[0], "-test.run=TestHelperProcess", "--"}
+	got := e.Decide(context.Background(), bash("echo hi"))
+	if got.Layer != LayerLLM || got.Decision != Allow || !got.Enforced {
+		t.Errorf("verdict comes from the llm layer: %+v", got)
+	}
+	want := "shadow nah: would deny (nah:git-history): nah says no"
+	if len(got.Warnings) != 1 || got.Warnings[0] != want {
+		t.Errorf("warnings: %q", got.Warnings)
+	}
+	entries, err := declog.ReadTail(logPath, "s1")
+	if err != nil || len(entries) != 1 || len(entries[0].Shadow) != 1 ||
+		entries[0].Shadow[0] != (declog.ShadowVerdict{Layer: "nah", Decision: "deny", Rule: "nah:git-history"}) {
+		t.Errorf("log: %+v %v", entries, err)
+	}
+	if data, _ := os.ReadFile(logPath); strings.Contains(string(data), "nah says no") {
+		t.Error("the shadow record must not carry the reason")
+	}
+
+	// A rule behind the shadowed nah still decides, and a required nah that
+	// fails in shadow mode does not stop the call either.
+	if got := e.Decide(context.Background(), bash("git push -f")); got.Layer != LayerRules || len(got.Warnings) != 1 {
+		t.Errorf("rules after shadow nah: %+v", got)
+	}
+	t.Setenv("NAH_FAKE", "fail")
+	n.Require = true
+	e2, _ := newTestEngine(t, testPolicy(func(p *policy.Policy) { p.Nah = &n }), Options{}, answer("allow", 0.9))
+	e2.impl.nahArgv = []string{os.Args[0], "-test.run=TestHelperProcess", "--"}
+	got = e2.Decide(context.Background(), bash("echo hi"))
+	if got.Layer != LayerLLM || len(got.Warnings) != 1 || !strings.HasPrefix(got.Warnings[0], "shadow nah: would ask (nah): nah is required but failed") {
+		t.Errorf("shadow require: %+v", got)
 	}
 }
 
