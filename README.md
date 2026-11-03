@@ -38,7 +38,7 @@ All hook commands take the same flags:
 - In `permission_mode: auto` callguard emits nothing on `allow`, so Claude's classifier still runs; `--allow-in-auto` changes that.
 - For `AskUserQuestion` and `ExitPlanMode` an `allow` is also dropped (they need `updatedInput`); `ask` and `deny` still apply.
 - `permission_mode: dontAsk` counts as unattended.
-- Exit codes: the hook exits 0 with a JSON decision, or 2 with the reason on stderr. Claude runs the tool after any other non-zero exit, so callguard never uses one, and bad flags exit 2. Keep `onFailure: "block"` so a timeout blocks too.
+- Exit codes: the hook exits 0 with a JSON decision, or 2 with the reason on stderr. Claude runs the tool after any other non-zero exit, so callguard never uses one; a usage error in the hook command (unknown harness, bad flag) also exits 2. Keep `onFailure: "block"` so a timeout blocks too.
 
 ### Hermes
 
@@ -99,6 +99,8 @@ Policy is JSON (`"policy_version": 1`) in layers: built-in defaults, system (`--
 ```
 
 - `callguard policy check` loads and lints the layers and reports dropped keys.
+- **Unattended**: when nobody can answer a prompt (`--unattended`, or Claude's `dontAsk` mode), `ask` becomes `deny` (`"unattended_ask": "deny"`, the default; only the system layer can set `"ask"`). Errors then deny too.
+- **nah** is optional: with `"nah": {"enabled": true}` in the system policy, callguard runs `nah decide` after its built-in rules; without it callguard works alone.
 - **Shadow mode**: rules are enforced while the LLM layer defaults to `shadow`. A shadowed verdict has `enforced: false` and the harness behaves as without callguard, while the decision log records what callguard would have done. Switch `llm.mode` to `enforce` once the log and `callguard eval` justify it.
 - **Decision log**: JSONL, default `<user state dir>/callguard/decisions.jsonl`. It stores an input hash, not arguments, transcript text or LLM reasons, unless `log.include_input` is true.
 - **Eval**: `callguard eval --backend <name>` scores the labelled set (benign, overeager, exfiltration, tainted, injection) per bucket; the `fake` backend runs offline.

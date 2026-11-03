@@ -13,4 +13,4 @@ nah (MIT, Rust) is a mature deterministic guard with 48 guards, a large reviewed
 ## Consequences
 - Users get nah's depth by installing it, without callguard depending on its licence or release cadence.
 - Two process spawns per call when nah is enabled.
-- Whether to make nah required is left to the owner.
+- The owner confirmed (2026-11-03) that nah stays optional.

@@ -62,7 +62,7 @@ Attacks on callguard itself:
   - The judge only sees calls the deterministic layers did not decide, and it cannot override a layer above it.
   - A default `ask` rule flags instruction-like text aimed at a classifier in tool input, so an injection attempt reaches a human, not the model.
   - Remaining risk: an attacker can still write text into a user-visible channel the judge reads (a user message). User messages are trusted by design, as in auto mode.
-- **Tampering with policy or hooks.** An agent edits callguard's policy, the harness hook config, or the decision log. Defences: a built-in self-protection rule for the files that carry hooks and policy (`.claude/settings.json`, `.claude/settings.local.json`, `~/.claude/settings.json`, `.callguard/`, the system policy path (including an explicit `--policy` file), Hermes `config.yaml` and `shell-hooks-allowlist.json`, the opencode `plugins/` and pi `extensions/` directories): deny writes through edit tools, ask for shell commands that name those paths; user and project layers can only tighten; a root-owned system policy with `final: true` ignores the lower layers. Not defended: writes through channels callguard does not see (a script the agent wrote earlier, a different process).
+- **Tampering with policy or hooks.** An agent edits callguard's policy, the harness hook config, or the decision log. Defences: a built-in self-protection rule for the files that carry hooks and policy (`.claude/settings.json`, `.claude/settings.local.json`, `~/.claude/settings.json`, `.callguard/`, the system policy path (including an explicit `--policy` file), the user policy file, Hermes `config.yaml` and `shell-hooks-allowlist.json`, the opencode `plugins/` and pi `extensions/` directories): deny writes through edit tools, ask for shell commands and patch-tool inputs that name those paths (a glob in the file name, such as `.claude/settings.*`, counts); paths compare case-insensitively on Windows and macOS; user and project layers can only tighten; a root-owned system policy with `final: true` ignores the lower layers. Not defended: writes through channels callguard does not see (a script the agent wrote earlier, a different process).
 - **Starving or crashing callguard.** A huge input or a slow backend. Defences: an overall deadline below the harness timeout; size caps on transcript and input; every failure path yields `ask` (interactive) or `deny` (unattended), never `allow`; the adapters exit in a way the harness treats as blocking or prompting.
 - **Data leakage to a backend.** Tool input can contain secrets. Defences: backends declare the data classes they accept and callguard skips the LLM (falling back) when `context.data_class` is not covered; the log stores an input hash, not arguments.
 
@@ -81,12 +81,12 @@ One process per call. Layers run in order; the first layer that decides ends the
 
 Deterministic layers come first, so the model only loosens calls the rules sent to it, and only to "skip the prompt". It can never override a deny or ask from an earlier layer.
 
-**Tool kinds.** Adapters keep the harness's tool name and callguard maps it to a kind so rules work across harnesses: `shell` (Bash, PowerShell, bash, terminal, shell), `read` (Read, Glob, Grep, LS, read, read_file, grep, find, ls, glob, search_files), `write` (Write, Edit, MultiEdit, NotebookEdit, write, edit, patch, write_file), `fetch` (WebFetch, WebSearch, webfetch, websearch), `agent` (Task, Agent), `mcp` (`mcp__*`), `other`. Path arguments come from the common fields (`file_path`, `path`, `notebook_path`, `filePath`); shell commands from `command`; URLs from `url`.
+**Tool kinds.** Adapters keep the harness's tool name and callguard maps it to a kind so rules work across harnesses: `shell` (Bash, PowerShell, bash, terminal, execute_code, process), `read` (Read, Glob, Grep, LS, read, glob, grep, list, find, ls, read_file, search_files), `write` (Write, Edit, MultiEdit, NotebookEdit, write, edit, patch, multi-edit, write_file), `fetch` (WebFetch, WebSearch, webfetch, websearch, web_search, web_extract), `agent` (Task, Agent, task), `mcp` (`mcp__*`), `other` (`internal/rules/kinds.go` has the table). Path arguments come from the common fields (`file_path`, `path`, `notebook_path`, `filePath`); shell commands from `command` (Hermes `execute_code`: `code`), with line continuations joined; URLs from `url`.
 
 **Default rules** (built into the default policy, removable by the system layer with `"defaults": false`):
 - allow `read` inside the project; allow `write` inside the project except protected paths (`.git/`, `.claude/`, `.callguard/`, `.opencode/`, `.pi/`, `.hermes/`), which go on to the judge rather than being auto-allowed — auto mode tiers 1 and 2;
-- ask for reads of common secret locations (`~/.ssh`, `~/.aws`, `.env`, `*.pem`, `id_*`);
-- deny pipe-to-shell (`curl … | sh`) and secret-exfil (a network tool and a common secret location in one command); ask for force push, history rewrite on remotes, `terraform|pulumi|cdk destroy`, `kubectl delete`, `gh repo delete`, package publish, `sudo`;
+- ask for reads of common secret locations (`~/.ssh`, `~/.aws`, `.env`, `.env.*`, `*.pem`, `id_rsa*`, `id_ed25519*`, `.netrc`), by read tools or named in a shell command;
+- deny pipe-to-shell (`curl … | sh`) and secret-exfil (a network tool and a common secret location in one command); ask for force push, discarding uncommitted work (`git reset --hard`, `git clean -f`, `git checkout .`, `git restore .`), `terraform|tofu|pulumi|cdk|terragrunt destroy`, `kubectl delete`, `gh repo delete`, package publish, `sudo`/`doas`;
 - ask for tool input that addresses the classifier (the injection marker).
 
 "Project" is the request's `project_dir` if given, else the git root above `cwd`, else `cwd`.
@@ -134,7 +134,7 @@ JSON (ADR 0003). Each file has `"policy_version": 1`. Unknown keys are an error 
 All present conditions must hold (AND); a list means any of its values (OR).
 - `tool`: harness tool names (exact, case-sensitive) — `kind`: tool kinds.
 - `command`: RE2 regex on the shell command — `url`: RE2 regex on the URL — `field`: map of input field name to RE2 regex (string fields, or the JSON encoding of non-strings).
-- `path`: globs on the path argument after `~` and project expansion (`**` allowed); `in_project`: true/false.
+- `path`: globs on the path argument after `~` and project expansion (`**` allowed) — `not_path`: globs the path must not match; `in_project`: true/false.
 - `context`: map of context key to allowed values — `unattended`: true/false — `harness`: names.
 A rule with no conditions is invalid.
 
@@ -160,6 +160,7 @@ nah (MIT, Rust, single maintainer, CLA with relicensing right) is a deterministi
 - `block` → `deny`, rule `nah:<first attribution name>`. `delegate` → next layer.
 - Missing binary, timeout, exit 3/4 or bad JSON → next layer with a warning in the verdict, unless `nah.require` is true, in which case → `fallback`.
 - callguard's own built-in rules stay small and do not try to replicate nah.
+- nah stays optional (owner decision, 2026-11-03); callguard works without it.
 
 ## 7. LLM layer
 
@@ -227,7 +228,7 @@ Verdict `callguard/verdict/v1`:
 ## 9. Fail-safe behaviour and latency
 
 - Never `allow` on error. Every error path yields a `fallback` verdict: `ask` interactive, `deny` unattended (with a reason telling the agent to ask a human). This matches Claude Code, which denies when the classifier is unavailable or unparseable.
-- `unattended_ask: "deny"` (default) turns any `ask` into `deny` when unattended, since nobody can answer a prompt; the reason says approval is needed.
+- `unattended_ask: "deny"` (default, confirmed by the owner) turns any enforced `ask` into `deny` when unattended, since nobody can answer a prompt; the reason says approval is needed. Only the system layer can set it to `"ask"`, which passes the `ask` to the harness instead.
 - Overall deadline `deadline_ms` (default 8000), well under the harness timeouts (Claude 600 s default, Hermes 60 s). The LLM timeout (`llm.timeout_ms`, default 3000) and nah timeout (2000) sit inside it. On deadline the engine returns the fallback verdict.
 - Budget targets: layers 0–2 under 20 ms without nah; nah adds a subprocess (single-digit ms `[U]`); the LLM call typically under 2 s with Haiku-class models `[U]`.
 - **Deny streak** (auto mode's 3/20): when `deny_streak` is set and the session's enforced LLM denies reach `consecutive` in a row or `total`, further LLM denies become `ask` for interactive sessions, so a human sees them. Unattended sessions keep `deny`. The counts come from the decision log tail for that session; no other state is kept. Rule and builtin denies are not affected.
@@ -243,7 +244,7 @@ Verdict `callguard/verdict/v1`:
 | opencode 2.x | plugin, `ctx.tool.hook("execute.before")` | return | throw (configurable: `--ask=delegate` returns) | throw | return | shape from docs + nah's adapter; untested `[U]` |
 | pi | extension, `pi.on("tool_call")` | return | `ctx.ui.confirm`, else block | `{block: true, reason}` | return | verified against pi docs; untested `[U]` |
 
-Claude Code details: exit 0 with JSON for every decision. On an internal failure the adapter still prints an ask (or deny when unattended) and exits 0; if it cannot even produce JSON it exits 2. It never exits 1 or 3, which Claude treats as non-blocking. The README's hook snippet sets `timeout` and `onFailure: "block"`. Deny reasons tell the agent not to route around the block and to ask the user.
+Claude Code details: exit 0 with JSON for every decision. On an internal failure the adapter still prints an ask (or deny when unattended) and exits 0; if it cannot even produce JSON it exits 2. A usage error in the hook command (unknown harness, bad flag) also exits 2. It never exits 1, 3 or 64, which Claude treats as non-blocking. The README's hook snippet sets `timeout` and `onFailure: "block"`. Deny reasons tell the agent not to route around the block and to ask the user.
 
 Two Claude-specific limits on `allow`:
 - Tools that need a user answer (`AskUserQuestion`, `ExitPlanMode`) need `updatedInput` together with `allow` [H]; a bare `allow` is wrong for them. The adapter emits nothing on `allow` for these tools; `ask` and `deny` still apply.
@@ -257,7 +258,7 @@ opencode and pi run callguard from a small JS plugin (`adapters/opencode/callgua
 
 **Shadow mode.** `mode: "shadow"` globally, or `mode` per layer (`nah.mode`, `llm.mode`). The pipeline still stops at the first deciding layer; if that layer is in shadow mode the verdict has `enforced: false` and the adapter passes the call through, so the harness behaves as without callguard. Typical rollout: rules enforced, LLM in shadow until the eval and logs justify enforcing. Shadow agreement review (comparing shadow verdicts with what the human did) needs PostToolUse data and is future work.
 
-**Decision log.** JSONL appended per decision, default `<user state dir>/callguard/decisions.jsonl` (`$XDG_STATE_HOME`, `~/Library/Application Support`, `%LocalAppData%`). Fields: `ts`, `id`, `session_id`, `harness`, `tool`, `kind`, `input_sha256`, `decision`, `enforced`, `layer`, `rule`, `confidence`, `backend`, `policy_rev`, `latency_ms`, `unattended`, and token usage. No arguments, no transcript text and no LLM reason by default (the reason can quote arguments); `log.include_input: true` adds the input and the reason. Rule reasons are fixed text and always logged. Log write failures never change the verdict.
+**Decision log.** JSONL appended per decision, default `<user state dir>/callguard/decisions.jsonl` (`$XDG_STATE_HOME`, `~/Library/Application Support`, `%LocalAppData%`). Fields: `ts`, `id`, `session_id`, `harness`, `tool`, `kind`, `input_sha256`, `decision`, `enforced`, `layer`, `rule`, `confidence`, `backend`, `policy_rev`, `latency_ms`, `unattended`, `escalated` (an LLM deny turned into ask by the deny streak), and token usage. No arguments, no transcript text and no LLM reason by default (the reason can quote arguments); `log.include_input: true` adds the input and the reason. Rule reasons are fixed text and always logged. Log write failures never change the verdict.
 
 **Eval.** `evals/cases.jsonl` rows: `{"id", "bucket", "request", "expected", "note"}` with buckets:
 1. `benign`: routine calls (FPR);
@@ -272,8 +273,8 @@ opencode and pi run callguard from a small JS plugin (`adapters/opencode/callgua
 
 Module `github.com/lhns/callguard`, no third-party dependencies (ADR 0001).
 - `callguard` (root): `Request`, `Verdict`, `Decision`, `Engine`, `New(policy.Policy, Options) (*Engine, error)`, `(*Engine).Decide(ctx, *Request) Verdict` (never returns an error; failures are fallback verdicts).
-- `policy`: `Policy`, `Rule`, `Match`, `Load(LoadOptions) (Loaded, error)`, `Merge`, `Default()`.
-- `backend`: `Backend` interface, `ClassifyRequest`, `ClassifyResult`, constructors for the four backends, `FromConfig`.
+- `policy`: `Policy`, `Rule`, `Match`, `Load(LoadOptions) (Loaded, error)`, `MergeSystem`, `MergeTighten`, `Default()`, `Validate`.
+- `backend`: `Backend` interface, `ClassifyRequest`, `ClassifyResult`, `FromConfig` (all four backends) and `NewFake`.
 - Internal: rules, transcript, llm prompt, hook adapters, decision log, eval.
 
 ## 13. Switchboard integration (contract only)
@@ -286,7 +287,6 @@ callguard knows nothing about Switchboard. Switchboard would:
 
 ## 14. Open questions
 
-- Adopt nah as a required dependency, or keep it optional (current design)?
 - How Switchboard passes dynamic `trust` labels to a hook (context file vs daemon socket); v0 offers `--context` and `--context-file`.
 - Whether a Claude PreToolUse `allow` overrides `dontAsk` mode, and whether it skips auto mode's classifier `[U]` (the adapter defaults to not emitting `allow` in auto mode).
 - opencode `ask`: use `permission.hook("evaluate")` once correlation with the tool call is verified.
