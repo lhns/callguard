@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,7 +44,7 @@ func New(pol policy.Policy, opts Options) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid policy: %w", err)
 	}
-	bi, err := rules.NewBuiltin(env, pol.DisableBuiltin)
+	bi, err := rules.NewBuiltin(env, pol.DisableBuiltin, opts.ProtectPaths...)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +90,11 @@ func Load(opts LoadOptions) (*Engine, error) {
 	}
 	o := opts.Options
 	o.Warnings = append(append([]string(nil), o.Warnings...), l.Warnings...)
+	if opts.SystemPolicy != "" {
+		if abs, err := filepath.Abs(opts.SystemPolicy); err == nil {
+			o.ProtectPaths = append(append([]string(nil), o.ProtectPaths...), abs)
+		}
+	}
 	return New(l.Policy, o)
 }
 

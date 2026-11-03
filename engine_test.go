@@ -846,7 +846,7 @@ func TestFallbackVerdict(t *testing.T) {
 	if v.Decision != Deny || !strings.Contains(v.Reason, "human must approve") {
 		t.Errorf("unattended: %+v", v)
 	}
-	if FallbackVerdict(nil, "x").ID == FallbackVerdict(nil, "x").ID {
+	if a, b := FallbackVerdict(nil, "x"), FallbackVerdict(nil, "x"); a.ID == b.ID {
 		t.Error("ids must differ")
 	}
 }

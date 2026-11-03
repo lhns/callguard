@@ -19,6 +19,9 @@ type Options struct {
 	NahPath string
 	// Now is the clock; defaults to time.Now.
 	Now func() time.Time
+	// ProtectPaths are extra files the self-protection rules guard, such as
+	// an explicit --policy file. Load adds the system policy file.
+	ProtectPaths []string
 	// Warnings from policy loading, copied into every verdict.
 	Warnings []string
 }

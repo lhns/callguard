@@ -107,8 +107,9 @@ type Builtin struct {
 	protected []*regexp.Regexp
 }
 
-// NewBuiltin compiles the built-in rules, minus the disabled ids.
-func NewBuiltin(env Env, disabled []string) (*Builtin, error) {
+// NewBuiltin compiles the built-in rules, minus the disabled ids. extra are
+// further files for the self-protection rules (e.g. an explicit policy file).
+func NewBuiltin(env Env, disabled []string, extra ...string) (*Builtin, error) {
 	b := &Builtin{env: env, disabled: map[string]bool{}}
 	for _, id := range disabled {
 		b.disabled[id] = true
@@ -121,6 +122,13 @@ func NewBuiltin(env Env, disabled []string) (*Builtin, error) {
 			return nil, err
 		}
 		b.protected = append(b.protected, re)
+	}
+	for _, p := range extra {
+		pat := "^" + regexp.QuoteMeta(env.slash(p)) + "$"
+		if env.Windows {
+			pat = "(?i)" + pat
+		}
+		b.protected = append(b.protected, regexp.MustCompile(pat))
 	}
 	return b, nil
 }

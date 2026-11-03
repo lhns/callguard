@@ -154,7 +154,7 @@ func UnknownKeys(data []byte) []string {
 }
 
 func walkUnknown(raw any, t reflect.Type, path string, out *[]string) {
-	for t.Kind() == reflect.Ptr {
+	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	switch t.Kind() {

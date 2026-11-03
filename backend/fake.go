@@ -138,7 +138,7 @@ func outsideProject(arg, projectDir string) bool {
 		return true
 	}
 	if strings.HasPrefix(arg, "/") {
-		return projectDir == "" || !(arg == projectDir || strings.HasPrefix(arg, strings.TrimRight(projectDir, "/")+"/"))
+		return projectDir == "" || (arg != projectDir && !strings.HasPrefix(arg, strings.TrimRight(projectDir, "/")+"/"))
 	}
 	return strings.HasPrefix(arg, "..")
 }

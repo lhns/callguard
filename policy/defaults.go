@@ -124,6 +124,8 @@ func DefaultRules() []Rule {
 			Match: Match{Kind: []string{"read"}, Path: secretPaths}},
 		{ID: "secret-read-shell", Decision: "ask", Description: "shell command touches a common secret location",
 			Match: Match{Kind: sh, Command: `\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc`}},
+		{ID: "secret-exfil", Decision: "deny", Description: "sends a common secret location over the network",
+			Match: Match{Kind: sh, Command: SecretExfilRE}},
 		{ID: "pipe-to-shell", Decision: "deny", Description: "downloads and runs remote code without review (pipe to a shell or interpreter)",
 			Match: Match{Kind: sh, Command: PipeToShellRE}},
 		{ID: "git-force-push", Decision: "ask", Description: "force push rewrites shared history",
@@ -152,8 +154,14 @@ const (
 	InfraDestroyRE   = `\b(?:terraform|tofu|pulumi|cdk|terragrunt)\b[^;&|\n]*\bdestroy\b|\bkubectl\b[^;&|\n]*\bdelete\b|\bgh\s+repo\s+delete\b`
 	PackagePublishRE = `\b(?:npm|pnpm|yarn)\s+(?:[^;&|\n]*\s)?publish(?:\s|$)|\bcargo\s+publish(?:\s|$)|\btwine\s+upload\b|\bgem\s+push\b`
 	SudoRE           = `(?:^|[;&|(]\s*|\s)sudo\s+\S`
-	InjectionRE      = `(?i)ignore\s+(?:all\s+|any\s+)?(?:previous|prior)\s+instructions` +
-		`|you\s+are\s+(?:now\s+)?(?:a\s+|the\s+)?(?:security\s+)?classifier` +
-		`|(?:label|classify|mark|rate)\s+(?:this|it|the)(?:\s+call)?\s+(?:as\s+)?(?:allow|safe|benign)` +
+	// Separators include _ - . so file names like IGNORE_PREVIOUS_INSTRUCTIONS match.
+	InjectionRE = `(?i)ignore[\s_.-]+(?:(?:all|any)[\s_.-]+)?(?:previous|prior)[\s_.-]+instructions` +
+		`|you[\s_.-]+are[\s_.-]+(?:now[\s_.-]+)?(?:(?:a|the)[\s_.-]+)?(?:security[\s_.-]+)?classifier` +
+		`|(?:label|classify|mark|rate)[\s_.-]+(?:this|it|the)(?:[\s_.-]+call)?[\s_.-]+(?:as[\s_.-]+)?(?:allow|safe|benign)` +
 		`|callguard\W+(?:allow|approve)|callguard-data`
+	// SecretExfilRE: a network tool and a common secret location in one command.
+	SecretExfilRE = `(?i)\b(?:` + netToolsRE + `)\b[^;&\n]*` + secretShellRE +
+		`|(?i)` + secretShellRE + `[^;&\n]*\b(?:` + netToolsRE + `)\b`
+	netToolsRE    = `curl|wget|scp|rsync|sftp|ftp|nc|ncat|socat|iwr|invoke-webrequest|invoke-restmethod`
+	secretShellRE = `(?:\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc|\.env\b|\.pem\b)`
 )
