@@ -22,15 +22,17 @@ const (
 
 // Result is a parsed nah answer.
 type Result struct {
-	Verdict string // Block or Delegate
-	Reason  string
-	Rule    string // first policy attribution name, "" if none
+	Verdict  string // Block or Delegate
+	Reason   string
+	Rule     string // first policy attribution name, "" if none
+	Coverage string // how much of the call nah could parse ("full", "partial"), "" if unreported
 }
 
 type output struct {
-	Schema       string `json:"schema"`
-	Verdict      string `json:"verdict"`
-	Reason       string `json:"reason"`
+	Schema       string          `json:"schema"`
+	Verdict      string          `json:"verdict"`
+	Reason       string          `json:"reason"`
+	Coverage     json.RawMessage `json:"coverage"`
 	Attributions []struct {
 		Kind string `json:"kind"`
 		Name string `json:"name"`
@@ -95,6 +97,7 @@ func Run(ctx context.Context, argv []string, timeout time.Duration, tool string,
 		return Result{}, fmt.Errorf("nah: exit code %d contradicts verdict %q", code, out.Verdict)
 	}
 	res := Result{Verdict: out.Verdict, Reason: out.Reason}
+	_ = json.Unmarshal(out.Coverage, &res.Coverage) // anything but a string is ignored
 	if len(out.Attributions) > 0 {
 		res.Rule = out.Attributions[0].Name
 	}

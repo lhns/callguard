@@ -22,6 +22,7 @@ type Entry struct {
 	TS           string          `json:"ts"`
 	ID           string          `json:"id"`
 	SessionID    string          `json:"session_id,omitempty"`
+	ToolUseID    string          `json:"tool_use_id,omitempty"`
 	Harness      string          `json:"harness,omitempty"`
 	Tool         string          `json:"tool"`
 	Kind         string          `json:"kind"`
@@ -38,8 +39,17 @@ type Entry struct {
 	InputTokens  int             `json:"input_tokens,omitempty"`
 	OutputTokens int             `json:"output_tokens,omitempty"`
 	Escalated    bool            `json:"escalated,omitempty"` // an llm deny turned into ask by the deny streak
+	Shadow       []ShadowVerdict `json:"shadow,omitempty"`    // verdicts of layers in shadow mode that did not end the pipeline
 	Reason       string          `json:"reason,omitempty"`
 	Input        json.RawMessage `json:"input,omitempty"`
+}
+
+// ShadowVerdict is what a layer in shadow mode would have decided. It has no
+// reason text: that can quote arguments.
+type ShadowVerdict struct {
+	Layer    string `json:"layer"`
+	Decision string `json:"decision"`
+	Rule     string `json:"rule,omitempty"`
 }
 
 // DefaultPath is <state dir>/callguard/decisions.jsonl.

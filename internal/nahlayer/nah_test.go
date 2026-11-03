@@ -40,6 +40,12 @@ func TestHelperProcess(t *testing.T) {
 		out(1, "block", "blocked", "")
 	case "delegate":
 		out(2, "delegate", "not mine", "")
+	case "coverage":
+		fmt.Print(`{"schema":"nah/decide/v1","verdict":"delegate","coverage":"partial","duration_us":12}`)
+		os.Exit(2)
+	case "coverage-object":
+		fmt.Print(`{"schema":"nah/decide/v1","verdict":"delegate","coverage":{"x":1}}`)
+		os.Exit(2)
 	case "fail":
 		os.Exit(3)
 	case "badargs":
@@ -78,6 +84,12 @@ func TestRun(t *testing.T) {
 	}
 	if r, err = Run(context.Background(), fake(t, "delegate"), 5*time.Second, "Bash", input, "/w"); err != nil || r.Verdict != Delegate {
 		t.Errorf("delegate: %+v %v", r, err)
+	}
+	if r, err = Run(context.Background(), fake(t, "coverage"), 5*time.Second, "Bash", input, "/w"); err != nil || r.Coverage != "partial" {
+		t.Errorf("coverage: %+v %v", r, err)
+	}
+	if r, err = Run(context.Background(), fake(t, "coverage-object"), 5*time.Second, "Bash", input, "/w"); err != nil || r.Coverage != "" || r.Verdict != Delegate {
+		t.Errorf("non-string coverage must not break nah: %+v %v", r, err)
 	}
 	for _, mode := range []string{"fail", "badargs", "garbage", "wrong-schema", "mismatch"} {
 		if _, err := Run(context.Background(), fake(t, mode), 5*time.Second, "Bash", input, "/w"); err == nil {
