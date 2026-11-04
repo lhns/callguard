@@ -222,7 +222,12 @@ pub fn status(run: &Runner, cwd: &str, deadline: Instant) -> Option<GitStatus> {
     let filters = crate::gitfilter::overrides(run, cwd, deadline).ok()?;
     let mut args: Vec<&str> = vec!["-C", cwd, "-c", "core.fsmonitor=false"];
     args.extend(filters.iter().map(String::as_str));
-    args.extend(["status", "--porcelain=v1"]);
+    // Not into a submodule's work tree: its own filters would run.
+    args.extend([
+        "status",
+        "--porcelain=v1",
+        crate::gitfilter::IGNORE_SUBMODULE_WORKTREES,
+    ]);
     let raw = run(&["GIT_OPTIONAL_LOCKS=0".to_owned()], "git", &args, deadline).ok()?;
     Some(parse_status(&String::from_utf8_lossy(&raw)))
 }

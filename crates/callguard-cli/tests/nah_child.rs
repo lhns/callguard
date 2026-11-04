@@ -494,6 +494,113 @@ fn a_planted_filter_driver_does_not_run() {
     assert!(!marker.exists());
 }
 
+/// A submodule's own filter (in `.git/modules/sub/config`, or `sub/.git/config`
+/// for an embedded repository) is not in the top-level config listing, and
+/// `git status` enters the submodule: neither the hook's own status probe nor
+/// the one nah's observation runs may execute it.
+#[test]
+#[ignore = "needs nah and git: cargo test --release -p callguard-cli -- --ignored"]
+fn a_submodules_filter_driver_does_not_run() {
+    let policy = r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":10000},"deadline_ms":11000}"#;
+    for plain in [false, true] {
+        let sb = Sandbox::new(policy);
+        let root = sb.dir.path().to_path_buf();
+        let git = |dir: &std::path::Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {out:?}");
+        };
+        let identity = |dir: &std::path::Path| {
+            git(dir, &["config", "user.email", "a@b.example"]);
+            git(dir, &["config", "user.name", "a"]);
+        };
+        let inner = root.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        git(&inner, &["init", "-q", "."]);
+        identity(&inner);
+        std::fs::write(inner.join("a.txt"), "one\n").unwrap();
+        std::fs::write(inner.join(".gitattributes"), "*.txt filter=evil\n").unwrap();
+        git(&inner, &["add", "-A"]);
+        git(&inner, &["commit", "-qm", "one"]);
+        let repo = &sb.proj;
+        git(repo, &["init", "-q", "."]);
+        identity(repo);
+        std::fs::write(repo.join("top.txt"), "top\n").unwrap();
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-qm", "top"]);
+        let url = inner.to_string_lossy().into_owned();
+        if plain {
+            git(repo, &["clone", "-q", &url, "sub"]);
+        } else {
+            git(
+                repo,
+                &[
+                    "-c",
+                    "protocol.file.allow=always",
+                    "submodule",
+                    "add",
+                    "-q",
+                    &url,
+                    "sub",
+                ],
+            );
+        }
+        let sub = repo.join("sub");
+        identity(&sub);
+        git(repo, &["add", "-A"]);
+        git(repo, &["commit", "-qm", "sub"]);
+        let marker = root.join("sub-payload-ran");
+        let marker_sh = marker
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        git(
+            &sub,
+            &[
+                "config",
+                "filter.evil.clean",
+                &format!("sh -c 'touch \"{marker_sh}\"; cat'"),
+            ],
+        );
+        std::thread::sleep(Duration::from_millis(1100));
+        // The same size as the index records, other bytes.
+        let idx = Command::new("git")
+            .arg("-C")
+            .arg(&sub)
+            .args(["ls-files", "--debug", "a.txt"])
+            .output()
+            .unwrap();
+        let idx = String::from_utf8_lossy(&idx.stdout).into_owned();
+        let size: usize = idx
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("size: "))
+            .and_then(|l| l.split_whitespace().next())
+            .and_then(|n| n.parse().ok())
+            .unwrap();
+        let mut bytes = vec![b't'; size];
+        bytes[size - 1] = b'\n';
+        std::fs::write(sub.join("a.txt"), bytes).unwrap();
+
+        for command in ["git reset --hard", "git checkout -- ."] {
+            let (code, v, _) = sb.decide(command, &[]);
+            assert!(code == 1 || code == 2, "plain={plain} {command}: {v}");
+            assert!(
+                !marker.exists(),
+                "plain={plain} {command}: the submodule's filter ran: {v}"
+            );
+            assert!(!warnings(&v).contains("unreadable"), "{v}");
+        }
+        // And through the hook (callguard's own status probe is covered by the
+        // `hostmeta::status` test in the callguard crate).
+        let (code, _, _) = sb.hook("git reset --hard", &[]);
+        assert!(code == 0 || code == 2, "{code}");
+        assert!(!marker.exists(), "plain={plain}: the hook ran the filter");
+    }
+}
+
 /// The facts nah established reach the judge. The judge is an exec backend,
 /// `examples/record_judge.rs`, which records what it was sent.
 #[test]

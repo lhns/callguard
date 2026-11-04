@@ -3,7 +3,11 @@
 //! switched off, because the `git status` nah runs would otherwise run the
 //! driver's command (a shell command in `.git/config`) before any verdict.
 //!
-//! nah-observe's git calls cannot take extra `-c` options and strip `GIT_*`
+//! The same goes for a submodule's own filters, which no top-level listing
+//! shows: a repository with a gitlink is observed without entering submodule
+//! work trees (`--ignore-submodules=dirty`).
+//!
+//! nah-observe's git calls cannot take extra options and strip `GIT_*`
 //! from their environment, so for such a repository the `GitState` queries are
 //! answered here by the same git commands plus the overrides, and everything
 //! else by nah-observe. A repository without filter drivers, or in a scope
@@ -63,16 +67,17 @@ pub(crate) fn observe(
     if git_queries.is_empty() {
         return nah_observe::fulfill_observation_request(request).map_err(|e| e.to_string());
     }
-    // What each repository directory needs: nothing, overrides or a refusal.
-    let mut plans: BTreeMap<String, Result<Vec<String>, String>> = BTreeMap::new();
+    // What each repository directory needs: nothing, our own observation (with
+    // filter overrides, and without entering submodules) or a refusal.
+    let mut plans: BTreeMap<String, Result<Plan, String>> = BTreeMap::new();
     for q in &git_queries {
         if let ObservationQuery::GitState { requested, .. } = q {
-            plans.entry(requested.clone()).or_insert_with(|| {
-                gitfilter::overrides(&run, requested, Instant::now() + GIT_TIMEOUT)
-            });
+            plans
+                .entry(requested.clone())
+                .or_insert_with(|| plan(requested));
         }
     }
-    if plans.values().all(|p| matches!(p, Ok(o) if o.is_empty())) {
+    if plans.values().all(|p| matches!(p, Ok(p) if p.is_plain())) {
         return nah_observe::fulfill_observation_request(request).map_err(|e| e.to_string());
     }
 
@@ -97,7 +102,7 @@ pub(crate) fn observe(
             continue;
         };
         let value = match &plans[requested] {
-            Ok(overrides) => git_state(requested, *inspect_untracked, overrides),
+            Ok(p) => git_state(requested, *inspect_untracked, p),
             Err(why) => {
                 let note = format!("nah: git state not observed, filter drivers unreadable: {why}");
                 if !warnings.borrow().contains(&note) {
@@ -114,6 +119,29 @@ pub(crate) fn observe(
         );
     }
     Observation::new(request.version(), request.request_id(), facts).map_err(|e| e.to_string())
+}
+
+/// How to observe the git state of one repository.
+struct Plan {
+    /// `-c filter.<name>....=` pairs for the repository's own filter drivers.
+    overrides: Vec<String>,
+    /// The index holds a gitlink: do not enter submodule work trees.
+    gitlinks: bool,
+}
+
+impl Plan {
+    /// nah-observe can answer as it is.
+    fn is_plain(&self) -> bool {
+        self.overrides.is_empty() && !self.gitlinks
+    }
+}
+
+fn plan(dir: &str) -> Result<Plan, String> {
+    let deadline = Instant::now() + GIT_TIMEOUT;
+    Ok(Plan {
+        overrides: gitfilter::overrides(&run, dir, deadline)?,
+        gitlinks: gitfilter::has_gitlinks(&run, dir, deadline)?,
+    })
 }
 
 fn unavailable<T>() -> Observed<T> {
@@ -149,7 +177,7 @@ fn absolute(path: &Path) -> Option<AbsolutePath> {
 fn git_state(
     directory: &str,
     inspect_untracked: bool,
-    overrides: &[String],
+    plan: &Plan,
 ) -> Observed<GitStateObservation> {
     if REDIRECTING_VARIABLES
         .iter()
@@ -183,8 +211,15 @@ fn git_state(
         return unavailable();
     };
     let mut args: Vec<&str> = vec!["--no-optional-locks", "-c", "core.fsmonitor=false"];
-    args.extend(overrides.iter().map(String::as_str));
-    args.extend(["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]);
+    args.extend(plan.overrides.iter().map(String::as_str));
+    // nah looks into submodules (`none`); with a gitlink that would run the
+    // submodule's own filters, so only the recorded commit is compared.
+    let submodules = if plan.gitlinks {
+        gitfilter::IGNORE_SUBMODULE_WORKTREES
+    } else {
+        "--ignore-submodules=none"
+    };
+    args.extend(["status", "--porcelain=v1", "-z", submodules]);
     args.extend(if inspect_untracked {
         ["--untracked-files=normal", "--ignored=matching"]
     } else {
@@ -251,5 +286,77 @@ fn git_state(
             value: state.with_untracked(u),
         },
         Err(_) => unavailable(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::Command;
+
+    use super::*;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {out:?}");
+    }
+
+    /// A repo with an embedded repository `sub`; returns the repo.
+    fn with_gitlink(root: &std::path::Path) -> std::path::PathBuf {
+        let repo = root.join("repo");
+        let sub = repo.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        for d in [&repo, &sub] {
+            git(d, &["init", "-q", "."]);
+            git(d, &["config", "user.email", "a@b.example"]);
+            git(d, &["config", "user.name", "a"]);
+            std::fs::write(d.join("f.txt"), "one\n").unwrap();
+            git(d, &["add", "f.txt"]);
+            git(d, &["commit", "-qm", "one"]);
+        }
+        git(&repo, &["add", "sub"]);
+        git(&repo, &["commit", "-qm", "sub"]);
+        repo
+    }
+
+    fn tracked_changes(repo: &std::path::Path) -> bool {
+        let plan = Plan {
+            overrides: Vec::new(),
+            gitlinks: true,
+        };
+        match git_state(repo.to_str().unwrap(), false, &plan) {
+            Observed::Ok { value } => value.tracked_changes(),
+            Observed::Error { error } => panic!("not observed: {error:?}"),
+        }
+    }
+
+    #[test]
+    fn a_gitlink_is_planned_and_a_changed_submodule_commit_is_a_tracked_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = with_gitlink(dir.path());
+        let p = plan(repo.to_str().unwrap()).unwrap();
+        assert!(p.gitlinks && !p.is_plain());
+        assert!(!tracked_changes(&repo), "a fresh repo has no changes");
+
+        // A dirty submodule work tree is not entered: not a tracked change.
+        std::fs::write(repo.join("sub/f.txt"), "dirty\n").unwrap();
+        assert!(!tracked_changes(&repo));
+
+        // A new commit in the submodule moves the recorded gitlink: it is one.
+        git(&repo.join("sub"), &["commit", "-qam", "two"]);
+        assert!(tracked_changes(&repo));
+    }
+
+    #[test]
+    fn a_plain_repo_is_left_to_nah_observe() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("plain");
+        std::fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "-q", "."]);
+        assert!(plan(repo.to_str().unwrap()).unwrap().is_plain());
     }
 }

@@ -91,5 +91,27 @@ pub fn overrides(run: &Runner, dir: &str, deadline: Instant) -> Result<Vec<Strin
     local_filter_names(run, dir, deadline).map(|names| override_args(&names))
 }
 
+/// Whether the index of the repository around `dir` holds a gitlink (mode
+/// 160000, a submodule or an embedded repository). `git status` enters a
+/// submodule's work tree by default, and the submodule's own config (its
+/// `.git/modules/<name>/config`, or a plain `sub/.git/config`) is not in the
+/// listing of [`local_filter_names`], so its filter drivers would run. An error
+/// means the index could not be listed.
+pub fn has_gitlinks(run: &Runner, dir: &str, deadline: Instant) -> Result<bool, String> {
+    let out = run(
+        &[],
+        "git",
+        &["-C", dir, "ls-files", "--stage", "-z", "--", ":/"],
+        deadline,
+    )
+    .map_err(|e| format!("cannot list the git index: {e}"))?;
+    Ok(out.split(|b| *b == 0).any(|e| e.starts_with(b"160000 ")))
+}
+
+/// What to tell `git status` about submodules: only the recorded commit is
+/// compared, and the submodule's work tree is not entered, so its filters
+/// cannot run.
+pub const IGNORE_SUBMODULE_WORKTREES: &str = "--ignore-submodules=dirty";
+
 #[cfg(test)]
 mod tests;
