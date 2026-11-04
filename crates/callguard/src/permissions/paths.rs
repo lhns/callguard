@@ -88,10 +88,6 @@ impl PathSpec {
         })
     }
 
-    pub fn has_dotdot(&self) -> bool {
-        self.rest.split('/').any(|s| s == "..")
-    }
-
     /// Nothing but wildcards after the anchor.
     pub fn is_blanket(&self) -> bool {
         self.rest

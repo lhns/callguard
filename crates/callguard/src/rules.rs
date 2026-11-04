@@ -882,6 +882,72 @@ pub fn rm_root(command: &str) -> bool {
     false
 }
 
+/// Whether `command` runs `callguard trust` (anything but `--list`). Read from
+/// the raw text, as the other built-ins are: quotes and a path or `.exe` on the
+/// program do not hide it. It misses a script written earlier, a program name
+/// the shell expands, a renamed copy of the binary and a wrapper that builds
+/// the command at run time; the terminal requirement of the verb is the second
+/// lock.
+pub fn runs_trust_verb(command: &str) -> bool {
+    command
+        .split([';', '&', '|', '\n', '(', ')', '`'])
+        .any(|seg| {
+            let words: Vec<String> = seg
+                .replace(['\'', '"'], " ")
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect();
+            words.iter().enumerate().any(|(i, w)| {
+                command_name(w) == "callguard"
+                    && words.get(i + 1).is_some_and(|n| n == "trust")
+                    && !words[i + 2..].iter().any(|a| a == "--list" || a == "-list")
+            })
+        })
+}
+
+/// Tool writes to the trust record are denied; shell commands that name it or
+/// run the trust verb ask. Always on.
+fn trust_guard(c: &Call) -> Option<Hit> {
+    let file = crate::trust::FILE;
+    let named = |s: &str| s.to_ascii_lowercase().contains(file);
+    let hit = |decision: &str, reason: &str| {
+        Some(Hit {
+            id: "self-protect-trust".into(),
+            decision: decision.into(),
+            reason: reason.into(),
+        })
+    };
+    if c.kind == KIND_WRITE {
+        if c.path.to_ascii_lowercase().ends_with(&format!("/{file}")) {
+            return hit(
+                "deny",
+                "callguard denies edits to its project trust record; the user runs `callguard trust`",
+            );
+        }
+        if c.path.is_empty() && named(&c.whole) {
+            return hit(
+                "ask",
+                "edit names the project trust record; a human should confirm",
+            );
+        }
+    }
+    if c.kind == KIND_SHELL && !c.command.is_empty() {
+        if named(&c.command) {
+            return hit(
+                "ask",
+                "command names the project trust record; a human should confirm",
+            );
+        }
+        if runs_trust_verb(&c.command) {
+            return hit(
+                "ask",
+                "command runs `callguard trust`, which grants project rules; a human should confirm",
+            );
+        }
+    }
+    None
+}
+
 /// The always-on layer 0.
 #[derive(Debug)]
 pub struct Builtin {
@@ -950,6 +1016,10 @@ impl Builtin {
     /// The first built-in rule that fires for `c`. Hard denies are checked
     /// before the self-protection ask.
     pub fn check(&self, c: &Call) -> Option<Hit> {
+        // The trust record guard has no id: `disable_builtin` cannot name it.
+        if let Some(hit) = trust_guard(c) {
+            return Some(hit);
+        }
         let on = |id: &str| !self.disabled.iter().any(|d| d == id);
         let hit = |id: &str, decision: &str, reason: String| {
             Some(Hit {

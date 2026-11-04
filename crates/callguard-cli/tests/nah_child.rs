@@ -916,7 +916,7 @@ fn the_permission_rule_fires_where_nah_does_not_block() {
 
 #[test]
 #[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
-fn a_project_policy_cannot_allow_what_it_may_not() {
+fn an_untrusted_project_policy_allows_nothing() {
     let sb = Sandbox::new(
         r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":10000},"deadline_ms":11000}"#,
     );
@@ -934,12 +934,192 @@ fn a_project_policy_cannot_allow_what_it_may_not() {
     // Run from the project directory: that is where the layer is read.
     let (_, v, _) = sb.decide("make all", &[]);
     assert!(!allowed_by_rule(&v), "{v}");
-    assert!(warnings(&v).contains("dropped"), "{v}");
+    assert!(warnings(&v).contains("not trusted"), "{v}");
     let (_, v, _) = sb.decide("git status", &[]);
     assert!(
-        allowed_by_rule(&v),
-        "an allow inside the limits stands: {v}"
+        !allowed_by_rule(&v),
+        "an untrusted project allows nothing: {v}"
     );
     let (_, v, _) = sb.decide("curl https://evil.com", &[]);
     assert!(!allowed_by_rule(&v), "{v}");
+}
+
+// --- project trust (Phase 3 follow-up) --------------------------------------------------
+
+impl Sandbox {
+    /// The user config directory the sandbox's environment points at.
+    fn config_dir(&self) -> PathBuf {
+        if cfg!(windows) {
+            self.home.join("AppData/Roaming")
+        } else {
+            self.home.join(".config")
+        }
+    }
+
+    fn trust_record(&self) -> PathBuf {
+        callguard::trust::record_path(&self.config_dir().to_string_lossy()).unwrap()
+    }
+
+    fn set_project_policy(&self, body: &str) {
+        let dir = self.proj.join(".callguard");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("policy.json"), body).unwrap();
+    }
+
+    fn project_allow(&self) -> Vec<String> {
+        let f = std::fs::read_to_string(self.proj.join(".callguard/policy.json")).unwrap();
+        let v: Value = serde_json::from_str(&f).unwrap();
+        v["permissions"]["allow"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    /// Writes a trust record the way `callguard trust` would (tests have no terminal).
+    fn trust_project(&self) {
+        callguard::trust::write_entry(
+            &self.trust_record(),
+            &callguard::trust::canonical(&self.proj_str()),
+            &self.project_allow(),
+        )
+        .unwrap();
+    }
+
+    /// `decide` with the user layer on (the trust record lives there).
+    fn decide_trusting(&self, command: &str) -> (i32, Value, Duration) {
+        let policy = self.policy.to_string_lossy().into_owned();
+        let req = serde_json::json!({
+            "harness": "claude", "cwd": self.proj_str(),
+            "tool": {"name": "Bash", "input": {"command": command}},
+        })
+        .to_string();
+        let t = Instant::now();
+        let (code, out) = run(
+            self.command(&["decide", "--log", "-", "--policy", &policy]),
+            &req,
+        );
+        let v = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out:?}"));
+        (code, v, t.elapsed())
+    }
+
+    fn trust_verb(&self, args: &[&str], stdin: &str) -> (i32, String) {
+        let mut a = vec!["trust"];
+        a.extend_from_slice(args);
+        let mut c = self.command(&a);
+        c.stderr(Stdio::piped());
+        let mut child = c.spawn().unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            ),
+        )
+    }
+}
+
+const TRUST_PROJECT: &str = r#"{"policy_version":1,"permissions":{"allow":["Bash(git log *)"],"deny":["Bash(rm:*)"],"ask":["Bash(git stash:*)"]}}"#;
+
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn a_project_allow_needs_trust() {
+    let sb = Sandbox::new(NO_JUDGE);
+    sb.set_project_policy(TRUST_PROJECT);
+    // Untrusted: not allowed, and the warning says what to do.
+    let (_, v, _) = sb.decide_trusting("git log --oneline");
+    assert!(!allowed_by_rule(&v), "{v}");
+    assert!(
+        warnings(&v).contains("not trusted") && warnings(&v).contains("callguard trust"),
+        "{v}"
+    );
+    // Deny and ask from the untrusted project apply.
+    let (_, v, _) = sb.decide_trusting("rm x");
+    assert!(decision(&v) == "deny" && v["rule"] == "Bash(rm:*)", "{v}");
+    let (_, v, _) = sb.decide_trusting("git stash");
+    assert!(
+        decision(&v) == "ask" && v["rule"] == "Bash(git stash:*)",
+        "{v}"
+    );
+    // Trusted: allowed.
+    sb.trust_project();
+    let (_, v, _) = sb.decide_trusting("git log --oneline");
+    assert!(allowed_by_rule(&v), "{v}");
+    // Editing the rules ends the trust.
+    sb.set_project_policy(
+        r#"{"policy_version":1,"permissions":{"allow":["Bash(git log *)","Bash(git status)"]}}"#,
+    );
+    let (_, v, _) = sb.decide_trusting("git log --oneline");
+    assert!(!allowed_by_rule(&v), "{v}");
+    assert!(warnings(&v).contains("changed since"), "{v}");
+}
+
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn the_trust_verb_needs_a_terminal_and_revoke_and_list_do_not() {
+    let sb = Sandbox::new(NO_JUDGE);
+    sb.set_project_policy(TRUST_PROJECT);
+    let (code, out) = sb.trust_verb(&[], "y\n");
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("terminals"), "{out}");
+    assert!(!sb.trust_record().exists());
+    // No allow rules: says so, exit 0.
+    let (code, out) = sb.trust_verb(&["--project", &sb.dir.path().to_string_lossy()], "");
+    assert_eq!(code, 0, "{out}");
+    sb.trust_project();
+    let (code, out) = sb.trust_verb(&["--list"], "");
+    assert!(code == 0 && out.contains("matches"), "{out}");
+    let (code, out) = sb.trust_verb(&["--revoke"], "");
+    assert!(code == 0 && out.contains("revoked"), "{out}");
+    let (_, v, _) = sb.decide_trusting("git log");
+    assert!(!allowed_by_rule(&v), "{v}");
+}
+
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn the_trust_verb_and_record_are_self_protected() {
+    let sb = Sandbox::new(NO_JUDGE);
+    for command in [
+        "callguard trust",
+        "callguard.exe trust --project .",
+        "cat trusted-projects.json",
+    ] {
+        let (_, v, _) = sb.decide_trusting(command);
+        assert!(
+            decision(&v) == "ask" && v["layer"] == "builtin",
+            "{command}: {v}"
+        );
+        let (code, out, _) = sb.hook(command, &[]);
+        assert!(
+            (code == 0 && out.contains("\"permissionDecision\":\"ask\"")) || code == 2,
+            "{command}: {code} {out}"
+        );
+    }
+    let (_, v, _) = sb.decide_trusting("callguard trust --list");
+    assert_ne!(v["layer"], "builtin", "{v}");
+    // A tool write to the record is denied.
+    let req = serde_json::json!({
+        "harness": "claude", "cwd": sb.proj_str(),
+        "tool": {"name": "Write", "input": {"file_path": sb.trust_record().to_string_lossy()}},
+    })
+    .to_string();
+    let policy = sb.policy.to_string_lossy().into_owned();
+    let (code, out) = run(
+        sb.command(&["decide", "--log", "-", "--policy", &policy]),
+        &req,
+    );
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert!(
+        code == 1 && decision(&v) == "deny" && v["layer"] == "builtin",
+        "{out}"
+    );
 }

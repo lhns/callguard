@@ -7,6 +7,7 @@ mod flags;
 mod hook;
 mod plugin;
 mod policy;
+mod trust;
 
 use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -22,6 +23,7 @@ Usage:
   callguard hook <harness> [flags]  harness hook: claude, hermes, generic (opencode, pi plugins)
   callguard plugin <harness>        print the opencode or pi plugin source
   callguard policy check [flags]    load, merge and lint the policy layers
+  callguard trust [flags]           review and trust a project's allow rules
   callguard eval [flags]            run the labelled eval set
   callguard version
 
@@ -142,6 +144,7 @@ fn run(
         // Hidden: the nah child process of callguard::supervisor.
         callguard::supervisor::ENGINE_VERB => engine_child::run(rest, stdin, stdout),
         "policy" => policy::run(rest, stdout, stderr),
+        "trust" => trust::run(rest, stdin, stdout, stderr),
         "eval" => eval::run(rest, stdout, stderr),
         "version" | "--version" => {
             let _ = writeln!(stdout, "callguard {VERSION}");

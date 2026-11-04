@@ -62,6 +62,9 @@ struct PolicyReport {
     policy_rev: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     policy: Option<Policy>,
+    /// How the project's allow rules stand (only when it has any).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project_trust: Option<String>,
     warnings: Vec<String>,
     errors: Vec<String>,
 }
@@ -71,6 +74,7 @@ fn check_policy(lo: &LoadOptions) -> PolicyReport {
         files: Vec::new(),
         policy_rev: String::new(),
         policy: None,
+        project_trust: None,
         warnings: Vec::new(),
         errors: Vec::new(),
     };
@@ -103,6 +107,26 @@ fn check_policy(lo: &LoadOptions) -> PolicyReport {
             rep.errors.push(e.to_string());
         }
     }
+    if !lo.project_dir.is_empty() {
+        let pp = std::path::Path::new(&lo.project_dir)
+            .join(".callguard")
+            .join("policy.json");
+        if let Ok(f) = policy::read_file(&pp.to_string_lossy(), policy::LAYER_PROJECT) {
+            let allow = &f.policy.permissions.allow;
+            if !allow.is_empty() {
+                rep.project_trust = Some(
+                    match callguard::trust::check_for_load(
+                        &lo.user_config_dir,
+                        &lo.project_dir,
+                        allow,
+                    ) {
+                        Ok(()) => format!("trusted ({} allow rules)", allow.len()),
+                        Err(w) => w,
+                    },
+                );
+            }
+        }
+    }
     rep.warnings.extend(l.warnings);
     rep.policy_rev = policy::rev(&l.policy);
     rep.policy = Some(l.policy);
@@ -121,6 +145,9 @@ impl PolicyReport {
         if let Some(p) = &self.policy {
             let b = gojson::to_string_indent(p).unwrap_or_default();
             let _ = writeln!(w, "merged policy:\n{b}\npolicy_rev: {}", self.policy_rev);
+        }
+        if let Some(t) = &self.project_trust {
+            let _ = writeln!(w, "project allow rules: {t}");
         }
         for x in &self.warnings {
             let _ = writeln!(w, "warning: {x}");

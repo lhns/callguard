@@ -2043,3 +2043,84 @@ fn matches_equal_the_go_binary_over_a_corpus() {
         bad.iter().take(10).cloned().collect::<Vec<_>>().join("\n")
     );
 }
+
+// --- the trust record guard ------------------------------------------------------
+
+#[test]
+fn the_trust_verb_and_record_are_guarded_and_the_guard_cannot_be_disabled() {
+    let unix = unix();
+    // Naming a disableable built-in does not reach it.
+    let b = Builtin::new(
+        unix.clone(),
+        &[
+            "self-protect-write".to_owned(),
+            "self-protect-shell".to_owned(),
+        ],
+        &[],
+    )
+    .unwrap();
+    let shell = |cmd: &str| {
+        b.check(&Call::new(
+            at("Bash", bash_input(cmd), "/w/p", "/w/p"),
+            &unix,
+        ))
+    };
+    for cmd in [
+        "callguard trust",
+        "callguard trust --project /x",
+        "/usr/local/bin/callguard trust",
+        "callguard.exe trust",
+        "'callguard' trust",
+        "ls; callguard trust --revoke",
+        "callguard trust --list; callguard trust",
+        "echo hi && (callguard trust)",
+        "cat ~/.config/callguard/trusted-projects.json",
+        "echo [] > trusted-projects.json",
+        "TRUSTED-PROJECTS.JSON",
+    ] {
+        let h = shell(cmd).unwrap_or_else(|| panic!("{cmd}"));
+        assert_eq!(
+            (h.id.as_str(), h.decision.as_str()),
+            ("self-protect-trust", "ask"),
+            "{cmd}"
+        );
+    }
+    for cmd in [
+        "callguard trust --list",
+        "callguard policy check",
+        "echo callguard trust",
+        "ls",
+    ] {
+        let h = shell(cmd);
+        // `echo callguard trust` is read as the verb: the guard errs towards ask.
+        if cmd == "echo callguard trust" {
+            assert!(h.is_some());
+        } else {
+            assert!(h.is_none(), "{cmd}: {h:?}");
+        }
+    }
+    let write = |p: &str| {
+        b.check(&Call::new(
+            at("Write", file_input(p), "/w/p", "/w/p"),
+            &unix,
+        ))
+    };
+    let h = write("/home/u/.config/callguard/trusted-projects.json").unwrap();
+    assert_eq!(
+        (h.id.as_str(), h.decision.as_str()),
+        ("self-protect-trust", "deny")
+    );
+    assert!(write("/home/u/.config/callguard/other.json").is_none());
+    let patch = b
+        .check(&Call::new(
+            at(
+                "patch",
+                raw(r#"{"patchText":"*** Update File: cfg/trusted-projects.json"}"#),
+                "/w/p",
+                "/w/p",
+            ),
+            &unix,
+        ))
+        .unwrap();
+    assert_eq!(patch.decision, "ask");
+}

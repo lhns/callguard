@@ -232,11 +232,24 @@ const SUBCOMMAND_TOOLS: &[&str] = &[
     "git", "gh", "docker", "podman", "kubectl", "npm", "yarn", "pnpm", "cargo", "go",
 ];
 
-/// Programs that run code from the repository.
-const REPO_RUNNERS: &[&str] = &[
-    "make", "cmake", "ninja", "just", "rake", "gradle", "gradlew", "mvn", "mvnw", "ant", "npm",
-    "yarn", "pnpm", "cargo", "go", "dotnet", "pytest", "tox", "nox", "pip", "uv", "poetry",
-    "composer", "bundle", "mix",
+/// Package-manager commands that run repository code; a wildcard allow for
+/// any of them is dropped (Claude's auto mode drops the same).
+const RUN_COMMANDS: &[(&str, &str)] = &[
+    ("npm", "run"),
+    ("npm", "exec"),
+    ("yarn", "run"),
+    ("yarn", "dlx"),
+    ("pnpm", "run"),
+    ("pnpm", "exec"),
+    ("pnpm", "dlx"),
+    ("bun", "run"),
+    ("bun", "x"),
+    ("cargo", "run"),
+    ("go", "run"),
+    ("uv", "run"),
+    ("poetry", "run"),
+    ("pipenv", "run"),
+    ("dotnet", "run"),
 ];
 
 /// Reads an allow rule and refuses the ones that loosen the guard too far.
@@ -244,7 +257,13 @@ const REPO_RUNNERS: &[&str] = &[
 /// every layer shares. The error is the reason, for the warning.
 pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String> {
     let rule = parse(text).map_err(|e| format!("cannot be read: {e}"))?;
-    let project = layer == Some(policy::LAYER_PROJECT);
+    let guarded_layer = matches!(layer, Some(policy::LAYER_USER | policy::LAYER_PROJECT));
+    let head = text.split('(').next().unwrap_or("").trim();
+    if matches!(head, "Agent" | "Task" | "task" | "Monitor") {
+        return Err(format!(
+            "{head} allows start agents or background work and are never honoured"
+        ));
+    }
     let blocked = |why: &str| Err(why.to_owned());
     match &rule {
         Rule::Shell {
@@ -265,13 +284,15 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
             {
                 return Err(format!("a wildcard may not come right after {name}"));
             }
-            if project {
-                if first.contains(['/', '\\']) {
-                    return blocked("a project may not allow a program by path");
-                }
-                if REPO_RUNNERS.contains(&name.as_str()) && s.has_wildcard() {
-                    return Err(format!("a project may not allow {name} with a wildcard"));
-                }
+            if let Some(second) = s.toks.get(1).and_then(|t| match t {
+                Tok::Lit(w) => Some(w.as_str()),
+                _ => None,
+            }) && s.has_wildcard()
+                && RUN_COMMANDS.contains(&(name.as_str(), second))
+            {
+                return Err(format!(
+                    "{name} {second} with a wildcard runs repository code"
+                ));
             }
         }
         Rule::Path { spec: None, .. } => return blocked("a bare file rule allows every path"),
@@ -279,12 +300,9 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
             if s.is_blanket() {
                 return blocked("the pattern allows every path under its anchor");
             }
-            if project
-                && (matches!(s.anchor, paths::Anchor::Abs | paths::Anchor::Home) || s.has_dotdot())
-            {
-                return blocked("a project may only allow paths inside itself");
-            }
-            if project
+            // Hook, policy and VCS directories are never pre-approved by a
+            // user or project rule; only the system layer may allow them.
+            if guarded_layer
                 && s.rest.split('/').any(|seg| {
                     matches!(
                         seg,
@@ -292,7 +310,9 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
                     )
                 })
             {
-                return blocked("a project may not allow paths in hook, policy or VCS directories");
+                return blocked(
+                    "a user or project rule may not allow paths in hook, policy or VCS directories",
+                );
             }
         }
         Rule::Fetch { domain: None } => return blocked("a bare WebFetch rule allows every URL"),
@@ -304,10 +324,14 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
         }
         _ => {}
     }
-    if project && !matches!(rule, Rule::Shell { .. } | Rule::Path { .. }) {
-        return blocked("a project may only allow Bash, Read and Edit rules");
-    }
     Ok(rule)
+}
+
+/// The allow rules of one policy layer that survive [`vet_allow`], and a
+/// warning for each that does not.
+/// [`vet_allow`] for callers outside the crate: why the rule would be dropped.
+pub fn vet_reason(text: &str, layer: Option<&str>) -> Result<(), String> {
+    vet_allow(text, layer).map(|_| ())
 }
 
 /// The allow rules of one policy layer that survive [`vet_allow`], and a

@@ -618,73 +618,160 @@ fn a_deny_or_ask_rule_that_cannot_be_read_is_a_problem_of_its_file() {
     assert!(problems[1].contains("permissions.ask[0]"), "{problems:?}");
 }
 
+/// Trusts the project layer's allow rules, as `callguard trust` would.
+fn trust_project(o: &LoadOptions, allow: &[&str]) {
+    let rules: Vec<String> = allow.iter().map(|s| (*s).to_owned()).collect();
+    let rec = crate::trust::record_path(&o.user_config_dir).unwrap();
+    crate::trust::write_entry(&rec, &crate::trust::canonical(&o.project_dir), &rules).unwrap();
+}
+
+const USER_EMPTY: &str = r#"{"policy_version":1}"#;
+
 #[test]
 fn layers_add_deny_and_ask_and_vet_allow() {
     let sys = r#"{"policy_version":1,"permissions":{"deny":["Bash(rm:*)"],"allow":["Bash(ls *)","Bash(*)","Bash(python *)"]}}"#;
     let user = r#"{"policy_version":1,"permissions":{"ask":["Bash(git push:*)"],"allow":["Bash(make:*)","WebFetch(domain:docs.rs)"]}}"#;
-    let proj = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"],"allow":["Bash(*)","Bash(make:*)","WebFetch(domain:evil.com)","Edit(~/.bashrc)","Bash(git log *)","Edit(src/**)"]}}"#;
-    let (_d, o) = layers(sys, user, proj);
+    let proj_allow = [
+        "Bash(*)",
+        "Bash(make:*)",
+        "WebFetch(domain:evil.com)",
+        "Edit(~/.bashrc)",
+        "Bash(git log *)",
+        "Edit(src/**)",
+    ];
+    let proj = format!(
+        r#"{{"policy_version":1,"permissions":{{"deny":["Read(.env)"],"allow":{}}}}}"#,
+        serde_json::to_string(&proj_allow).unwrap()
+    );
+    let (_d, o) = layers(sys, user, &proj);
+    // Not trusted: deny and ask apply, the project's allow rules do not.
     let l = load(&o).unwrap();
     assert!(l.problems().is_empty(), "{:?}", l.problems());
     let p = &l.policy.permissions;
     assert_eq!(p.deny, ["Bash(rm:*)", "Read(.env)"]);
     assert_eq!(p.ask, ["Bash(git push:*)"]);
-    // The system layer drops blanket and interpreter allows; the user layer's
-    // `make:*` and web allow stand; the project layer keeps only what stays inside it.
     assert_eq!(
         p.allow,
+        ["Bash(ls *)", "Bash(make:*)", "WebFetch(domain:docs.rs)"]
+    );
+    let untrusted: Vec<&String> = l
+        .warnings
+        .iter()
+        .filter(|w| w.contains("not trusted"))
+        .collect();
+    assert_eq!(untrusted.len(), 1, "{:?}", l.warnings);
+    assert!(untrusted[0].contains("6 rules") && untrusted[0].contains("callguard trust"));
+    // Trusted: vetted like the user layer.
+    trust_project(&o, &proj_allow);
+    let l = load(&o).unwrap();
+    assert_eq!(
+        l.policy.permissions.allow,
         [
             "Bash(ls *)",
             "Bash(make:*)",
             "WebFetch(domain:docs.rs)",
+            "WebFetch(domain:evil.com)",
+            "Edit(~/.bashrc)",
             "Bash(git log *)",
             "Edit(src/**)"
         ]
     );
+    assert!(
+        !l.warnings.iter().any(|w| w.contains("not trusted")),
+        "{:?}",
+        l.warnings
+    );
+    // The system layer's Bash(*) and Bash(python *), the project's Bash(*).
     let dropped: Vec<&String> = l
         .warnings
         .iter()
-        .filter(|w| w.contains("permissions.allow"))
+        .filter(|w| w.contains("dropped"))
         .collect();
-    assert_eq!(dropped.len(), 6, "{dropped:?}");
-    for rule in [
-        "\"Bash(*)\"",
-        "\"Bash(python *)\"",
-        "\"Bash(make:*)\"",
-        "\"WebFetch(domain:evil.com)\"",
-        "\"Edit(~/.bashrc)\"",
-    ] {
-        assert!(
-            dropped.iter().any(|w| w.contains(rule)),
-            "{rule}: {dropped:?}"
-        );
-    }
+    assert_eq!(dropped.len(), 3, "{dropped:?}");
     assert!(
         dropped
             .iter()
             .any(|w| w.contains("system.json") && w.contains("\"Bash(*)\"")),
         "{dropped:?}"
     );
+    assert!(
+        dropped
+            .iter()
+            .any(|w| w.contains("proj") && w.contains("\"Bash(*)\"")),
+        "{dropped:?}"
+    );
 }
 
 #[test]
-fn a_project_with_only_loosening_rules_allows_nothing() {
-    let proj = r#"{"policy_version":1,"permissions":{"allow":["Bash(*)","Bash(make:*)","WebFetch(domain:evil.com)","Edit(~/.bashrc)"]}}"#;
-    let (_d, o) = layers(r#"{"policy_version":1}"#, "", proj);
+fn project_allows_need_trust_and_lose_it_when_edited_or_moved() {
+    let allow = ["Bash(git log *)"];
+    let proj = r#"{"policy_version":1,"permissions":{"allow":["Bash(git log *)"]}}"#;
+    let (_d, o) = layers(USER_EMPTY, USER_EMPTY, proj);
+    assert!(load(&o).unwrap().policy.permissions.allow.is_empty());
+    trust_project(&o, &allow);
+    assert_eq!(load(&o).unwrap().policy.permissions.allow, allow);
+    // Editing the rules ends the trust.
+    write(
+        &Path::new(&o.project_dir).join(".callguard/policy.json"),
+        r#"{"policy_version":1,"permissions":{"allow":["Bash(git log *)","Bash(ls)"]}}"#,
+    );
     let l = load(&o).unwrap();
+    assert!(l.policy.permissions.allow.is_empty());
     assert!(
-        l.policy.permissions.allow.is_empty(),
+        l.warnings.iter().any(|w| w.contains("changed since")),
         "{:?}",
-        l.policy.permissions
+        l.warnings
     );
-    assert_eq!(l.warnings.len(), 4, "{:?}", l.warnings);
-    // The same make rule in the user layer is honoured.
-    let (_d, o) = layers(
-        r#"{"policy_version":1}"#,
-        r#"{"policy_version":1,"permissions":{"allow":["Bash(make:*)"]}}"#,
+    // So does the same file in another place.
+    let (_d2, mut o2) = layers(USER_EMPTY, "", proj);
+    o2.user_config_dir = o.user_config_dir.clone();
+    trust_project(&o, &allow);
+    assert!(load(&o2).unwrap().policy.permissions.allow.is_empty());
+    // Deny and ask need no trust, and make no noise.
+    let (_d3, o3) = layers(
+        USER_EMPTY,
         "",
+        r#"{"policy_version":1,"permissions":{"deny":["Bash(rm:*)"],"ask":["Bash(ls:*)"]}}"#,
     );
-    assert_eq!(load(&o).unwrap().policy.permissions.allow, ["Bash(make:*)"]);
+    let l = load(&o3).unwrap();
+    assert_eq!(
+        (
+            l.policy.permissions.deny.len(),
+            l.policy.permissions.ask.len()
+        ),
+        (1, 1)
+    );
+    assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+}
+
+#[test]
+fn an_unreadable_trust_record_trusts_nothing_and_says_so() {
+    let proj = r#"{"policy_version":1,"permissions":{"allow":["Bash(git log *)"]}}"#;
+    let (_d, o) = layers(USER_EMPTY, USER_EMPTY, proj);
+    let rec = crate::trust::record_path(&o.user_config_dir).unwrap();
+    std::fs::write(&rec, "garbage").unwrap();
+    let l = load(&o).unwrap();
+    assert!(l.policy.permissions.allow.is_empty());
+    assert!(
+        l.warnings.iter().any(|w| w.contains("unreadable")),
+        "{:?}",
+        l.warnings
+    );
+}
+
+#[test]
+fn a_trusted_project_changes_the_policy_rev_and_an_untrusted_one_does_not() {
+    let proj = r#"{"policy_version":1,"permissions":{"allow":["Bash(git log *)"]}}"#;
+    let (_d, o) = layers(USER_EMPTY, USER_EMPTY, proj);
+    let (_d0, o0) = layers(USER_EMPTY, USER_EMPTY, "");
+    let plain = rev(&load(&o0).unwrap().policy);
+    assert_eq!(
+        rev(&load(&o).unwrap().policy),
+        plain,
+        "untrusted allows do not count"
+    );
+    trust_project(&o, &["Bash(git log *)"]);
+    assert_ne!(rev(&load(&o).unwrap().policy), plain, "trusted ones do");
 }
 
 #[test]

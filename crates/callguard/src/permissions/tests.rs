@@ -763,14 +763,13 @@ fn blanket_and_open_ended_allows_are_dropped_in_every_layer() {
 }
 
 #[test]
-fn only_the_project_layer_is_stricter() {
-    // Fine in the user layer.
+fn a_trusted_project_is_vetted_like_the_user_layer() {
+    // Fine for a user and for a trusted project alike.
     for r in [
         "WebFetch(domain:docs.rs)",
         "mcp__github__get_*",
         "mcp__github",
         "WebSearch",
-        "Task",
         "Bash(make:*)",
         "Bash(make test *)",
         "Bash(./scripts/check.sh *)",
@@ -778,60 +777,85 @@ fn only_the_project_layer_is_stricter() {
         "Read(//etc/hostname)",
         "Read(~/notes/**)",
         "Read(../other/**)",
-        "Bash(npm run *)",
+        "Bash(npm test)",
         "Bash(cargo test *)",
-        "Bash(uv run pytest *)",
-    ] {
-        assert!(
-            vet(r, Some("user")).is_ok(),
-            "{r}: {:?}",
-            vet(r, Some("user"))
-        );
-    }
-    // Not in the project layer.
-    for r in [
-        "WebFetch(domain:evil.com)",
-        "mcp__github__get_*",
-        "mcp__github",
-        "WebSearch",
-        "Task",
-        "Bash(make:*)",
-        "Bash(make test *)",
-        "Bash(just *)",
-        "Bash(npm run *)",
-        "Bash(cargo test *)",
-        "Bash(uv run pytest *)",
+        "Bash(uv sync *)",
         "Bash(pytest -k *)",
-        "Bash(./scripts/check.sh *)",
-        "Bash(./scripts/check.sh)",
-        "Bash(/usr/bin/true)",
-        "Bash(C:\\x\\a.exe)",
-        "Read(//etc/hostname)",
-        "Read(~/notes/**)",
-        "Edit(~/.bashrc)",
-        "Edit(//tmp/x)",
-        "Read(../other/**)",
-        "Edit(src/../../x)",
+        "Bash(npm run build)",
+        "Bash(cargo run --release)",
     ] {
-        assert!(
-            vet(r, Some("project")).is_err(),
-            "{r} should be dropped in a project"
-        );
+        for layer in ["user", "project"] {
+            assert!(
+                vet(r, Some(layer)).is_ok(),
+                "{r} in {layer}: {:?}",
+                vet(r, Some(layer))
+            );
+        }
     }
-    // Exact repo-code runners and project-inside paths stay.
+}
+
+#[test]
+fn hook_policy_and_vcs_directories_are_never_pre_approved_below_the_system_layer() {
     for r in [
-        "Bash(make test)",
-        "Bash(git log *)",
-        "Read(src/**)",
-        "Edit(/src/**)",
-        "Edit(./docs/**)",
-        "Write(notes.md)",
+        "Edit(.git/hooks/*)",
+        "Edit(.claude/**)",
+        "Edit(/.callguard/policy.json)",
+        "Write(.hermes/config.yaml)",
+        "Edit(//home/u/.opencode/**)",
+        "Edit(**/.pi/**)",
     ] {
+        for layer in ["user", "project"] {
+            assert!(vet(r, Some(layer)).is_err(), "{r} in {layer}");
+        }
         assert!(
-            vet(r, Some("project")).is_ok(),
-            "{r}: {:?}",
-            vet(r, Some("project"))
+            vet(r, Some("system")).is_ok(),
+            "{r}: the system layer keeps its authority"
         );
+        assert!(vet(r, None).is_ok(), "{r}");
+    }
+}
+
+#[test]
+fn agents_monitors_and_package_manager_runs_are_never_honoured() {
+    for layer in [None, Some("system"), Some("user"), Some("project")] {
+        for r in [
+            "Agent",
+            "Task",
+            "task",
+            "Monitor",
+            "Agent(x)",
+            "Task(y)",
+            "Monitor(z)",
+            "Bash(npm run *)",
+            "Bash(npm run:*)",
+            "Bash(npm exec *)",
+            "Bash(yarn run *)",
+            "Bash(pnpm run *)",
+            "Bash(pnpm exec *)",
+            "Bash(pnpm dlx *)",
+            "Bash(bun run *)",
+            "Bash(bun x *)",
+            "Bash(yarn dlx *)",
+            "Bash(cargo run *)",
+            "Bash(go run *)",
+            "Bash(uv run *)",
+            "Bash(poetry run *)",
+            "Bash(pipenv run *)",
+            "Bash(dotnet run *)",
+            "Bash(npm run test*)",
+            "Bash(npm run build *)",
+            "Bash(cargo run:*)",
+        ] {
+            assert!(vet(r, layer).is_err(), "{r} in {layer:?}");
+        }
+        for r in [
+            "Bash(npm run build)",
+            "Bash(npm test)",
+            "Bash(cargo run --release)",
+            "Bash(go test ./...)",
+        ] {
+            assert!(vet(r, layer).is_ok(), "{r} in {layer:?}");
+        }
     }
 }
 
@@ -1336,8 +1360,8 @@ fn other_bare_names_match_the_tool_exactly() {
     assert!(hit(&d, &call("Task", "{}")).is_some());
     assert!(hit(&d, &call("task", "{}")).is_none());
     assert!(hit(&d, &call("bash", r#"{"command":"ls"}"#)).is_some());
-    let a = allow(&["Task"]);
-    assert_eq!(hit(&a, &call("Task", "{}")), Some("allow"));
+    let a = allow(&["Skill"]);
+    assert_eq!(hit(&a, &call("Skill", "{}")), Some("allow"));
 }
 
 // --- the raw-text fallback in itself ---------------------------------------------

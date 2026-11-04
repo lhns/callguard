@@ -25,3 +25,4 @@ pub mod schema;
 pub mod serde_util;
 pub mod supervisor;
 pub mod transcript;
+pub mod trust;

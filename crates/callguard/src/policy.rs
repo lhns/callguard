@@ -525,7 +525,13 @@ pub fn read_file(path: &str, layer: &str) -> Result<File, PolicyError> {
 }
 
 /// Reads one layer into `out`. A missing file is skipped unless `must_exist`.
-fn apply(out: &mut Loaded, path: &str, layer: &str, must_exist: bool) -> Result<(), PolicyError> {
+fn apply(
+    out: &mut Loaded,
+    path: &str,
+    layer: &str,
+    must_exist: bool,
+    o: &LoadOptions,
+) -> Result<(), PolicyError> {
     let f = match read_file_inner(path, layer) {
         Ok(f) => f,
         Err(e) if e.not_found && !must_exist => return Ok(()),
@@ -538,7 +544,24 @@ fn apply(out: &mut Loaded, path: &str, layer: &str, must_exist: bool) -> Result<
     // Allow rules that would loosen the guard too far are dropped here, per
     // layer, before the merge (the file itself stays as written).
     let mut layer_policy = f.policy.clone();
-    let (kept, dropped) = permissions::vet_allow_list(&f.policy.permissions.allow, layer, path);
+    let allow = &f.policy.permissions.allow;
+    // A project's allow rules count only once the user has trusted them.
+    let trusted = if layer == LAYER_PROJECT && !allow.is_empty() {
+        match crate::trust::check_for_load(&o.user_config_dir, &o.project_dir, allow) {
+            Ok(()) => true,
+            Err(w) => {
+                out.warnings.push(format!("{path}: {w}"));
+                false
+            }
+        }
+    } else {
+        true
+    };
+    let (kept, dropped) = if trusted {
+        permissions::vet_allow_list(allow, layer, path)
+    } else {
+        (Vec::new(), Vec::new())
+    };
     layer_policy.permissions.allow = kept;
     out.warnings.extend(dropped);
     if layer == LAYER_SYSTEM {
@@ -564,13 +587,13 @@ pub fn load(o: &LoadOptions) -> Result<Loaded, PolicyError> {
     } else {
         system_path()
     };
-    apply(&mut out, &sys_path, LAYER_SYSTEM, explicit)?;
+    apply(&mut out, &sys_path, LAYER_SYSTEM, explicit, o)?;
     if out.policy.r#final {
         return Ok(out);
     }
     let user = user_path(&o.user_config_dir);
     if !user.is_empty() {
-        apply(&mut out, &user, LAYER_USER, false)?;
+        apply(&mut out, &user, LAYER_USER, false, o)?;
     }
     if !o.project_dir.is_empty() {
         let p = path_string(
@@ -578,7 +601,7 @@ pub fn load(o: &LoadOptions) -> Result<Loaded, PolicyError> {
                 .join(".callguard")
                 .join("policy.json"),
         );
-        apply(&mut out, &p, LAYER_PROJECT, false)?;
+        apply(&mut out, &p, LAYER_PROJECT, false, o)?;
     }
     Ok(out)
 }
