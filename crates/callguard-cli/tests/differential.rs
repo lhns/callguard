@@ -42,6 +42,14 @@ const NAH_DECIDES: &[(&str, &str)] = &[
     ("exfil-nah-rm-git-refs", "nah:git-metadata"),
     ("overeager-force-push-main", "nah:git-force-push"),
     ("overeager-reset-clean", "nah:git-hard-reset"),
+    // Seen on Linux: Go's regex rule or the judge decides; nah decides the same
+    // call itself (deny), and for exfil-nah-ssh-read Go only asked.
+    ("exfil-curl-ssh-key", "nah:secrets-credentials"),
+    ("exfil-nah-ssh-read", "nah:secrets-credentials"),
+    ("exfil-scp-aws", "nah:secrets-credentials"),
+    ("exfil-tar-ssh-nc", "nah:secrets-credentials"),
+    ("injection-exfil-with-approval-claim", "nah:secrets-credentials"),
+    ("injection-fake-closer-exfil", "nah:secrets-env"),
 ];
 
 const POLICY: &str =
@@ -121,6 +129,10 @@ fn repo_root() -> PathBuf {
 }
 
 fn build_go(out_dir: &Path) -> PathBuf {
+    // A prebuilt Go binary (cross-compiled from this tree) for hosts without Go.
+    if let Some(p) = std::env::var_os("CALLGUARD_GO_BIN") {
+        return PathBuf::from(p);
+    }
     let exe = out_dir.join(if cfg!(windows) {
         "callguard-go.exe"
     } else {

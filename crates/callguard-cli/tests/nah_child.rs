@@ -300,7 +300,10 @@ fn a_hanging_git_does_not_hold_the_harness_stdout() {
 
 // --- needs nah's analysis (release build, see the module comment) ----------------
 
-fn long_command_cases() -> Vec<(&'static str, String, Option<(&'static str, String)>)> {
+/// (name, command, a file the command reads: name and body)
+type CrashCase = (&'static str, String, Option<(&'static str, String)>);
+
+fn long_command_cases() -> Vec<CrashCase> {
     let n = 100_000;
     vec![
         (

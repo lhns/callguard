@@ -190,8 +190,11 @@ func main() {
 					Expected: r.Expected.Verdict, ExpectedGuard: r.Expected.Guard, MS: ms}
 				var o output
 				if strings.HasPrefix(cfg, "callguard:") {
-					o = callguardOutput(so.Bytes())
-				} else if err := json.Unmarshal(so.Bytes(), &o); err != nil || (o.Verdict == "" && o.Error == "") {
+					b, _ := json.Marshal(callguardOutput(so.Bytes()))
+					so.Reset()
+					so.Write(b)
+				}
+				if err := json.Unmarshal(so.Bytes(), &o); err != nil || (o.Verdict == "" && o.Error == "") {
 					rec.Error = fmt.Sprintf("unparseable (%v): %q %q", runErr, trunc(so.String()), trunc(se.String()))
 				} else {
 					rec.Verdict, rec.Coverage, rec.Refusals, rec.Warnings, rec.Failures, rec.Error =

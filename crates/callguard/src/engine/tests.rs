@@ -2174,7 +2174,7 @@ fn the_nah_request_carries_guards_and_a_deadline_inside_the_calls() {
     );
     let got = e.decide(&bash("go test"));
     let seen = spy.0.lock().unwrap()[0].clone();
-    assert_eq!(seen.guards["some-guard"], true);
+    assert!(seen.guards["some-guard"]);
     // The nah process never outlives the call's own deadline.
     assert!(seen.timeout_ms < 3000 && seen.timeout_ms > 1000, "{seen:?}");
     // A warning of the engine reaches the verdict.

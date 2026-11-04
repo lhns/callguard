@@ -93,11 +93,11 @@ fn effect(fact: &Value, resources: &BTreeMap<u64, Value>) -> Value {
     let mut details = Map::new();
     if let Value::Object(fields) = fields {
         for (name, value) in fields {
-            if name == "operation" {
-                if let Some(operation) = value.as_str() {
-                    kind = format!("{kind}/{operation}");
-                    continue;
-                }
+            if name == "operation"
+                && let Some(operation) = value.as_str()
+            {
+                kind = format!("{kind}/{operation}");
+                continue;
             }
             if RESOURCE_FIELDS.contains(&name.as_str()) {
                 let ids = match &value {
