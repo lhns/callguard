@@ -494,6 +494,30 @@ fn a_planted_filter_driver_does_not_run() {
     assert!(!marker.exists());
 }
 
+/// Outside a repository there is no filter to switch off, so the observation
+/// is not refused: no "filter drivers unreadable" warning, and the verdict is
+/// the one nah gives without a repository.
+#[test]
+#[ignore = "needs nah and git: cargo test --release -p callguard-cli -- --ignored"]
+fn a_command_outside_a_repository_has_no_filter_warning() {
+    let policy = r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":10000},"deadline_ms":11000}"#;
+    let sb = Sandbox::new(policy);
+    // The verdicts are those of the build before the gitlink listing.
+    for (command, want) in [
+        ("git reset --hard", ("deny", "nah")),
+        ("git checkout -- .", ("ask", "rules")),
+    ] {
+        let (_, v, _) = sb.decide(command, &[]);
+        assert!(!warnings(&v).contains("unreadable"), "{command}: {v}");
+        assert!(!warnings(&v).contains("nah skipped"), "{command}: {v}");
+        assert_eq!(
+            (decision(&v), v["layer"].as_str().unwrap()),
+            want,
+            "{command}: {v}"
+        );
+    }
+}
+
 /// A submodule's own filter (in `.git/modules/sub/config`, or `sub/.git/config`
 /// for an embedded repository) is not in the top-level config listing, and
 /// `git status` enters the submodule: neither the hook's own status probe nor

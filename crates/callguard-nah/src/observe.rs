@@ -150,10 +150,39 @@ fn plan(dir: &str) -> Result<Plan, String> {
                 .unwrap_or_else(|_| Err("git thread panicked".into())),
         )
     });
-    Ok(Plan {
-        overrides: overrides?,
-        gitlinks: gitlinks?,
-    })
+    match (overrides, gitlinks) {
+        (Ok(overrides), Ok(gitlinks)) => Ok(Plan {
+            overrides,
+            gitlinks,
+        }),
+        (o, g) => {
+            // Outside a work tree (no repository, a bare one, a directory that
+            // does not exist) `git status` cannot run a filter, and the
+            // listings fail on their own; that is no refusal. Anything else,
+            // such as a corrupt index inside a work tree, still is. (A corrupt
+            // index and a missing repository both exit 128, so the exit code
+            // cannot tell them apart.)
+            if inside_work_tree(dir, deadline) {
+                Err(o.err().or(g.err()).unwrap_or_default())
+            } else {
+                Ok(Plan {
+                    overrides: Vec::new(),
+                    gitlinks: false,
+                })
+            }
+        }
+    }
+}
+
+/// Whether git finds a work tree around `dir`.
+fn inside_work_tree(dir: &str, deadline: Instant) -> bool {
+    run(
+        &[],
+        "git",
+        &["-C", dir, "rev-parse", "--is-inside-work-tree"],
+        deadline.max(Instant::now() + GIT_TIMEOUT),
+    )
+    .is_ok_and(|out| String::from_utf8_lossy(&out).trim() == "true")
 }
 
 fn unavailable<T>() -> Observed<T> {
@@ -361,6 +390,32 @@ mod tests {
         // A new commit in the submodule moves the recorded gitlink: it is one.
         git(&repo.join("sub"), &["commit", "-qam", "two"]);
         assert!(tracked_changes(&repo));
+    }
+
+    #[test]
+    fn outside_a_work_tree_the_plan_is_plain_and_not_a_refusal() {
+        let dir = tempfile::tempdir().unwrap();
+        // An empty directory, a bare repository and a directory that is not there.
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let bare = dir.path().join("bare");
+        std::fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "-q", "--bare", "."]);
+        let missing = dir.path().join("missing");
+        for d in [&empty, &bare, &missing] {
+            let p = plan(d.to_str().unwrap())
+                .unwrap_or_else(|e| panic!("{}: refused: {e}", d.display()));
+            assert!(p.is_plain(), "{}", d.display());
+        }
+    }
+
+    #[test]
+    fn a_corrupt_index_inside_a_work_tree_is_still_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = with_gitlink(dir.path());
+        std::fs::write(repo.join(".git/index"), b"not an index").unwrap();
+        let err = plan(repo.to_str().unwrap()).err().expect("refused");
+        assert!(err.contains("git"), "{err}");
     }
 
     #[test]
