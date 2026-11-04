@@ -1536,6 +1536,7 @@ impl NahEngine for FakeNah {
                 coverage: coverage.into(),
                 facts: None,
                 warnings: Vec::new(),
+                calls: Vec::new(),
             })
         };
         match self.0 {
@@ -2148,6 +2149,7 @@ impl NahEngine for SpyNah {
             coverage: "full".into(),
             facts: None,
             warnings: vec!["nah: something worth knowing".into()],
+            calls: Vec::new(),
         })
     }
 }
@@ -2184,4 +2186,247 @@ fn the_nah_request_carries_guards_and_a_deadline_inside_the_calls() {
             .any(|w| w.contains("something worth knowing")),
         "{got:?}"
     );
+}
+
+// --- permission rules -----------------------------------------------------------------
+
+/// A nah that finds exactly the commands it is given, in `CWD`.
+struct CallsNah {
+    mode: NahMode,
+    calls: Vec<Vec<&'static str>>,
+}
+
+impl NahEngine for CallsNah {
+    fn decide(&self, req: &NahRequest) -> Result<NahResult, NahError> {
+        let mut res = FakeNah(self.mode).decide(req)?;
+        res.facts = Some(Facts {
+            source: "nah".into(),
+            coverage: res.coverage.clone(),
+            ..Default::default()
+        });
+        res.calls = self
+            .calls
+            .iter()
+            .map(|a| crate::nah::NahCall {
+                argv: Some(a.iter().map(|s| (*s).to_owned()).collect()),
+                program: a[0].to_owned(),
+                cwd: Some(CWD.into()),
+                via: String::new(),
+            })
+            .collect();
+        Ok(res)
+    }
+}
+
+fn perm_engine(
+    perms: (&[&str], &[&str], &[&str]),
+    mode: NahMode,
+    calls: &[&[&'static str]],
+    mutate: impl FnOnce(&mut Policy),
+) -> (Engine, Arc<Via>) {
+    let v = |l: &[&str]| l.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    new_test_engine(
+        test_policy(|p| {
+            p.permissions = policy::Permissions {
+                deny: v(perms.0),
+                ask: v(perms.1),
+                allow: v(perms.2),
+            };
+            mutate(p);
+        }),
+        Options {
+            nah_engine: Some(Arc::new(CallsNah {
+                mode,
+                calls: calls.iter().map(|c| c.to_vec()).collect(),
+            })),
+            ..Default::default()
+        },
+        Some(answer("ask", 0.9)),
+    )
+}
+
+#[test]
+fn a_permission_allow_skips_the_judge() {
+    let (e, via) = perm_engine(
+        (&[], &[], &["Bash(go test *)"]),
+        NahMode::Delegate,
+        &[&["go", "test", "./..."]],
+        no_mut,
+    );
+    let got = e.decide(&bash("go test ./..."));
+    assert!(
+        got.decision == Decision::Allow
+            && got.layer == LAYER_RULES
+            && got.rule == "Bash(go test *)"
+            && got.enforced,
+        "{got:?}"
+    );
+    assert_eq!(via.calls(), 0);
+    // Another command goes on to the judge.
+    let got = e.decide(&bash("go vet ./..."));
+    assert_eq!(got.layer, LAYER_LLM);
+}
+
+#[test]
+fn a_permission_allow_needs_a_real_complete_nah_answer() {
+    for (mode, mutate) in [
+        (NahMode::Fail, no_mut as fn(&mut Policy)),
+        (NahMode::DelegatePartial, no_mut),
+        (NahMode::Block, |p: &mut Policy| {
+            p.nah.as_mut().unwrap().mode = policy::MODE_SHADOW.into();
+        }),
+        (NahMode::Delegate, |p: &mut Policy| {
+            p.nah.as_mut().unwrap().enabled = Some(false);
+        }),
+    ] {
+        let (e, via) = perm_engine(
+            (&[], &[], &["Bash(go test *)"]),
+            mode,
+            &[&["go", "test"]],
+            mutate,
+        );
+        let got = e.decide(&bash("go test ./..."));
+        assert_eq!(got.layer, LAYER_LLM, "{got:?}");
+        assert_eq!(via.calls(), 1);
+    }
+}
+
+#[test]
+fn permission_denies_are_read_from_nah_calls() {
+    let (e, via) = perm_engine(
+        (&["Bash(git push:*)"], &["Bash(go test:*)"], &[]),
+        NahMode::Delegate,
+        &[&["git", "-C", "/x", "push"]],
+        no_mut,
+    );
+    let got = e.decide(&bash("git -C /x push"));
+    assert!(
+        got.decision == Decision::Deny
+            && got.layer == LAYER_RULES
+            && got.rule == "Bash(git push:*)",
+        "{got:?}"
+    );
+    assert_eq!(via.calls(), 0);
+    let (e, _) = perm_engine(
+        (&[], &["Bash(go test:*)"], &[]),
+        NahMode::Delegate,
+        &[&["go", "test"]],
+        no_mut,
+    );
+    let got = e.decide(&bash("go test"));
+    assert!(
+        got.decision == Decision::Ask && got.rule == "Bash(go test:*)",
+        "{got:?}"
+    );
+}
+
+#[test]
+fn the_stricter_decision_wins_and_a_regex_rule_wins_a_tie() {
+    let regex = |id: &str, decision: &str| {
+        rule(
+            id,
+            decision,
+            Match {
+                command: "go test".into(),
+                ..Default::default()
+            },
+        )
+    };
+    // Same decision: the regex rule's id is the verdict's.
+    let (e, _) = perm_engine(
+        (&[], &["Bash(go test:*)"], &[]),
+        NahMode::Delegate,
+        &[&["go", "test"]],
+        |p| p.rules.push(regex("r-ask", "ask")),
+    );
+    assert_eq!(e.decide(&bash("go test")).rule, "r-ask");
+    // A permission deny beats a regex allow and a regex ask.
+    for d in ["allow", "ask"] {
+        let (e, _) = perm_engine(
+            (&["Bash(go test:*)"], &[], &[]),
+            NahMode::Delegate,
+            &[&["go", "test"]],
+            |p| p.rules.push(regex("r", d)),
+        );
+        let got = e.decide(&bash("go test"));
+        assert!(
+            got.decision == Decision::Deny && got.rule == "Bash(go test:*)",
+            "{d}: {got:?}"
+        );
+    }
+    // A regex deny beats a permission allow; so does the default force-push ask.
+    let (e, _) = perm_engine(
+        (&[], &[], &["Bash(go test *)"]),
+        NahMode::Delegate,
+        &[&["go", "test"]],
+        |p| p.rules.push(regex("r-deny", "deny")),
+    );
+    assert_eq!(e.decide(&bash("go test")).rule, "r-deny");
+    let (e, _) = perm_engine(
+        (&[], &[], &["Bash(git push *)"]),
+        NahMode::Delegate,
+        &[&["git", "push", "--force"]],
+        no_mut,
+    );
+    let got = e.decide(&bash("git push --force"));
+    assert!(
+        got.decision == Decision::Ask && got.rule == "git-force-push",
+        "{got:?}"
+    );
+    // A permission ask beats the in-project read allow.
+    let (e, _) = perm_engine((&[], &["Read(*.md)"], &[]), NahMode::Delegate, &[], no_mut);
+    let got = e.decide(&call("Read", r#"{"file_path":"/w/p/README.md"}"#));
+    assert!(
+        got.decision == Decision::Ask && got.rule == "Read(*.md)",
+        "{got:?}"
+    );
+}
+
+#[test]
+fn builtins_and_nah_stay_ahead_of_permissions() {
+    let (e, _) = perm_engine(
+        (&[], &[], &["Bash(rm *)"]),
+        NahMode::Delegate,
+        &[&["rm", "-rf", "/"]],
+        no_mut,
+    );
+    assert_eq!(e.decide(&bash("rm -rf /")).layer, LAYER_BUILTIN);
+    let (e, _) = perm_engine(
+        (&[], &[], &["Bash(echo *)"]),
+        NahMode::Block,
+        &[&["echo", "hi"]],
+        no_mut,
+    );
+    assert_eq!(e.decide(&bash("echo hi")).layer, LAYER_NAH);
+}
+
+#[test]
+fn a_dropped_allow_rule_is_reported_in_the_verdict() {
+    let (e, _) = perm_engine(
+        (&[], &[], &["Bash(*)", "Bash(go test *)"]),
+        NahMode::Delegate,
+        &[&["go", "test"]],
+        no_mut,
+    );
+    let got = e.decide(&bash("go test"));
+    assert!(
+        got.warnings
+            .iter()
+            .any(|w| w.contains("\"Bash(*)\"") && w.contains("dropped")),
+        "{got:?}"
+    );
+    assert_eq!(got.rule, "Bash(go test *)");
+}
+
+#[test]
+fn an_unreadable_deny_rule_refuses_the_policy() {
+    let r = Engine::new(
+        test_policy(|p| p.permissions.deny.push("Agent(model:x)".into())),
+        Options {
+            log_path: "-".into(),
+            ..Default::default()
+        },
+    );
+    let err = r.err().expect("an invalid policy");
+    assert!(err.0.contains("permissions.deny[0]"), "{err}");
 }

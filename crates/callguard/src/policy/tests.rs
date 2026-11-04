@@ -559,3 +559,138 @@ fn nah_guards_can_only_be_enabled_by_user_and_project_layers() {
     assert!(w.contains("nah.guards.sys-on ignored"), "{w}");
     assert!(w.contains("nah.enabled ignored"), "{w}");
 }
+
+// --- permissions ----------------------------------------------------------------------
+
+#[test]
+fn empty_permissions_leave_the_rev_alone() {
+    let plain = default();
+    let mut empty = default();
+    empty.permissions = Permissions::default();
+    assert_eq!(rev(&plain), rev(&empty));
+    assert!(!canonical_json(&empty).contains("permissions"));
+    let parsed: Policy = serde_json::from_str(
+        r#"{"policy_version":1,"permissions":{"deny":[],"ask":null,"allow":[]}}"#,
+    )
+    .unwrap();
+    assert!(parsed.permissions.is_empty());
+    assert_eq!(
+        rev(&with_defaults(parsed)),
+        rev(&with_defaults(Policy::default()))
+    );
+    // Non-empty permissions do change it.
+    let mut some = default();
+    some.permissions.deny.push("Bash(rm:*)".into());
+    assert_ne!(rev(&some), rev(&plain));
+    assert!(canonical_json(&some).contains(r#""permissions":{"deny":["Bash(rm:*)"]}"#));
+}
+
+#[test]
+fn permissions_keys_follow_the_schema() {
+    let raw = br#"{"policy_version":1,"Permissions":{"Deny":["Bash(rm:*)"],"nope":1}}"#;
+    // Exact key names are the schema; the other letter cases are only read.
+    assert_eq!(unknown_keys(raw), ["Permissions"]);
+    assert_eq!(
+        unknown_keys(br#"{"policy_version":1,"permissions":{"deny":[],"nope":1}}"#),
+        ["permissions.nope"]
+    );
+    let d = tempfile::tempdir().unwrap();
+    let f = write(&d.path().join("p.json"), std::str::from_utf8(raw).unwrap());
+    let f = read_file(&f, LAYER_USER).unwrap();
+    assert_eq!(
+        f.policy.permissions.deny,
+        ["Bash(rm:*)"],
+        "keys match in any letter case"
+    );
+}
+
+#[test]
+fn a_deny_or_ask_rule_that_cannot_be_read_is_a_problem_of_its_file() {
+    let (_d, o) = layers(
+        r#"{"policy_version":1}"#,
+        r#"{"policy_version":1,"permissions":{"deny":["Agent(model:x)"],"ask":["Bash(git push"]}}"#,
+        "",
+    );
+    let l = load(&o).unwrap();
+    let problems = l.problems();
+    assert_eq!(problems.len(), 2, "{problems:?}");
+    assert!(problems[0].contains("permissions.deny[0]"), "{problems:?}");
+    assert!(problems[1].contains("permissions.ask[0]"), "{problems:?}");
+}
+
+#[test]
+fn layers_add_deny_and_ask_and_vet_allow() {
+    let sys = r#"{"policy_version":1,"permissions":{"deny":["Bash(rm:*)"],"allow":["Bash(ls *)","Bash(*)","Bash(python *)"]}}"#;
+    let user = r#"{"policy_version":1,"permissions":{"ask":["Bash(git push:*)"],"allow":["Bash(make:*)","WebFetch(domain:docs.rs)"]}}"#;
+    let proj = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"],"allow":["Bash(*)","Bash(make:*)","WebFetch(domain:evil.com)","Edit(~/.bashrc)","Bash(git log *)","Edit(src/**)"]}}"#;
+    let (_d, o) = layers(sys, user, proj);
+    let l = load(&o).unwrap();
+    assert!(l.problems().is_empty(), "{:?}", l.problems());
+    let p = &l.policy.permissions;
+    assert_eq!(p.deny, ["Bash(rm:*)", "Read(.env)"]);
+    assert_eq!(p.ask, ["Bash(git push:*)"]);
+    // The system layer drops blanket and interpreter allows; the user layer's
+    // `make:*` and web allow stand; the project layer keeps only what stays inside it.
+    assert_eq!(
+        p.allow,
+        [
+            "Bash(ls *)",
+            "Bash(make:*)",
+            "WebFetch(domain:docs.rs)",
+            "Bash(git log *)",
+            "Edit(src/**)"
+        ]
+    );
+    let dropped: Vec<&String> = l
+        .warnings
+        .iter()
+        .filter(|w| w.contains("permissions.allow"))
+        .collect();
+    assert_eq!(dropped.len(), 6, "{dropped:?}");
+    for rule in [
+        "\"Bash(*)\"",
+        "\"Bash(python *)\"",
+        "\"Bash(make:*)\"",
+        "\"WebFetch(domain:evil.com)\"",
+        "\"Edit(~/.bashrc)\"",
+    ] {
+        assert!(
+            dropped.iter().any(|w| w.contains(rule)),
+            "{rule}: {dropped:?}"
+        );
+    }
+    assert!(
+        dropped
+            .iter()
+            .any(|w| w.contains("system.json") && w.contains("\"Bash(*)\"")),
+        "{dropped:?}"
+    );
+}
+
+#[test]
+fn a_project_with_only_loosening_rules_allows_nothing() {
+    let proj = r#"{"policy_version":1,"permissions":{"allow":["Bash(*)","Bash(make:*)","WebFetch(domain:evil.com)","Edit(~/.bashrc)"]}}"#;
+    let (_d, o) = layers(r#"{"policy_version":1}"#, "", proj);
+    let l = load(&o).unwrap();
+    assert!(
+        l.policy.permissions.allow.is_empty(),
+        "{:?}",
+        l.policy.permissions
+    );
+    assert_eq!(l.warnings.len(), 4, "{:?}", l.warnings);
+    // The same make rule in the user layer is honoured.
+    let (_d, o) = layers(
+        r#"{"policy_version":1}"#,
+        r#"{"policy_version":1,"permissions":{"allow":["Bash(make:*)"]}}"#,
+        "",
+    );
+    assert_eq!(load(&o).unwrap().policy.permissions.allow, ["Bash(make:*)"]);
+}
+
+#[test]
+fn final_still_stops_the_merge_for_permissions() {
+    let sys = r#"{"policy_version":1,"final":true,"permissions":{"deny":["Bash(rm:*)"]}}"#;
+    let user = r#"{"policy_version":1,"permissions":{"deny":["Bash(ls:*)"]}}"#;
+    let (_d, o) = layers(sys, user, "");
+    assert_eq!(load(&o).unwrap().policy.permissions.deny, ["Bash(rm:*)"]);
+}

@@ -1,0 +1,683 @@
+//! Permission rules in Claude Code's syntax (`Bash(git push:*)`,
+//! `Read(~/.ssh/**)`, `WebFetch(domain:example.com)`, `mcp__server__tool`),
+//! matched on nah's parse where there is one.
+//!
+//! Deny and ask look for a match anywhere: in any call nah found, and in the
+//! raw text whenever the parse has a hole. Allow is the opposite: it needs nah
+//! and an independent lexer to agree that every command of the call is one the
+//! rules name, with nothing around them (assignments, redirects, expansions)
+//! that argv would hide. Anything else goes on to the judge.
+//!
+//! Where this differs from Claude's documentation:
+//! - Specs match argv tokens, never joined text. Deny and ask also match a call
+//!   whose program is given by path or whose git global options come first
+//!   (`git -C . push`), which Claude's rule does not.
+//! - Allow is stricter: wrappers (`timeout`, `env`, `cd x &&`), assignments,
+//!   redirects and expansions send the call to the judge, programs compare
+//!   literally, and a long list of open-ended programs and blanket patterns is
+//!   dropped in every layer (the project layer has more limits).
+//! - `Write`, `NotebookEdit` and `MultiEdit` rules mean `Edit`; `Grep`, `Glob`
+//!   and `LS` mean `Read`. Claude accepts them and never matches.
+//! - `/x` anchors at the project directory in every layer (Claude: at the
+//!   settings source). `!` negation is not supported.
+//! - A deny or ask rule that cannot be read fails the policy (Claude skips it),
+//!   including `Bash(command:...)` and `Tool(param:value)`.
+//! - A backslash in a spec is a path separator unless it escapes a quote or a
+//!   space; quoting a `*` does not make it literal.
+//! - Hosts are read by this module, not by a URL parser: allow takes only the
+//!   plain `http(s)://host[:port]/` shape, deny and ask test every host a
+//!   tricky URL could mean.
+//! - Limits shared with Claude: path rules cover tool calls, not what a shell
+//!   command reads or writes. A call with no path (opencode `patch`) matches
+//!   only a bare `Edit`; a relative path with no working directory matches
+//!   no path rule.
+
+mod lexer;
+mod paths;
+mod spec;
+mod web;
+
+use crate::nah::{NahResult, NahVerdict};
+use crate::policy::{self, go_quote};
+use crate::rules::{
+    Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, PATH_KEYS, RulesError, field_values,
+    kind_of,
+};
+
+use paths::{Ctx, PathSpec};
+use spec::{Spec, Tok, prog_name};
+use web::{Domain, Mcp};
+
+const WEBFETCH_TOOLS: [&str; 3] = ["WebFetch", "webfetch", "web_extract"];
+const WEBSEARCH_TOOLS: [&str; 3] = ["WebSearch", "websearch", "web_search"];
+/// The only shell tools an allow rule can match.
+const ALLOW_SHELL_TOOLS: [&str; 3] = ["Bash", "bash", "terminal"];
+
+/// A rule read from its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Rule {
+    /// `Bash`, `Bash(spec)`, `PowerShell`, `PowerShell(spec)`.
+    Shell {
+        powershell: bool,
+        spec: Option<Spec>,
+    },
+    /// `Read(path)` and friends (`write` false), `Edit(path)` and friends.
+    Path {
+        write: bool,
+        spec: Option<PathSpec>,
+    },
+    /// `WebFetch`, `WebFetch(domain:host)`.
+    Fetch {
+        domain: Option<Domain>,
+    },
+    /// Bare `WebSearch`.
+    Search,
+    Mcp(Mcp),
+    /// Any other bare name: that tool, exactly.
+    Tool(String),
+}
+
+/// Reads one rule. The error says what is wrong with it.
+pub(crate) fn parse(text: &str) -> Result<Rule, String> {
+    let text = text.trim();
+    let (name, spec) = match text.split_once('(') {
+        Some((n, rest)) => match rest.strip_suffix(')') {
+            Some(s) => (n.trim(), Some(s)),
+            None => return Err("missing closing parenthesis".into()),
+        },
+        None => (text, None),
+    };
+    if name.is_empty() {
+        return Err("no tool name".into());
+    }
+    if name.starts_with("mcp__") {
+        if spec.is_some() {
+            return Err("an mcp__ rule takes no parentheses".into());
+        }
+        return Ok(Rule::Mcp(Mcp::parse(name)?));
+    }
+    let write_family = ["Edit", "Write", "NotebookEdit", "MultiEdit"];
+    let read_family = ["Read", "Grep", "Glob", "LS"];
+    match (name, spec) {
+        ("Bash" | "PowerShell", s) => Ok(Rule::Shell {
+            powershell: name == "PowerShell",
+            spec: s.map(Spec::parse).transpose()?,
+        }),
+        (n, s) if write_family.contains(&n) || read_family.contains(&n) => Ok(Rule::Path {
+            write: write_family.contains(&n),
+            spec: s.map(PathSpec::parse).transpose()?,
+        }),
+        ("WebFetch", s) => Ok(Rule::Fetch {
+            domain: s.map(Domain::parse).transpose()?,
+        }),
+        ("WebSearch", None) => Ok(Rule::Search),
+        (_, Some(_)) => Err(format!("{name}(...) rules are not supported")),
+        (n, None) => {
+            if n.contains(|c: char| c.is_whitespace() || c == '*' || c == ')') {
+                return Err(format!("{n:?} is not a tool name"));
+            }
+            Ok(Rule::Tool(n.to_owned()))
+        }
+    }
+}
+
+// --- Dropping allow rules that loosen too far ----------------------------------
+
+/// Programs that run what their arguments say: a wildcard allow for one of
+/// these is an allow for everything.
+const OPEN_ENDED: &[&str] = &[
+    "bash",
+    "sh",
+    "zsh",
+    "dash",
+    "fish",
+    "ksh",
+    "csh",
+    "tcsh",
+    "pwsh",
+    "powershell",
+    "cmd",
+    "python",
+    "python2",
+    "python3",
+    "py",
+    "pypy",
+    "node",
+    "deno",
+    "bun",
+    "ruby",
+    "perl",
+    "php",
+    "lua",
+    "rscript",
+    "tclsh",
+    "osascript",
+    "env",
+    "sudo",
+    "su",
+    "doas",
+    "xargs",
+    "parallel",
+    "find",
+    "fd",
+    "watch",
+    "setsid",
+    "ionice",
+    "flock",
+    "nohup",
+    "nice",
+    "timeout",
+    "time",
+    "stdbuf",
+    "exec",
+    "eval",
+    "command",
+    "builtin",
+    "source",
+    ".",
+    "chroot",
+    "unshare",
+    "nsenter",
+    "strace",
+    "ltrace",
+    "gdb",
+    "script",
+    "ssh",
+    "scp",
+    "sftp",
+    "rsync",
+    "curl",
+    "wget",
+    "nc",
+    "ncat",
+    "netcat",
+    "socat",
+    "telnet",
+    "ftp",
+    "awk",
+    "gawk",
+    "sed",
+    "ed",
+    "ex",
+    "vi",
+    "vim",
+    "nvim",
+    "emacs",
+    "tee",
+    "dd",
+    "npx",
+    "devbox",
+    "direnv",
+    "mise",
+    "nix",
+];
+
+/// Tools whose subcommand decides what they do: the wildcard must come after it.
+const SUBCOMMAND_TOOLS: &[&str] = &[
+    "git", "gh", "docker", "podman", "kubectl", "npm", "yarn", "pnpm", "cargo", "go",
+];
+
+/// Programs that run code from the repository.
+const REPO_RUNNERS: &[&str] = &[
+    "make", "cmake", "ninja", "just", "rake", "gradle", "gradlew", "mvn", "mvnw", "ant", "npm",
+    "yarn", "pnpm", "cargo", "go", "dotnet", "pytest", "tox", "nox", "pip", "pipx", "uv", "poetry",
+    "composer", "bundle", "mix",
+];
+
+/// Reads an allow rule and refuses the ones that loosen the guard too far.
+/// `layer` is the policy layer that wrote it; None applies only the limits
+/// every layer shares. The error is the reason, for the warning.
+pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String> {
+    let rule = parse(text).map_err(|e| format!("cannot be read: {e}"))?;
+    let project = layer == Some(policy::LAYER_PROJECT);
+    let blocked = |why: &str| Err(why.to_owned());
+    match &rule {
+        Rule::Shell {
+            powershell: true, ..
+        } => return blocked("PowerShell allow rules are not honoured"),
+        Rule::Shell { spec: None, .. } => return blocked("a bare Bash rule allows every command"),
+        Rule::Shell { spec: Some(s), .. } => {
+            let Tok::Lit(first) = s.first() else {
+                return blocked("the first word is a wildcard");
+            };
+            let name = prog_name(first, true);
+            if OPEN_ENDED.contains(&name.as_str()) && s.has_wildcard() {
+                return Err(format!("{name} with a wildcard runs whatever it is given"));
+            }
+            if SUBCOMMAND_TOOLS.contains(&name.as_str())
+                && s.has_wildcard()
+                && !matches!(s.toks.get(1), Some(Tok::Lit(w)) if !w.starts_with(['-', '+']))
+            {
+                return Err(format!("a wildcard may not come right after {name}"));
+            }
+            if project {
+                if first.contains(['/', '\\']) {
+                    return blocked("a project may not allow a program by path");
+                }
+                if REPO_RUNNERS.contains(&name.as_str()) && s.has_wildcard() {
+                    return Err(format!("a project may not allow {name} with a wildcard"));
+                }
+            }
+        }
+        Rule::Path { spec: None, .. } => return blocked("a bare file rule allows every path"),
+        Rule::Path { spec: Some(s), .. } => {
+            if s.is_blanket() {
+                return blocked("the pattern allows every path under its anchor");
+            }
+            if project
+                && (matches!(s.anchor, paths::Anchor::Abs | paths::Anchor::Home) || s.has_dotdot())
+            {
+                return blocked("a project may only allow paths inside itself");
+            }
+            if project
+                && s.rest.split('/').any(|seg| {
+                    matches!(
+                        seg,
+                        ".git" | ".claude" | ".callguard" | ".hermes" | ".opencode" | ".pi"
+                    )
+                })
+            {
+                return blocked("a project may not allow paths in hook, policy or VCS directories");
+            }
+        }
+        Rule::Fetch { domain: None } => return blocked("a bare WebFetch rule allows every URL"),
+        Rule::Fetch { domain: Some(d) } if d.is_blanket() => {
+            return blocked("the domain pattern matches every host");
+        }
+        Rule::Tool(n) if matches!(kind_of(n), KIND_SHELL | KIND_READ | KIND_WRITE | KIND_FETCH) => {
+            return blocked("name the tool with its pattern, such as Bash(...) or Read(...)");
+        }
+        _ => {}
+    }
+    if project && !matches!(rule, Rule::Shell { .. } | Rule::Path { .. }) {
+        return blocked("a project may only allow Bash, Read and Edit rules");
+    }
+    Ok(rule)
+}
+
+/// The allow rules of one policy layer that survive [`vet_allow`], and a
+/// warning for each that does not.
+pub fn vet_allow_list(allow: &[String], layer: &str, src: &str) -> (Vec<String>, Vec<String>) {
+    let (mut kept, mut warns) = (Vec::new(), Vec::new());
+    for r in allow {
+        match vet_allow(r, Some(layer)) {
+            Ok(_) => kept.push(r.clone()),
+            Err(why) => warns.push(format!(
+                "{src}: permissions.allow {} dropped: {why}",
+                go_quote(r)
+            )),
+        }
+    }
+    (kept, warns)
+}
+
+// --- The compiled set ----------------------------------------------------------------
+
+struct Entry {
+    text: String,
+    rule: Rule,
+}
+
+/// Resolves symlinks: a normalized path in, its real location in POSIX form.
+type Resolver = Box<dyn Fn(&Env, &str) -> Option<String> + Send + Sync>;
+
+/// A permission rule that fired. `decision` is "deny", "ask" or "allow".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hit {
+    pub decision: &'static str,
+    pub rule: String,
+    pub reason: String,
+}
+
+/// The compiled `permissions` of a policy.
+pub struct Permissions {
+    deny: Vec<Entry>,
+    ask: Vec<Entry>,
+    allow: Vec<Entry>,
+    env: Env,
+    resolver: Resolver,
+}
+
+impl std::fmt::Debug for Permissions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Permissions")
+            .field("deny", &self.deny.len())
+            .field("ask", &self.ask.len())
+            .field("allow", &self.allow.len())
+            .finish()
+    }
+}
+
+impl Permissions {
+    /// Compiles the rules. A deny or ask rule that cannot be read is an error;
+    /// an allow rule that cannot be read, or that loosens too far, is dropped
+    /// and reported in the second value.
+    pub fn compile(
+        p: &policy::Permissions,
+        env: &Env,
+    ) -> Result<(Permissions, Vec<String>), RulesError> {
+        let mut out = Permissions {
+            deny: Vec::new(),
+            ask: Vec::new(),
+            allow: Vec::new(),
+            env: env.clone(),
+            resolver: Box::new(paths::resolve),
+        };
+        for (key, list, dst) in [
+            ("deny", &p.deny, &mut out.deny),
+            ("ask", &p.ask, &mut out.ask),
+        ] {
+            for (i, text) in list.iter().enumerate() {
+                let rule = parse(text).map_err(|e| {
+                    RulesError(format!("permissions.{key}[{i}] {}: {e}", go_quote(text)))
+                })?;
+                dst.push(Entry {
+                    text: text.trim().to_owned(),
+                    rule,
+                });
+            }
+        }
+        let mut warns = Vec::new();
+        for text in &p.allow {
+            match vet_allow(text, None) {
+                Ok(rule) => out.allow.push(Entry {
+                    text: text.trim().to_owned(),
+                    rule,
+                }),
+                Err(why) => warns.push(format!(
+                    "permissions.allow {} dropped: {why}",
+                    go_quote(text)
+                )),
+            }
+        }
+        Ok((out, warns))
+    }
+
+    /// Replaces the symlink resolver (tests).
+    #[cfg(test)]
+    fn with_resolver(mut self, r: Resolver) -> Permissions {
+        self.resolver = r;
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
+    }
+
+    /// The rule that decides `call`: the first deny, else the first ask, else
+    /// an allow. `nah` is nah's result for this very call, if it gave one.
+    pub fn check(&self, call: &Call, nah: Option<&NahResult>) -> Option<Hit> {
+        let hit = |decision, e: &Entry| Hit {
+            decision,
+            rule: e.text.clone(),
+            reason: format!("permission rule {}", e.text),
+        };
+        if let Some(e) = self.deny.iter().find(|e| self.matches(e, call, nah)) {
+            return Some(hit("deny", e));
+        }
+        if let Some(e) = self.ask.iter().find(|e| self.matches(e, call, nah)) {
+            return Some(hit("ask", e));
+        }
+        self.allowed(call, nah).map(|text| Hit {
+            decision: "allow",
+            reason: format!("permission rule {text}"),
+            rule: text,
+        })
+    }
+
+    // --- deny and ask ---
+
+    fn matches(&self, e: &Entry, call: &Call, nah: Option<&NahResult>) -> bool {
+        match &e.rule {
+            Rule::Shell { powershell, spec } => {
+                call.kind == KIND_SHELL
+                    && (!powershell || call.tool == "PowerShell")
+                    && spec
+                        .as_ref()
+                        .is_none_or(|s| s.is_blanket() || self.shell_match(s, call, nah))
+            }
+            Rule::Path { write, spec } => {
+                call.kind == if *write { KIND_WRITE } else { KIND_READ }
+                    && spec
+                        .as_ref()
+                        .is_none_or(|s| self.path_match(s, call, false))
+            }
+            Rule::Fetch { domain } => {
+                WEBFETCH_TOOLS.contains(&call.tool.as_str())
+                    && domain.as_ref().is_none_or(|d| {
+                        let urls = urls_of(call);
+                        urls.is_empty()
+                            || urls.iter().any(|u| {
+                                let hosts = web::candidate_hosts(u);
+                                hosts.is_empty() || hosts.iter().any(|h| d.matches(h))
+                            })
+                    })
+            }
+            Rule::Search => WEBSEARCH_TOOLS.contains(&call.tool.as_str()),
+            Rule::Mcp(m) => m.matches(&call.tool),
+            Rule::Tool(n) => call.tool == *n,
+        }
+    }
+
+    /// A shell rule for deny or ask: any command nah found, else the raw text
+    /// when the parse has a hole.
+    fn shell_match(&self, spec: &Spec, call: &Call, nah: Option<&NahResult>) -> bool {
+        let caseless = self.env.caseless();
+        if let Some(n) = nah {
+            for c in &n.calls {
+                if let Some(argv) = c.argv.as_ref().filter(|a| !a.is_empty())
+                    && spec::matches_call(spec, argv, caseless)
+                {
+                    return true;
+                }
+            }
+        }
+        parse_has_hole(call, nah) && spec::matches_raw(spec, &call.command, caseless)
+    }
+
+    fn ctx(&self, call: &Call) -> Ctx {
+        let cwd = paths::dir_posix(&self.env, &call.cwd);
+        let project = paths::dir_posix(&self.env, &call.project_dir).or_else(|| cwd.clone());
+        Ctx {
+            home: paths::dir_posix(&self.env, &self.env.home).unwrap_or_default(),
+            cwd,
+            project,
+            caseless: self.env.caseless(),
+        }
+    }
+
+    /// The distinct path values of the call as the host wrote them.
+    fn raw_paths(&self, call: &Call) -> Vec<String> {
+        let mut vals: Vec<String> = Vec::new();
+        for k in PATH_KEYS {
+            for v in field_values(&call.fields, k) {
+                if !vals.contains(&v) {
+                    vals.push(v);
+                }
+            }
+        }
+        if vals.is_empty() && call.kind == KIND_READ && !call.cwd.is_empty() {
+            vals.push(call.cwd.clone()); // Glob, Grep and LS default to the working directory
+        }
+        vals
+    }
+
+    /// A path rule. Deny and ask match if any path value, requested or
+    /// resolved, matches. Allow needs one value, and both forms must match.
+    fn path_match(&self, spec: &PathSpec, call: &Call, allow: bool) -> bool {
+        let raw = self.raw_paths(call);
+        if raw.is_empty() || (allow && raw.len() != 1) {
+            return false;
+        }
+        if allow && !self.read_globs_ok(call) {
+            return false;
+        }
+        let ctx = self.ctx(call);
+        for r in &raw {
+            if allow && paths::is_network(&self.env, r) {
+                return false;
+            }
+            let norm = self.env.normalize(r, &call.cwd);
+            let requested = spec.matches(&paths::to_posix(&self.env, &norm), &ctx, allow);
+            let resolved = (self.resolver)(&self.env, &norm);
+            let real = resolved
+                .as_ref()
+                .is_some_and(|p| spec.matches(p, &ctx, allow));
+            let hit = if allow {
+                requested && real
+            } else {
+                requested || real
+            };
+            if hit {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// A read tool's `pattern` or `glob` may reach outside the path: refuse an
+    /// allow when it is absolute, starts with `~` or climbs with `..`.
+    fn read_globs_ok(&self, call: &Call) -> bool {
+        if call.kind != KIND_READ {
+            return true;
+        }
+        ["pattern", "glob"].iter().all(|k| {
+            field_values(&call.fields, k).iter().all(|v| {
+                let b = v.as_bytes();
+                !(v.starts_with(['/', '\\', '~'])
+                    || v.contains("..")
+                    || (b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()))
+            })
+        })
+    }
+
+    // --- allow ---
+
+    /// The text of the allow rule that lets `call` pass, if one does.
+    fn allowed(&self, call: &Call, nah: Option<&NahResult>) -> Option<String> {
+        if self.allow.is_empty() {
+            return None;
+        }
+        if call.kind == KIND_SHELL {
+            return self.allowed_shell(call, nah);
+        }
+        self.allow
+            .iter()
+            .find(|e| match &e.rule {
+                Rule::Path { write, spec } => {
+                    call.kind == if *write { KIND_WRITE } else { KIND_READ }
+                        && spec
+                            .as_ref()
+                            .is_some_and(|s| self.path_match(s, call, true))
+                }
+                Rule::Fetch { domain: Some(d) } => {
+                    WEBFETCH_TOOLS.contains(&call.tool.as_str()) && {
+                        let urls = urls_of(call);
+                        urls.len() == 1 && web::strict_host(&urls[0]).is_some_and(|h| d.matches(&h))
+                    }
+                }
+                Rule::Search => WEBSEARCH_TOOLS.contains(&call.tool.as_str()),
+                Rule::Mcp(m) => m.matches(&call.tool),
+                Rule::Tool(n) => call.tool == *n,
+                Rule::Shell { .. } | Rule::Fetch { domain: None } => false,
+            })
+            .map(|e| e.text.clone())
+    }
+
+    /// A shell command is allowed only if nah and the independent lexer both
+    /// find nothing but commands the allow rules name, literally.
+    fn allowed_shell(&self, call: &Call, nah: Option<&NahResult>) -> Option<String> {
+        if !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str()) {
+            return None;
+        }
+        // A real, complete answer of nah for this call.
+        let n = nah?;
+        if n.verdict != NahVerdict::Delegate
+            || n.coverage != "full"
+            || n.facts.as_ref().is_none_or(|f| !f.gaps.is_empty())
+            || n.calls.is_empty()
+        {
+            return None;
+        }
+        let specs: Vec<(&Entry, &Spec)> = self
+            .allow
+            .iter()
+            .filter_map(|e| match &e.rule {
+                Rule::Shell {
+                    powershell: false,
+                    spec: Some(s),
+                } => Some((e, s)),
+                _ => None,
+            })
+            .collect();
+        let literal = |argv: &[String]| {
+            specs.iter().find(|(_, s)| {
+                let mut work = spec::WORK_LIMIT;
+                s.matches(argv, None, false, false, &mut work)
+            })
+        };
+        let want = self.env.fold(&self.env.normalize(&call.cwd, ""));
+        if call.cwd.is_empty() {
+            return None;
+        }
+        let mut first = None;
+        for c in &n.calls {
+            let argv = c.argv.as_ref().filter(|a| !a.is_empty())?;
+            let cwd = c.cwd.as_deref().filter(|c| !c.is_empty())?;
+            if self.env.fold(&self.env.normalize(cwd, "")) != want {
+                return None;
+            }
+            let (e, _) = literal(argv)?;
+            first.get_or_insert(e);
+        }
+        // The second parser. One spelling of the command only: we cannot know
+        // which one the harness runs.
+        if call.raw_commands.len() != 1 {
+            return None;
+        }
+        for seg in lexer::split(&call.raw_commands[0])? {
+            literal(&seg)?;
+        }
+        first.map(|e| e.text.clone())
+    }
+}
+
+/// Whether nah's parse of `call` leaves something unseen, so that deny and ask
+/// must also look at the raw text.
+fn parse_has_hole(call: &Call, nah: Option<&NahResult>) -> bool {
+    let Some(n) = nah else {
+        return true;
+    };
+    !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str())
+        || n.coverage != "full"
+        || n.facts.as_ref().is_none_or(|f| !f.gaps.is_empty())
+        || n.calls.is_empty()
+        || n.calls
+            .iter()
+            .any(|c| c.argv.as_ref().is_none_or(Vec::is_empty))
+}
+
+/// The distinct URLs of a fetch call: the `url` field in any letter case, and
+/// the strings of a `urls` list.
+fn urls_of(call: &Call) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |u: String| {
+        if !u.is_empty() && !out.contains(&u) {
+            out.push(u);
+        }
+    };
+    for (k, v) in &call.fields {
+        let k = k.to_ascii_lowercase();
+        if k != "url" && k != "urls" {
+            continue;
+        }
+        match serde_json::from_str::<Vec<String>>(v) {
+            Ok(list) => list.into_iter().for_each(&mut add),
+            Err(_) => add(v.clone()),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests;

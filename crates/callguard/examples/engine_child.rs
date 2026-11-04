@@ -20,6 +20,7 @@ impl NahEngine for Fake {
             coverage: "full".into(),
             facts: None,
             warnings: Vec::new(),
+            calls: Vec::new(),
         })
     }
 }

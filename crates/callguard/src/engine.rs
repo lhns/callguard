@@ -21,6 +21,7 @@ use crate::fallback::{fallback_verdict, new_id};
 use crate::hostmeta::{self, Meta};
 use crate::judge::{self, JudgeError, JudgeResult};
 use crate::nah::{NahEngine, NahRequest, NahResult, NahVerdict};
+use crate::permissions::Permissions;
 use crate::policy::{self, Policy, go_quote};
 use crate::rules::{self, Builtin, Call, CallInput, Env, Set, input_string_field};
 use crate::schema::{
@@ -85,6 +86,7 @@ struct Inner {
     env: Env,
     builtin: Builtin,
     rules: Set,
+    perms: Permissions,
     /// None when logging is off.
     logger: Option<declog::Logger>,
     nah: Arc<dyn NahEngine>,
@@ -224,7 +226,7 @@ impl Engine {
     /// Builds an engine from an already merged policy. Unset settings take their
     /// defaults; rules are used as given (use `policy::default()` for the
     /// default rules).
-    pub fn new(pol: Policy, opts: Options) -> Result<Engine, EngineError> {
+    pub fn new(pol: Policy, mut opts: Options) -> Result<Engine, EngineError> {
         let mut pol = policy::with_defaults(pol);
         if opts.llm_timeout_ms > 0 {
             if let Some(llm) = pol.llm.as_mut() {
@@ -242,6 +244,9 @@ impl Engine {
         let env = Env::host();
         let set = Set::compile(&pol.rules, &env)
             .map_err(|e| EngineError(format!("invalid policy: {e}")))?;
+        let (perms, perm_warnings) = Permissions::compile(&pol.permissions, &env)
+            .map_err(|e| EngineError(format!("invalid policy: {e}")))?;
+        opts.warnings.extend(perm_warnings);
         let builtin = Builtin::new(env.clone(), &pol.disable_builtin, &opts.protect_paths)
             .map_err(|e| EngineError(e.to_string()))?;
         let probe: Option<ProbeFn> = if opts.no_host_meta {
@@ -264,6 +269,7 @@ impl Engine {
                 env,
                 builtin,
                 rules: set,
+                perms,
                 logger,
                 nah,
                 judge: Box::new(|b, cfg, input, deadline| judge::judge(b, cfg, input, deadline)),
@@ -399,6 +405,7 @@ fn no_parse(cause: &str) -> NahResult {
             ..Default::default()
         }),
         warnings: Vec::new(),
+        calls: Vec::new(),
     }
 }
 
@@ -572,14 +579,35 @@ impl Inner {
             }
         }
 
-        // 2 rules
-        if let Some(r) = self.rules.match_call(&call) {
-            let reason = if r.description.is_empty() {
-                format!("policy rule {}", r.id)
-            } else {
-                r.description.clone()
-            };
-            let mut out = decided(&r.decision, LAYER_RULES, &r.id, &reason);
+        // 2 rules: the regex rules and the permission rules, the stricter
+        // decision wins and a regex rule wins a tie.
+        let regex_hit = self.rules.match_call(&call);
+        let perm_hit = self.perms.check(&call, nah_res.as_ref());
+        let rank = |d: &str| match d {
+            "deny" => 3,
+            "ask" => 2,
+            "allow" => 1,
+            _ => 0,
+        };
+        let perm_wins = match (&regex_hit, &perm_hit) {
+            (Some(r), Some(p)) => rank(p.decision) > rank(&r.decision),
+            (None, Some(_)) => true,
+            _ => false,
+        };
+        let verdict = match (regex_hit, perm_hit) {
+            (_, Some(p)) if perm_wins => Some((p.decision.to_owned(), p.rule, p.reason)),
+            (Some(r), _) => {
+                let reason = if r.description.is_empty() {
+                    format!("policy rule {}", r.id)
+                } else {
+                    r.description.clone()
+                };
+                Some((r.decision, r.id, reason))
+            }
+            _ => None,
+        };
+        if let Some((decision, rule, reason)) = verdict {
+            let mut out = decided(&decision, LAYER_RULES, &rule, &reason);
             out.warnings = warns;
             out.shadow = shadow;
             return out;

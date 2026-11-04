@@ -168,6 +168,7 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
     let coverage = text("coverage");
     let graph = graph::graph_facts(&result, &observations.borrow());
     let mapped = facts::map(&graph, names.clone(), &coverage);
+    let calls = facts::calls(&graph);
 
     warnings.append(&mut observe_warnings.borrow_mut());
     // nah's own warnings ("analysis is incomplete") stay out of the verdict:
@@ -179,6 +180,7 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
         coverage,
         facts: Some(mapped),
         warnings,
+        calls,
     })
 }
 

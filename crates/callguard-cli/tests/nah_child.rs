@@ -659,3 +659,287 @@ fn real_facts_reach_the_judge() {
     );
     assert!(!recorded.contains("\"coverage\":\"none\""), "{recorded}");
 }
+
+// --- permission rules in Claude's syntax (Phase 3) ------------------------------------
+
+fn perm_policy(perms: Value) -> String {
+    serde_json::json!({
+        "policy_version": 1,
+        "llm": {"enabled": false},
+        "nah": {"timeout_ms": 10000, "budget_ms": 2000},
+        "deadline_ms": 11000,
+        "permissions": perms,
+    })
+    .to_string()
+}
+
+/// `bash -c '...'` nested `layers` times around `inner`.
+fn nested_bash(layers: usize, inner: &str) -> String {
+    let mut cmd = inner.to_owned();
+    for _ in 0..layers {
+        cmd = format!("bash -c '{}'", cmd.replace('\'', "'\\''"));
+    }
+    cmd
+}
+
+impl Sandbox {
+    /// `decide` for a tool input given as JSON text, with optional host facts.
+    fn decide_input(
+        &self,
+        input: &str,
+        facts: Option<&str>,
+        extra: &[&str],
+    ) -> (i32, Value, Duration) {
+        let mut args = vec!["decide", "--no-user-policy", "--log", "-"];
+        args.extend_from_slice(extra);
+        let policy = self.policy.to_string_lossy().into_owned();
+        args.extend_from_slice(&["--policy", &policy]);
+        let mut req = serde_json::json!({
+            "harness": "claude", "cwd": self.proj_str(),
+            "tool": {"name": "Bash", "input": serde_json::from_str::<Value>(input).unwrap()},
+        });
+        if let Some(f) = facts {
+            req["facts"] = serde_json::from_str(f).unwrap();
+        }
+        let t = Instant::now();
+        let (code, out) = run(self.command(&args), &req.to_string());
+        let v = serde_json::from_str(&out).unwrap_or_else(|e| panic!("{e}: {out:?}"));
+        (code, v, t.elapsed())
+    }
+}
+
+/// Whether a permission rule allowed the call.
+fn allowed_by_rule(v: &Value) -> bool {
+    decision(v) == "allow" && v["layer"] == "rules"
+}
+
+/// What the `__engine` child makes of a command, for the tests that must not
+/// guess: (verdict, coverage, calls).
+fn commands_that_stay_out() -> Vec<String> {
+    let mut v: Vec<String> = [
+        "git status >> ~/.bashrc",
+        "git log $X",
+        "bash -c \"git status\"",
+        "bash -c \"rm x\"",
+        "rm ~/x",
+        "rm \"$HOME/x\"",
+        "git $X",
+        "FOO=1 git status",
+        "GIT_SSH_COMMAND=evil git status",
+        "LD_PRELOAD=x git status",
+        "git status > /tmp/out",
+        "alias git=rm; git status",
+        "cd /tmp && git status",
+        "git status &",
+        "git status && echo hi",
+        "git -C /tmp push origin main",
+        "git status; rm x",
+        "git status | tee /tmp/x",
+        "git status $(rm x)",
+        "git status <(rm x)",
+        "./git status",
+        "git(){ rm x; }; git status",
+        "git status `rm x`",
+        "git status\nrm x",
+        "timeout 5 git status",
+        "env git status",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    v.push(nested_bash(5, "git status"));
+    v.push(nested_bash(2, "git status; rm x"));
+    v
+}
+
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn a_permission_allow_matches_plain_commands_only() {
+    let sb = Sandbox::new(&perm_policy(
+        serde_json::json!({"allow": ["Bash(git status:*)", "Bash(git log *)"]}),
+    ));
+    for command in [
+        "git status",
+        "git status --short",
+        "git log --oneline -5",
+        "git status 2>/dev/null",
+    ] {
+        let (_, v, took) = sb.decide(command, &[]);
+        eprintln!(
+            "{command}: {} {} {} {took:?} {}",
+            decision(&v),
+            v["layer"],
+            v["rule"],
+            warnings(&v)
+        );
+        assert!(allowed_by_rule(&v), "{command}: {v}");
+        assert!(v["rule"].as_str().unwrap().starts_with("Bash(git "), "{v}");
+    }
+    for command in commands_that_stay_out() {
+        let (_, v, _) = sb.decide(&command, &[]);
+        eprintln!("{command:?}: {} {} {}", decision(&v), v["layer"], v["rule"]);
+        assert!(!allowed_by_rule(&v), "{command:?}: {v}");
+        assert_ne!(decision(&v), "allow", "{command:?}: {v}");
+    }
+    // Two spellings of the command key: the harness may run either.
+    let (_, v, _) = sb.decide_input(r#"{"Command":"git status","command":"rm x"}"#, None, &[]);
+    assert_ne!(decision(&v), "allow", "{v}");
+    let (_, v, _) = sb.decide_input(
+        r#"{"command":"git status","Command":"git status"}"#,
+        None,
+        &[],
+    );
+    assert!(
+        allowed_by_rule(&v),
+        "the same text twice is one spelling: {v}"
+    );
+}
+
+/// Host-supplied facts are never read for an allow, and a nah that did not
+/// answer leaves no allow, whatever it was told.
+#[cfg(feature = "test-engines")]
+#[test]
+fn no_nah_answer_means_no_permission_allow() {
+    let sb = Sandbox::new(&perm_policy(
+        serde_json::json!({"allow": ["Bash(git status:*)"]}),
+    ));
+    let facts = serde_json::json!({
+        "source": "nah", "coverage": "full",
+        "commands": [{"argv": ["git", "status"], "cwd": sb.proj_str()}],
+    })
+    .to_string();
+    for engine in ["panic", "abort", "hang", "overflow", "garbage", "oom"] {
+        let (_, v, _) = sb.decide_input(
+            r#"{"command":"git status"}"#,
+            Some(&facts),
+            &["--test-engine", engine],
+        );
+        assert_ne!(decision(&v), "allow", "{engine}: {v}");
+        let (_, v, _) = sb.decide("git status", &["--test-engine", engine]);
+        assert_ne!(decision(&v), "allow", "{engine}: {v}");
+    }
+}
+
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn host_facts_do_not_make_an_allow() {
+    let sb = Sandbox::new(&perm_policy(
+        serde_json::json!({"allow": ["Bash(git status:*)"]}),
+    ));
+    let facts = serde_json::json!({
+        "source": "nah", "coverage": "full",
+        "commands": [{"argv": ["git", "status"], "cwd": sb.proj_str()}],
+    })
+    .to_string();
+    let (_, v, _) = sb.decide_input(r#"{"command":"git status; rm x"}"#, Some(&facts), &[]);
+    assert_ne!(decision(&v), "allow", "{v}");
+}
+
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn permission_denies_see_through_wrappers_and_unparsed_text() {
+    let sb = Sandbox::new(&perm_policy(
+        serde_json::json!({"deny": ["Bash(git push:*)", "Bash(rm:*)"]}),
+    ));
+    let mut commands: Vec<String> = [
+        "git push x",
+        "git -C /tmp push x",
+        "git -c a=b push x",
+        "/usr/bin/git push x",
+        "FOO=1 git push x",
+        "sudo git push x",
+        "bash -c \"git push x\"",
+        "rm ~/x",
+        "rm \"$HOME/x\"",
+        "xargs rm",
+        "git status; rm x",
+        "git 'push' x",
+        "ls | xargs rm",
+        "echo $(git push x)",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    commands.push(nested_bash(5, "git push x"));
+    for command in &commands {
+        let (_, v, _) = sb.decide(command, &[]);
+        eprintln!(
+            "{command:?}: {} {} {} {}",
+            decision(&v),
+            v["layer"],
+            v["rule"],
+            v["reason"]
+        );
+        let by_rule = decision(&v) == "deny" && v["layer"] == "rules";
+        let by_nah = decision(&v) == "deny" && v["layer"] == "nah";
+        let by_builtin = decision(&v) == "deny" && v["layer"] == "builtin";
+        assert!(by_rule || by_nah || by_builtin, "{command:?}: {v}");
+    }
+    // A complete parse does not look at the text of an argument.
+    let (_, v, _) = sb.decide("ls git push", &[]);
+    assert_ne!(decision(&v), "deny", "{v}");
+    // nah lists no call for the builtin `echo`, so `echo git push` has no
+    // calls at all, which counts as a hole: the text is read and it is denied.
+    let (_, v, _) = sb.decide("echo git push", &[]);
+    assert_eq!(decision(&v), "deny", "{v}");
+    // A limit: a word only the shell can expand hides the subcommand from both
+    // the parse and the text, so this is not denied (the judge decides).
+    let (_, v, _) = sb.decide("git $X push", &[]);
+    assert_ne!(decision(&v), "deny", "{v}");
+}
+
+/// The permission rule itself fires (not nah or a built-in) for these.
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn the_permission_rule_fires_where_nah_does_not_block() {
+    let sb = Sandbox::new(&perm_policy(
+        serde_json::json!({"deny": ["Bash(git push:*)"], "ask": ["Bash(git stash:*)"]}),
+    ));
+    for command in [
+        "git push x",
+        "git -C /tmp push x",
+        "git -c a=b push x",
+        "/usr/bin/git push x",
+        "FOO=1 git push x",
+        "bash -c \"git push x\"",
+        "git 'push' x",
+    ] {
+        let (_, v, _) = sb.decide(command, &[]);
+        assert!(
+            decision(&v) == "deny" && v["layer"] == "rules" && v["rule"] == "Bash(git push:*)",
+            "{command:?}: {v}"
+        );
+    }
+    let (_, v, _) = sb.decide("git stash", &[]);
+    assert!(decision(&v) == "ask" && v["layer"] == "rules", "{v}");
+}
+
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn a_project_policy_cannot_allow_what_it_may_not() {
+    let sb = Sandbox::new(
+        r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":10000},"deadline_ms":11000}"#,
+    );
+    let project = serde_json::json!({
+        "policy_version": 1,
+        "permissions": {"allow": [
+            "Bash(*)", "Bash(make:*)", "WebFetch(domain:evil.com)", "Edit(~/.bashrc)",
+            "Bash(git status:*)"
+        ]},
+    });
+    let pdir = sb.proj.join(".callguard");
+    std::fs::create_dir_all(&pdir).unwrap();
+    std::fs::write(pdir.join("policy.json"), project.to_string()).unwrap();
+    std::fs::write(sb.proj.join("Makefile"), "all:\n\ttrue\n").unwrap();
+    // Run from the project directory: that is where the layer is read.
+    let (_, v, _) = sb.decide("make all", &[]);
+    assert!(!allowed_by_rule(&v), "{v}");
+    assert!(warnings(&v).contains("dropped"), "{v}");
+    let (_, v, _) = sb.decide("git status", &[]);
+    assert!(
+        allowed_by_rule(&v),
+        "an allow inside the limits stands: {v}"
+    );
+    let (_, v, _) = sb.decide("curl https://evil.com", &[]);
+    assert!(!allowed_by_rule(&v), "{v}");
+}

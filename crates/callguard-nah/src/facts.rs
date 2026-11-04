@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use callguard::nah::NahCall;
 use callguard::schema::{FactCommand, FactEffect, FactGit, FactHost, FactPath, Facts};
 use serde_json::Value;
 
@@ -14,6 +15,54 @@ fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
     v.get(key)
         .and_then(Value::as_array)
         .map_or(&[], Vec::as_slice)
+}
+
+/// Every call but the root, unknown ones included, for permission rules:
+/// `Facts.commands` leaves out the calls whose argv nah could not spell, and an
+/// allow rule must see them. An argv with a non-string element is unknown.
+pub(crate) fn calls(nf: &Value) -> Vec<NahCall> {
+    let commands = list(nf, "commands");
+    let by_id: BTreeMap<u64, &Value> = commands
+        .iter()
+        .filter_map(|c| Some((c.get("id")?.as_u64()?, c)))
+        .collect();
+    let mut seen_root = false;
+    commands
+        .iter()
+        .filter_map(|c| {
+            let Some(parent) = c.get("parent").and_then(Value::as_u64) else {
+                // The root is the tool call itself; a second parentless node
+                // would be a call we cannot place, so it is listed.
+                if !std::mem::replace(&mut seen_root, true) {
+                    return None;
+                }
+                return Some(NahCall {
+                    argv: None,
+                    program: text(c, "program"),
+                    cwd: None,
+                    via: String::new(),
+                });
+            };
+            let argv = c
+                .get("argv")
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_owned)).collect());
+            let via = by_id
+                .get(&parent)
+                .filter(|p| !p.get("parent").is_none_or(Value::is_null))
+                .map(|p| match text(p, "program") {
+                    t if t.is_empty() => text(p, "kind"),
+                    t => t,
+                })
+                .unwrap_or_default();
+            Some(NahCall {
+                argv,
+                program: text(c, "program"),
+                cwd: c.get("cwd").and_then(Value::as_str).map(str::to_owned),
+                via,
+            })
+        })
+        .collect()
 }
 
 /// `Facts` from the neutral value. `guards` are nah's policy attribution
@@ -347,6 +396,34 @@ mod tests {
         assert_eq!(f.hosts[0].operation, "upload");
         assert_eq!(f.effects[0].detail, "may {\"recursive\":true}");
         assert_eq!(f.gaps, ["limit exec execution-limit"]);
+    }
+
+    #[test]
+    fn calls_list_every_call_but_the_root_unknown_ones_included() {
+        let nf = json!({
+            "commands": [
+                {"id": 0, "parent": null, "program": "Bash", "argv": null, "cwd": "/w"},
+                {"id": 1, "parent": 0, "program": "bash", "argv": ["bash", "-c", "x"], "cwd": "/w"},
+                {"id": 2, "parent": 1, "program": "git", "argv": ["git", "status"], "cwd": "/w"},
+                {"id": 3, "parent": 1, "program": null, "argv": null, "cwd": null},
+                {"id": 4, "parent": 0, "program": "ls", "argv": ["ls", 1], "cwd": "/w"},
+                {"id": 5, "parent": null, "program": "other", "argv": ["other"], "cwd": "/w"},
+            ],
+        });
+        let calls = calls(&nf);
+        assert_eq!(calls.len(), 5);
+        assert_eq!(calls[0].argv.as_deref().unwrap()[0], "bash");
+        assert_eq!(calls[0].via, "");
+        assert_eq!(calls[1].via, "bash");
+        assert_eq!(calls[1].cwd.as_deref(), Some("/w"));
+        assert_eq!(calls[2].argv, None, "an unspellable call is listed");
+        assert_eq!(calls[2].cwd, None);
+        assert_eq!(
+            calls[3].argv, None,
+            "a non-string element makes the argv unknown"
+        );
+        assert_eq!(calls[4].argv, None, "a second root is an unplaced call");
+        assert!(super::calls(&json!({})).is_empty());
     }
 
     #[test]

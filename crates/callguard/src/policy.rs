@@ -15,6 +15,7 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 
+use crate::permissions;
 use crate::serde_util::{is_false, is_zero, nullable};
 
 /// The only supported policy_version.
@@ -76,6 +77,14 @@ pub struct Policy {
     pub unattended_ask: String,
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
     pub rules: Vec<Rule>,
+    /// Rules in Claude Code's syntax (`Bash(git push:*)`, `Read(~/.ssh/**)`).
+    /// Left out of the serialization when empty, so a policy without them
+    /// keeps its `policy_rev`.
+    #[serde(
+        skip_serializing_if = "Permissions::is_empty",
+        deserialize_with = "nullable"
+    )]
+    pub permissions: Permissions,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nah: Option<Nah>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,6 +101,24 @@ pub struct Policy {
     pub deadline_ms: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<Log>,
+}
+
+/// Permission rules in Claude Code's syntax, by decision (see `permissions`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Permissions {
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
+    pub deny: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
+    pub ask: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
+    pub allow: Vec<String>,
+}
+
+impl Permissions {
+    pub fn is_empty(&self) -> bool {
+        self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
+    }
 }
 
 /// One policy rule. `decision` is deny, ask or allow.
@@ -508,10 +535,16 @@ fn apply(out: &mut Loaded, path: &str, layer: &str, must_exist: bool) -> Result<
         out.warnings
             .push(format!("{path}: unknown key {} ignored", go_quote(k)));
     }
+    // Allow rules that would loosen the guard too far are dropped here, per
+    // layer, before the merge (the file itself stays as written).
+    let mut layer_policy = f.policy.clone();
+    let (kept, dropped) = permissions::vet_allow_list(&f.policy.permissions.allow, layer, path);
+    layer_policy.permissions.allow = kept;
+    out.warnings.extend(dropped);
     if layer == LAYER_SYSTEM {
-        out.policy = merge_system(&out.policy, &f.policy);
+        out.policy = merge_system(&out.policy, &layer_policy);
     } else {
-        let (p, w) = merge_tighten(&out.policy, &f.policy, path);
+        let (p, w) = merge_tighten(&out.policy, &layer_policy, path);
         out.policy = p;
         out.warnings.extend(w);
     }
@@ -564,6 +597,7 @@ enum Obj {
     Policy,
     Rule,
     Match,
+    Permissions,
     Nah,
     Llm,
     Transcript,
@@ -584,6 +618,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("disable_builtin", Leaf),
             ("unattended_ask", Leaf),
             ("rules", List(Obj::Rule)),
+            ("permissions", O(Obj::Permissions)),
             ("nah", O(Obj::Nah)),
             ("llm", O(Obj::Llm)),
             ("backends", Map(Obj::Backend)),
@@ -610,6 +645,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("unattended", Leaf),
             ("harness", Leaf),
         ],
+        Obj::Permissions => &[("deny", Leaf), ("ask", Leaf), ("allow", Leaf)],
         Obj::Nah => &[
             ("enabled", Leaf),
             ("path", Leaf),
@@ -787,6 +823,14 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
                 "disable_builtin: unknown built-in rule {}",
                 go_quote(id)
             ));
+        }
+    }
+    // A deny or ask rule that cannot be read would silently never fire.
+    for (list, key) in [(&p.permissions.deny, "deny"), (&p.permissions.ask, "ask")] {
+        for (i, r) in list.iter().enumerate() {
+            if let Err(e) = permissions::parse(r) {
+                out.push(format!("permissions.{key}[{i}] {}: {e}", go_quote(r)));
+            }
         }
     }
     for (i, r) in p.rules.iter().enumerate() {
@@ -974,6 +1018,7 @@ pub fn merge_system(base: &Policy, sys: &Policy) -> Policy {
     for r in &sys.rules {
         upsert_rule(&mut out.rules, r);
     }
+    append_permissions(&mut out.permissions, &sys.permissions);
     if let Some(sn) = &sys.nah {
         let mut n = base.nah.clone().unwrap_or_default();
         if sn.enabled.is_some() {
@@ -1005,6 +1050,22 @@ pub fn merge_system(base: &Policy, sys: &Policy) -> Policy {
         out.log = Some(l.clone());
     }
     out
+}
+
+/// Adds the rules of `src` after those already in `dst`, skipping repeats.
+/// Allow rules arrive vetted (see `permissions::vet_allow_list`).
+fn append_permissions(dst: &mut Permissions, src: &Permissions) {
+    for (to, from) in [
+        (&mut dst.deny, &src.deny),
+        (&mut dst.ask, &src.ask),
+        (&mut dst.allow, &src.allow),
+    ] {
+        for r in from {
+            if !to.contains(r) {
+                to.push(r.clone());
+            }
+        }
+    }
 }
 
 fn merge_llm(mut b: Llm, s: &Llm) -> Llm {
@@ -1118,6 +1179,7 @@ pub fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy, Vec<S
         }
         out.rules.push(r.clone()); // never replaces a lower layer's rule by id
     }
+    append_permissions(&mut out.permissions, &layer.permissions);
     if let Some(l) = &layer.llm {
         let mut cp = base.llm.clone().unwrap_or_default();
         if l.enabled.is_some() {

@@ -34,6 +34,24 @@ pub enum NahVerdict {
     Delegate,
 }
 
+/// One command nah found in the call, the root tool call excepted. Permission
+/// rules read these and not `Facts.commands`, which leaves out calls whose
+/// argv nah could not spell. They are not part of the judge's input.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NahCall {
+    /// None when nah could not spell the argv (or an element is no string).
+    #[serde(default)]
+    pub argv: Option<Vec<String>>,
+    #[serde(default)]
+    pub program: String,
+    /// The working directory nah assigned to the call, if known.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    /// The program of the call this one was unwrapped from ("" at top level).
+    #[serde(default)]
+    pub via: String,
+}
+
 /// nah's answer. `rule` is the first policy attribution name, "" if none;
 /// `coverage` is "full", "partial" or "none" (no analysis took place).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +65,10 @@ pub struct NahResult {
     /// Things worth telling the user, such as a refused observation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+    /// Every call nah found but the root, unknown ones included. A reply
+    /// without the field has none, and then no allow rule can match.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub calls: Vec<NahCall>,
 }
 
 /// Why nah gave no answer. The pipeline turns every variant into a warning
@@ -82,6 +104,7 @@ impl NahEngine for DelegatingEngine {
             coverage: "none".into(),
             facts: None,
             warnings: Vec::new(),
+            calls: Vec::new(),
         })
     }
 }

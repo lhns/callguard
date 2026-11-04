@@ -18,6 +18,7 @@ pub mod hook;
 pub mod hostmeta;
 pub mod judge;
 pub mod nah;
+pub mod permissions;
 pub mod policy;
 pub mod rules;
 pub mod schema;

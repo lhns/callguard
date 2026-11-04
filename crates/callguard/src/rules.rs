@@ -206,7 +206,7 @@ fn builtin_regex(pat: &str) -> Regex {
 // --- Go path and JSON semantics ---------------------------------------------
 
 /// Go's `path.Clean`.
-fn path_clean(p: &str) -> String {
+pub(crate) fn path_clean(p: &str) -> String {
     if p.is_empty() {
         return ".".into();
     }
@@ -414,11 +414,11 @@ impl Env {
         }
     }
 
-    fn caseless(&self) -> bool {
+    pub(crate) fn caseless(&self) -> bool {
         self.windows || self.fold_case
     }
 
-    fn slash(&self, s: &str) -> String {
+    pub(crate) fn slash(&self, s: &str) -> String {
         if self.windows {
             s.replace('\\', "/")
         } else {
@@ -426,7 +426,7 @@ impl Env {
         }
     }
 
-    fn is_abs(&self, s: &str) -> bool {
+    pub(crate) fn is_abs(&self, s: &str) -> bool {
         let b = s.as_bytes();
         s.starts_with('/')
             || (self.windows
@@ -454,7 +454,7 @@ impl Env {
         p
     }
 
-    fn fold(&self, s: &str) -> String {
+    pub(crate) fn fold(&self, s: &str) -> String {
         if self.caseless() {
             s.to_lowercase()
         } else {
@@ -555,6 +555,9 @@ pub struct Call {
     pub kind: String,
     /// Shell command text, "" if none.
     pub command: String,
+    /// The distinct values of the command field as the host sent them, before
+    /// line continuations are joined. Allow rules need exactly one.
+    pub raw_commands: Vec<String>,
     pub url: String,
     /// Normalized absolute path, "" if none.
     pub path: String,
@@ -569,7 +572,7 @@ pub struct Call {
     pub project_dir: String,
 }
 
-const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "filePath"];
+pub(crate) const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "filePath"];
 
 /// Joins shell (backslash) and PowerShell (backtick) line continuations, so a
 /// command split over lines is matched as one line.
@@ -594,7 +597,7 @@ fn join_continuations(s: &str) -> String {
 
 /// The distinct non-empty values of `key` in any letter case: the exact
 /// spelling first, then the others in sorted key order (Go: `fieldValues`).
-fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<String> {
+pub(crate) fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<String> {
     let others = fields
         .keys()
         .filter(|k| k.as_str() != key && k.eq_ignore_ascii_case(key));
@@ -649,16 +652,11 @@ impl Call {
         }
         if kind == KIND_SHELL {
             // Every spelling counts: we can't know which one the harness reads.
-            c.command = field_values(&c.fields, "command").join(
-                "
-",
-            );
-            if c.command.is_empty() && input.tool == "execute_code" {
-                c.command = field_values(&c.fields, "code").join(
-                    "
-",
-                );
+            c.raw_commands = field_values(&c.fields, "command");
+            if c.raw_commands.is_empty() && input.tool == "execute_code" {
+                c.raw_commands = field_values(&c.fields, "code");
             }
+            c.command = c.raw_commands.join("\n");
             c.command = join_continuations(&c.command);
         }
         c.url = field_values(&c.fields, "url")
