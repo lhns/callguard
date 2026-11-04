@@ -151,25 +151,38 @@ The five flips: two 46-command `&&` chains ending in a home delete (564 and 578 
 
 **Under load, Linux** (all 8,858 rows, three budgets, each compared with the idle 60 s verdict of the same row). Load applied: `conf -load 16` starts 16 busy-loop goroutines (`GOMAXPROCS=16`), and the whole run is pinned with `taskset -c 0-3`, so the spike's process competes with 16 busy threads on 4 cores. That slows the median call 3.3 times (260 ms against 78 ms) and p95 2.8 times (1.3 s against 0.47 s). It is a heavy but ordinary level: a busy machine, not a starved one. The run took 2 h 51 min; another worker's `cargo build` ran in the same container for part of it and added load that was not measured. One load run per budget, so no variance estimate.
 
-| Budget | Deadline hit | Verdict flips vs 60 s | Direction | Calls over 10 s wall |
-|---|---|---|---|---|
-| 100 ms | 3,417 (38.6 %) | **501 (5.7 %)**; 9 % of the 5,567 blocks lost | all block to delegate | 7 |
-| 500 ms | 504 (5.7 %) | **3** | all block to delegate | 8 |
-| 2 s | 62 (0.7 %) | **0** | none | 10 |
+| Budget | Deadline hit | Hit and not expected to block (becomes an ask) | Verdict flips vs 60 s | Direction | Calls over 10 s wall |
+|---|---|---|---|---|---|
+| 100 ms | 3,417 (38.6 %) | 966 | **501 (5.7 %)**; 9 % of the 5,567 blocks lost | all block to delegate | 7 |
+| 500 ms | 504 (5.7 %) | 13 | **3** | all block to delegate | 8 |
+| 2 s | 62 (0.7 %) | **6** | **0** | none | 10 |
+
+"Hit and not expected to block" counts rows where the deadline ran out and the corpus expects delegate or allow. Under the rule that a delegate which ran out of budget is a failure, these become an ask. At 2 s all six are `fs-system-tree` (`mv /*` and `find /` patterns); three of them delegated and three blocked. The other 56 hits are expected blocks and none changed verdict.
 
 - At 100 ms the lost blocks are spread over the guards, mostly `git-remote-repo-delete` (158), `self-protection` (121), `git-remote-resource-delete` (43), `secrets-exfil` (41), `fs-system-tree` (18), `fs-home` (18). 499 of the 501 are rows the corpus expects to block.
 - At 500 ms the three are the 46-command chains and `thirteen-status-wrappers`, all `fs-home`. At 2 s the same three still hit the deadline or came close (one at 2.5 s wall) and kept their block, because nah blocks from what it established before the deadline.
 - No deadline hit came back with `coverage: full` at any budget.
 - Wall time is not bounded by the budget. At 2 s, 19 calls took over 5 s and 10 over 10 s, up to 19 s, all in `fs-system-tree` (`mv /*` patterns and `find /` help text): the walk of `/` inside the observation callback does not check the deadline. Eight of the ten still blocked. Under a 10 s hard kill these ten would fall to the fallback instead.
 
-**Under load, Windows: not run yet.** Waiting for the host to be free of other timing-sensitive work. The flips above are Linux only; Windows idle showed 0 flips, but its calls are 10 to 50 times slower than Linux's, so Windows may need a larger budget than the Linux numbers show.
+**Under load, Windows** (the 238 Windows fixtures, three budgets, compared with the idle 60 s verdict). Load applied: the same `conf -load 16` with `GOMAXPROCS=16`, and the process affinity of `conf-win.exe` set to cores 0-3 right after start (the spike and the official binary inherit it), on a 20-thread host with 10 GB free and no other worker building. The run took 1 h 46 min. That slows the median call from 58 ms idle to **2.8 to 2.9 s**, about 50 times (Linux: 3.3 times). Most of that is Windows process start and the host's file scans competing with 16 busy threads on 4 cores, not nah's own work. One run per budget; the harness kills a call at 90 s.
 
-**Recommendation: analysis budget 2 s, hard kill 10 s.** The provisional figure holds.
+| Budget | Deadline hit | Hit and not expected to block | Blocks lost to delegate | Blocks with no answer in 90 s | Calls over 10 s |
+|---|---|---|---|---|---|
+| 100 ms | 67 | 20 | 4 | 12 | 23 |
+| 500 ms | 60 | 19 | 2 | 12 | 18 |
+| 2 s | 7 | **0** | **2** | **13** | 16 |
+
+- Of the 163 rows that block at 60 s idle, 14 to 16 are lost at every budget; the loss does not shrink with the budget. The two lost at 2 s are `fs-project-root.pwsh-project-root` and `pwsh-dot-children`. They did not hit the deadline at 2 s, so a bigger budget does not fix them; the likely cause is nah's separate 500 ms limit on its `git` subprocess (not checked).
+- The 13 with no answer in 90 s are all rows the corpus expects to block: `C:\Program Files`, `C:\Windows\System32`, `C:\`, `C:\*`, `rm -rf /` and the same through `tmux`. Idle they took 2 to 6 s. The walk does not check the deadline, so the budget cannot shorten it. A 10 s hard kill turns these into the parent's fallback, where the catastrophic backstops must block them (not tested here).
+- At 2 s the seven deadline hits were all expected blocks, so no ask is added by the deadline on Windows. Coverage was never full on a deadline hit.
+- The "Linux rows on Windows" set (885 rows) was **not run** under load.
+
+**Recommendation: analysis budget 2 s, hard kill 10 s.** 2 s holds on Linux at this load. On Windows it holds for the deadline itself but not for the answer: under this load it lost 2 blocks and 13 more never answered inside 90 s, and neither number moves with the budget. On Windows the hard kill and the parent's backstops carry the guarantee, not the budget; that is the part to test next on Windows.
 
 - 100 ms is not usable under load: it loses a block in one call of 18, and idle it already makes every call in a Windows git repo partial, which would disable allow rules there.
 - 500 ms loses the 46-command chains under load. They are synthetic, but they are the shape of an agent chaining many commands before a delete.
-- 2 s lost nothing on Linux at this load level. Whether it holds under heavier load is not measured; the margin at 2 s is the chain at 2.5 s against a 2 s budget, which still blocked, so some headroom exists. Windows is not measured under load, so the 2 s figure stays provisional for Windows until that run is done.
-- The kill must outlast the Windows `/` walk (up to 8.6 s seen). Ten Linux calls ran past 10 s at the 2 s budget under load; these are hostile root-globbing inputs where falling back is acceptable.
+- 2 s lost nothing on Linux at this load level. Whether it holds under heavier load is not measured; the margin at 2 s is the chain at 2.5 s against a 2 s budget, which still blocked, so some headroom exists. Windows under load is the weak side: see above.
+- The kill must outlast the Windows `/` walk (up to 8.6 s idle). Under load that walk took over 90 s for 13 rows on Windows, and ten Linux calls ran past 10 s at the 2 s budget; these are hostile root-globbing inputs where the fallback must answer. Whether a 10 s kill is long enough for ordinary calls on a loaded Windows host is not known: only 3 of the 16 Windows calls over 10 s at 2 s answered before 90 s.
 - The plan's catastrophic backstops stay needed: they answer before any of this. Their disk-wipe pattern should include `\\.\PhysicalDrive`, which nah misses live.
 
 ## 6. Conformance
@@ -221,7 +234,7 @@ The observe closure is ours, so it can also filter queries. Not needed so far.
 
 ## Open
 
-**Windows load run, not run yet.** Same flips at 100 ms, 500 ms and 2 s on the 238 Windows fixtures and the 885 Linux rows on Windows, with the Windows binaries in `C:\Users\pierr\Documents\git\.callguard-target` (3 GB). It needs at least 8 GB of free memory and a host without other timing-sensitive work. The load on Windows has no `taskset`: set the process affinity of `conf-win.exe` to cores 0-3 after starting it (children inherit it), with `-load 16` and `GOMAXPROCS=16`. Compare with `analyse.py flips` against `win-windows.jsonl:60000` and `win-linuxrows.jsonl:60000`.
+**Windows load, the "Linux rows on Windows" set (885 rows, every 10th) was not run.** The Windows-fixtures set was. Method: `conf-win.exe -platform linux -every 10 -load 16 -configs 100,500,2000` with `GOMAXPROCS=16`, affinity set to cores 0-3 after start, compared with `analyse.py flips` against `win-linuxrows.jsonl:60000`. Needs at least 8 GB free and a host without other timing-sensitive work; expect more than 1 h.
 
 **For later phases:**
 
