@@ -1,8 +1,11 @@
 name: ci
 
+# Branches run through a pull request, so one commit does not run twice.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,6 +20,7 @@ env:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # rust-toolchain.toml names the version and the components.
@@ -58,4 +62,4 @@ jobs:
       # The fake judge cannot decide the judge bucket, so this only checks that
       # the pipeline runs the whole set.
       - name: Eval with the fake judge
-        run: cargo run --release -p callguard-cli -- eval --backend fake --cases evals/cases.jsonl
+        run: cargo run --release --features callguard-cli/test-engines -p callguard-cli -- eval --backend fake --cases evals/cases.jsonl
