@@ -5,12 +5,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
-const bin = process.argv[2];
-assert.ok(bin, "usage: node smoke.mjs <callguard binary>");
+assert.ok(process.argv[2], "usage: node smoke.mjs <callguard binary>");
+// decide runs in a temp dir, so the path must not depend on the cwd.
+const bin = resolve(process.argv[2]);
 
 const version = spawnSync(bin, ["version"], { encoding: "utf8" });
+assert.ifError(version.error);
 assert.equal(version.status, 0, `version: ${version.stderr}`);
 assert.ok(version.stdout.trim(), "version printed nothing");
 console.log(`version: ${version.stdout.trim()}`);
@@ -30,6 +32,7 @@ const decide = spawnSync(bin, ["decide", "--no-user-policy", "--log", "-", "--po
   env,
   cwd: dir,
 });
+assert.ifError(decide.error);
 const verdict = JSON.parse(decide.stdout);
 console.log(`decide: ${decide.status} ${JSON.stringify(verdict)}`);
 assert.equal(decide.status, 1, "deny exits 1");
