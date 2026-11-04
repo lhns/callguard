@@ -1568,7 +1568,7 @@ fn default_rules_read_text_as_re2_does() {
 }
 
 #[test]
-fn compile_regex_matches_go_re2() {
+fn compile_regex_matches_re2() {
     let m = |pat: &str, text: &str| compile_regex(pat).unwrap().is_match(text);
     // ASCII classes.
     assert!(m(r"\bfoo\b", "\u{e9}foo\u{e9}"));
@@ -2144,6 +2144,16 @@ fn a_protected_path_with_dot_dot_still_matches_the_cleaned_call_path() {
         &unix,
     ));
     assert_eq!(hit.map(|h| h.id), Some("self-protect-write".into()));
+}
+
+#[test]
+fn octal_escapes_compile_like_in_re2() {
+    let re = compile_regex(r"^AB$").expect(r"A is an RE2 octal escape");
+    assert!(re.is_match("AB"));
+    let re = compile_regex(r"a b").unwrap();
+    assert!(re.is_match("a b"));
+    // The size limit is the default one: this stays refused.
+    assert!(compile_regex(r"\pL{1000}").is_err());
 }
 
 #[test]
