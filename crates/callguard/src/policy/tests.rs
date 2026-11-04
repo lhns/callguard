@@ -527,7 +527,9 @@ fn nah_path_require_and_engine_are_refused_by_name() {
     );
     let l = load(&o).unwrap();
     assert!(
-        l.problems().join(";").contains("nah.path is no longer supported"),
+        l.problems()
+            .join(";")
+            .contains("nah.path is no longer supported"),
         "{:?}",
         l.problems()
     );

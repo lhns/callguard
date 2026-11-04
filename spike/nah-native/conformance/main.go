@@ -21,6 +21,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -57,7 +58,8 @@ type record struct {
 
 func main() {
 	nahBin := flag.String("nah", "", "official nah binary")
-	spikeBin := flag.String("spike", "", "spike binary")
+	spikeBin := flag.String("spike", "", "spike binary (also lists the guard catalog)")
+	cgBin := flag.String("callguard", "", "callguard binary, for the config callguard:<budget ms>")
 	corpus := flag.String("corpus", "", "nah corpus dir")
 	platform := flag.String("platform", runtime.GOOS, "fixtures of this platform")
 	configs := flag.String("configs", "oracle,none", "oracle, none (100 ms decide_with), or budget ms")
@@ -157,8 +159,17 @@ func main() {
 			for _, cfg := range cfgs {
 				var cmd *exec.Cmd
 				ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+				var stdin []byte = req
 				if cfg == "oracle" {
 					cmd = exec.CommandContext(ctx, *nahBin, "decide")
+				} else if budget, ok := strings.CutPrefix(cfg, "callguard:"); ok {
+					// callguard's own child process: `__engine` takes a NahRequest.
+					ms, _ := strconv.Atoi(budget)
+					stdin, _ = json.Marshal(map[string]any{
+						"tool": tool, "input": json.RawMessage(input), "cwd": cwd, "project_dir": cwd,
+						"guards": json.RawMessage(guards), "budget_ms": ms, "timeout_ms": 80000,
+					})
+					cmd = exec.CommandContext(ctx, *cgBin, "__engine")
 				} else {
 					args := []string{"decide", "--home", home, "--guards", string(guards)}
 					if cfg != "none" {
@@ -166,7 +177,7 @@ func main() {
 					}
 					cmd = exec.CommandContext(ctx, *spikeBin, args...)
 				}
-				cmd.Stdin = bytes.NewReader(req)
+				cmd.Stdin = bytes.NewReader(stdin)
 				cmd.Env = append(os.Environ(), "HOME="+home, "USERPROFILE="+home)
 				cmd.Dir = cwdFor(cwd)
 				var so, se bytes.Buffer
@@ -178,7 +189,9 @@ func main() {
 				rec := record{ID: r.ID, Fixture: name, Tool: tool, Config: cfg, Input: trunc(string(input)),
 					Expected: r.Expected.Verdict, ExpectedGuard: r.Expected.Guard, MS: ms}
 				var o output
-				if err := json.Unmarshal(so.Bytes(), &o); err != nil || (o.Verdict == "" && o.Error == "") {
+				if strings.HasPrefix(cfg, "callguard:") {
+					o = callguardOutput(so.Bytes())
+				} else if err := json.Unmarshal(so.Bytes(), &o); err != nil || (o.Verdict == "" && o.Error == "") {
 					rec.Error = fmt.Sprintf("unparseable (%v): %q %q", runErr, trunc(so.String()), trunc(se.String()))
 				} else {
 					rec.Verdict, rec.Coverage, rec.Refusals, rec.Warnings, rec.Failures, rec.Error =
@@ -214,6 +227,37 @@ type output struct {
 	Attributions []struct {
 		Name string `json:"name"`
 	} `json:"policy_attributions"`
+}
+
+// callguardOutput reads the `__engine` reply (one JSON line) as nah's output.
+func callguardOutput(b []byte) output {
+	var reply struct {
+		Result *struct {
+			Verdict  string   `json:"verdict"`
+			Coverage string   `json:"coverage"`
+			Warnings []string `json:"warnings"`
+			Facts    *struct {
+				Guards []string `json:"guards"`
+			} `json:"facts"`
+		} `json:"result"`
+		Error string `json:"error"`
+	}
+	var o output
+	if err := json.Unmarshal(bytes.TrimSpace(b), &reply); err != nil {
+		return o
+	}
+	o.Error = reply.Error
+	if r := reply.Result; r != nil {
+		o.Verdict, o.Coverage, o.Warnings = r.Verdict, r.Coverage, r.Warnings
+		if r.Facts != nil {
+			for _, g := range r.Facts.Guards {
+				o.Attributions = append(o.Attributions, struct {
+					Name string `json:"name"`
+				}{g})
+			}
+		}
+	}
+	return o
 }
 
 func trunc(s string) string {

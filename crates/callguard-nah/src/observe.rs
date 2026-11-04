@@ -166,7 +166,11 @@ fn git_state(
         }
         Ok(out)
     };
-    let top_level = match git(&["rev-parse", "--show-toplevel"], STATUS_MAX_BYTES, directory) {
+    let top_level = match git(
+        &["rev-parse", "--show-toplevel"],
+        STATUS_MAX_BYTES,
+        directory,
+    ) {
         Ok(out) => String::from_utf8(out)
             .ok()
             .map(|t| t.trim_end_matches(['\r', '\n']).to_owned())
@@ -180,12 +184,7 @@ fn git_state(
     };
     let mut args: Vec<&str> = vec!["--no-optional-locks", "-c", "core.fsmonitor=false"];
     args.extend(overrides.iter().map(String::as_str));
-    args.extend([
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--ignore-submodules=none",
-    ]);
+    args.extend(["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]);
     args.extend(if inspect_untracked {
         ["--untracked-files=normal", "--ignored=matching"]
     } else {

@@ -19,7 +19,13 @@ use std::collections::BTreeMap;
 const FACTS_V: u64 = 1;
 
 /// Payload fields that name a resource by id.
-const RESOURCE_FIELDS: [&str; 5] = ["target", "destination", "repository", "resource", "resources"];
+const RESOURCE_FIELDS: [&str; 5] = [
+    "target",
+    "destination",
+    "repository",
+    "resource",
+    "resources",
+];
 
 pub(crate) fn graph_facts(result: &DecisionResult, observations: &[Observation]) -> Value {
     let graph = result
@@ -41,7 +47,10 @@ pub(crate) fn graph_facts(result: &DecisionResult, observations: &[Observation])
 }
 
 fn list<'a>(value: &'a Value, key: &str) -> &'a [Value] {
-    value.get(key).and_then(Value::as_array).map_or(&[], Vec::as_slice)
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
 }
 
 /// `{"Known": x}` is x; `"Unknown"` and anything else is null.
@@ -127,9 +136,13 @@ fn effect(fact: &Value, resources: &BTreeMap<u64, Value>) -> Value {
 /// Knowledge wrappers unwrapped, unknowns and empty values dropped.
 fn simplify(value: Value) -> Value {
     match value {
-        Value::Object(object) if object.len() == 1 && object.contains_key("Known") => {
-            simplify(object.into_iter().next().map(|(_, value)| value).unwrap_or_default())
-        }
+        Value::Object(object) if object.len() == 1 && object.contains_key("Known") => simplify(
+            object
+                .into_iter()
+                .next()
+                .map(|(_, value)| value)
+                .unwrap_or_default(),
+        ),
         Value::String(text) if text == "Unknown" || text == "Absent" => Value::Null,
         Value::Array(items) if items.is_empty() => Value::Null,
         Value::Object(object) if object.is_empty() => Value::Null,
@@ -141,7 +154,11 @@ fn simplify(value: Value) -> Value {
                     value => Some((name, value)),
                 })
                 .collect();
-            if object.is_empty() { Value::Null } else { Value::Object(object) }
+            if object.is_empty() {
+                Value::Null
+            } else {
+                Value::Object(object)
+            }
         }
         other => other,
     }
@@ -199,7 +216,11 @@ fn observed(observations: &[Observation]) -> Vec<Value> {
         };
         for fact in list(&value, "facts") {
             let query = fact.get("query").cloned().unwrap_or_default();
-            let kind = query.get("kind").and_then(Value::as_str).unwrap_or("").to_owned();
+            let kind = query
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
             let subject = ["requested", "name"]
                 .iter()
                 .find_map(|field| query.get(*field).and_then(Value::as_str))

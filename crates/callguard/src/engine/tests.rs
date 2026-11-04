@@ -2179,7 +2179,9 @@ fn the_nah_request_carries_guards_and_a_deadline_inside_the_calls() {
     assert!(seen.timeout_ms < 3000 && seen.timeout_ms > 1000, "{seen:?}");
     // A warning of the engine reaches the verdict.
     assert!(
-        got.warnings.iter().any(|w| w.contains("something worth knowing")),
+        got.warnings
+            .iter()
+            .any(|w| w.contains("something worth knowing")),
         "{got:?}"
     );
 }

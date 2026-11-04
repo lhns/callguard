@@ -11,7 +11,9 @@ fn text(v: &Value, key: &str) -> String {
 }
 
 fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
-    v.get(key).and_then(Value::as_array).map_or(&[], Vec::as_slice)
+    v.get(key)
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
 }
 
 /// `Facts` from the neutral value. `guards` are nah's policy attribution
@@ -65,7 +67,12 @@ pub(crate) fn map(nf: &Value, guards: Vec<String>, coverage: &str) -> Facts {
                     .to_owned();
             }
             Some("roots") => {
-                for r in o.get("value").and_then(Value::as_array).into_iter().flatten() {
+                for r in o
+                    .get("value")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     if let Some(p) = r.get("path").and_then(Value::as_str) {
                         roots.push(p.to_owned());
                     }
@@ -256,7 +263,11 @@ fn path_scope(p: &str, home: &str, roots: &[String]) -> String {
         return "temp".into();
     }
     let posix = drive_rest(p).unwrap_or(p);
-    let top = posix.trim_start_matches('/').split('/').next().unwrap_or("");
+    let top = posix
+        .trim_start_matches('/')
+        .split('/')
+        .next()
+        .unwrap_or("");
     match top {
         "Windows" | "Program Files" | "Program Files (x86)" | "ProgramData" => "system".into(),
         "" | "etc" | "usr" | "bin" | "sbin" | "lib" | "lib64" | "boot" | "dev" | "proc" | "sys"

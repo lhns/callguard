@@ -26,6 +26,24 @@ const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[(
     "Rust rejects a duplicate struct field (strict) and takes the fail-safe ask; Go keeps the last one",
 )];
 
+/// Cases where the Rust binary has nah and the Go one does not, and nah decides:
+/// (case id, nah's rule). Linux and Windows differ in what nah sees, so a case
+/// may differ on one only. Go's `policy_rev` also differs on every row (nah is
+/// on by default, its timeouts changed, `nah.path` is gone), so it is not
+/// compared. Any difference where nah did not decide, or in layer order, is a
+/// bug.
+const NAH_DECIDES: &[(&str, &str)] = &[
+    // Go: the regex rule secret-exfil denies; nah denies the same call.
+    ("exfil-curl-dotenv", "nah:secrets-env"),
+    // Go: the regex rule pipe-to-shell denies; nah denies the same call.
+    ("exfil-nah-remote-pipe", "nah:exec-remote"),
+    ("exfil-pipe-installer", "nah:exec-remote"),
+    // Go: ask (the judge, or the git-* default rule); nah denies.
+    ("exfil-nah-rm-git-refs", "nah:git-metadata"),
+    ("overeager-force-push-main", "nah:git-force-push"),
+    ("overeager-reset-clean", "nah:git-hard-reset"),
+];
+
 const POLICY: &str =
     r#"{"policy_version":1,"llm":{"backend":"fake"},"backends":{"fake":{"type":"fake"}}}"#;
 
@@ -123,7 +141,7 @@ fn build_go(out_dir: &Path) -> PathBuf {
 fn scrub(v: &mut Value) {
     match v {
         Value::Object(m) => {
-            for k in ["id", "latency_ms"] {
+            for k in ["id", "latency_ms", "policy_rev"] {
                 m.remove(k);
             }
             m.values_mut().for_each(scrub);
@@ -146,8 +164,16 @@ fn verdict_summary(code: i32, stdout: &str) -> Value {
     serde_json::json!({
         "exit": code,
         "decision": v["decision"], "layer": v["layer"], "rule": v["rule"],
-        "policy_rev": v["policy_rev"],
     })
+}
+
+/// Whether nah's decision explains a difference: the Rust side was decided by
+/// the nah layer with the rule listed for this case.
+fn nah_explains(id: &str, rust: &Value) -> bool {
+    rust["layer"] == "nah"
+        && NAH_DECIDES
+            .iter()
+            .any(|(i, rule)| *i == id && rust["rule"] == *rule)
 }
 
 fn expected_difference(id: &str) -> Option<&'static str> {
@@ -192,7 +218,7 @@ fn go_and_rust_agree() {
         let (rc, rust_out) = sb.run(&rust, &decide_args, &req);
         let (a, b) = (verdict_summary(gc, &go_out), verdict_summary(rc, &rust_out));
         compared += 1;
-        if a != b && expected_difference(&id).is_none() {
+        if a != b && expected_difference(&id).is_none() && !nah_explains(&id, &b) {
             diffs.insert(format!("case {id}"), (a, b));
         }
     }

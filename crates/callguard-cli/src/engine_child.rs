@@ -21,6 +21,7 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
 /// `--test-engine <name>` flag makes the nah child misbehave; the flag is the
 /// only way to choose one, never an environment variable.
 pub fn options(log_path: &str, test_engine: &str) -> Options {
+    #[allow(unused_mut)] // only the test-engines build assigns
     let mut o = Options {
         log_path: log_path.to_owned(),
         ..Default::default()

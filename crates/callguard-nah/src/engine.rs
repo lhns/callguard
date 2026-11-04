@@ -112,7 +112,11 @@ fn run<F>(input: &ToolCallInput, ctx: &Ctx, budget_ms: u64, observe: F) -> Decis
 where
     F: FnMut(&ObservationRequest) -> Result<Observation, String>,
 {
-    let budget = Duration::from_millis(if budget_ms == 0 { DEFAULT_BUDGET_MS } else { budget_ms });
+    let budget = Duration::from_millis(if budget_ms == 0 {
+        DEFAULT_BUDGET_MS
+    } else {
+        budget_ms
+    });
     nah_cli::decide_with_budget(input, ctx, budget, observe)
 }
 
@@ -123,10 +127,9 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
     let cwd = absolute_cwd(&req.cwd)?;
     let input: Value = serde_json::from_str(req.input.get())
         .map_err(|e| failed("the tool input is not readable by nah", &e))?;
-    let call: ToolCallInput = serde_json::from_value(
-        json!({"v": 1, "tool": req.tool, "input": input, "cwd": cwd}),
-    )
-    .map_err(|e| failed("nah does not accept the call", &e))?;
+    let call: ToolCallInput =
+        serde_json::from_value(json!({"v": 1, "tool": req.tool, "input": input, "cwd": cwd}))
+            .map_err(|e| failed("nah does not accept the call", &e))?;
     let (ctx, mut warnings) = ctx(&home()?, &req.guards)?;
 
     let observations = RefCell::new(Vec::<Observation>::new());
@@ -140,11 +143,16 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
         observation
     });
     let micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
-    let output =
-        DecisionOutput::new(result.core(), "callguard", micros).map_err(|e| failed("nah output", &e))?;
+    let output = DecisionOutput::new(result.core(), "callguard", micros)
+        .map_err(|e| failed("nah output", &e))?;
     let out = serde_json::to_value(&output).map_err(|e| failed("nah output", &e))?;
 
-    let text = |key: &str| out.get(key).and_then(Value::as_str).unwrap_or("").to_owned();
+    let text = |key: &str| {
+        out.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
     let names: Vec<String> = out
         .get("policy_attributions")
         .and_then(Value::as_array)
@@ -162,9 +170,8 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
     let mapped = facts::map(&graph, names.clone(), &coverage);
 
     warnings.append(&mut observe_warnings.borrow_mut());
-    if coverage != "full" {
-        warnings.extend(result.warnings().iter().map(|w| format!("nah: {w}")));
-    }
+    // nah's own warnings ("analysis is incomplete") stay out of the verdict:
+    // partial coverage and the gaps are in the facts.
     Ok(NahResult {
         verdict,
         rule: names.first().cloned().unwrap_or_default(),
@@ -173,4 +180,61 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
         facts: Some(mapped),
         warnings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+
+    fn home() -> &'static str {
+        if cfg!(windows) {
+            "C:/Users/test"
+        } else {
+            "/home/test"
+        }
+    }
+
+    #[test]
+    fn every_default_off_guard_is_explicitly_off_unless_policy_enables_it() {
+        let off: Vec<String> = shipped_guard_states()
+            .iter()
+            .filter(|s| !s.enabled())
+            .map(|s| s.name().to_owned())
+            .collect();
+        assert!(!off.is_empty(), "nah ships default-off guards");
+        let (plain, unknown) = ctx(home(), &BTreeMap::new()).unwrap();
+        assert!(unknown.is_empty());
+        for g in plain.shipped_guards() {
+            if off.contains(&g.name().to_owned()) {
+                assert!(!g.enabled() && g.explicitly_disabled(), "{}", g.name());
+            }
+        }
+        // Policy can turn one on; a name nah does not know is reported, not fatal.
+        let mut enable = BTreeMap::new();
+        enable.insert(off[0].clone(), true);
+        enable.insert("no-such-guard".to_owned(), true);
+        let (c, unknown) = ctx(home(), &enable).unwrap();
+        let g = c
+            .shipped_guards()
+            .iter()
+            .find(|g| g.name() == off[0])
+            .unwrap();
+        assert!(g.enabled() && !g.explicitly_disabled());
+        assert_eq!(unknown.len(), 1, "{unknown:?}");
+        assert!(unknown[0].contains("no-such-guard"));
+    }
+
+    #[test]
+    fn a_relative_or_missing_cwd_becomes_absolute_or_no_parse() {
+        assert!(absolute_cwd("").is_err());
+        let abs = absolute_cwd("some/dir").unwrap();
+        assert!(Path::new(&abs).is_absolute(), "{abs}");
+        let here = std::env::current_dir().unwrap();
+        assert_eq!(
+            absolute_cwd(here.to_str().unwrap()).unwrap(),
+            here.to_str().unwrap()
+        );
+    }
 }
