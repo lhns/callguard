@@ -1,0 +1,35 @@
+# Input of `cargo about generate about.hbs -o THIRD-PARTY-NOTICES.md` (cargo-about
+# 0.8). Regenerate when Cargo.lock changes; the notices ship in every release.
+accepted = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+    # OPEN QUESTION FOR THE OWNER: the malachite crates (malachite, -base, -bigint,
+    # -nz, -q) are LGPL-3.0-only and are linked statically into the binary, through
+    # nah-effinterp -> effinterp-engine -> rustpython-parser. Listed here so the
+    # notices name them; whether shipping them in a binary under Apache-2.0 is
+    # acceptable (LGPL asks that a user can relink with a changed library) is a
+    # legal call this file does not make.
+    "LGPL-3.0-only",
+]
+# The release targets; a crate only used on another platform is left out.
+targets = [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+]
+# ring's licence is a mix that needs the clarification built into cargo-about.
+workarounds = ["ring"]
+ignore-dev-dependencies = true
+ignore-build-dependencies = true
