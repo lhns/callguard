@@ -271,3 +271,7 @@ with the real `decide` and the judge off. Every fix only tightens behaviour.
 
 Known limits: shell guards read quotes and backslashes but not globs
 (`trusted-*`, `$HOME/.c*/`) or variables.
+
+## Last differential (Phase 5)
+
+Run on Windows after merging `origin/main` (82cf5d7, the last Go commit, tagged `go-final`) and after the `llm.block` change: `go_and_rust_agree` passed, with only the listed expected differences. The test is deleted with the Go code; from here Rust may diverge from Go. The Go side stays buildable at `go-final`.
