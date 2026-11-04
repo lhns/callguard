@@ -565,7 +565,16 @@ impl Inner {
                     // call as understood.
                     warns.push(format!("nah skipped: {e}"));
                     nah_res = Some(no_parse(&e.to_string()));
-                    if !shadowed {
+                    if shadowed {
+                        // What enforcing would have done, so a shadow rollout
+                        // can count nah failures.
+                        let would = fallback_verdict(Some(req), &e.to_string());
+                        shadow.push(ShadowVerdict {
+                            layer: LAYER_NAH.into(),
+                            decision: would.decision.as_str().into(),
+                            rule: "nah".into(),
+                        });
+                    } else {
                         nah_failure = Some(e.to_string());
                     }
                 }

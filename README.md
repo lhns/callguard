@@ -133,6 +133,8 @@ Never `allow` on error. Bad input, a policy load error, a backend failure, a tim
 - **Deep nesting**: nah follows `bash -c` three layers deep and gives up with partial coverage at four, and reads input nested past a limit not at all. The raw-text fallback still applies to deny and ask rules, an allow never matches, and unreadable input gets the fail-safe verdict.
 - **Windows under heavy load** (a median call about 50 times slower) lost two `fs-project-root` blocks (PowerShell rows) in the load test; a walk of `C:\` or `/` can take up to 9 s idle and longer under load, then the 10 s kill gives the fail-safe verdict.
 - **macOS caps memory by a watchdog**: `setrlimit` refuses it, so a thread in the nah child aborts it once it is past 512 MiB resident. The cap does not cover the processes the child starts, such as git.
+- **Facts about git status need git 2.26 or newer** (`git config --show-scope`). With an older git the judge gets no `gitStatus`.
+- **Policy regexes have a compile-size limit**, the default of the `regex` crate, so a huge counted repeat such as `\pL{1000}` is refused (a policy cannot make callguard spend time compiling).
 - **Permission paths cover tool calls**, not what a shell command reads or writes (the same as Claude Code).
 
 ## Build and test

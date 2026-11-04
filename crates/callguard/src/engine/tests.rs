@@ -1723,6 +1723,39 @@ fn nah_shadow_is_logged_without_the_reason() {
     );
 }
 
+/// A nah that fails in shadow mode is counted in the log's `shadow` field as
+/// the fail-safe verdict enforcing would have given; the call itself is
+/// decided as before.
+#[test]
+fn a_nah_failure_in_shadow_mode_is_logged_as_a_would_be_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("d.jsonl");
+    let (e, _) = nah_engine(
+        NahMode::Fail,
+        |n| n.mode = policy::MODE_SHADOW.into(),
+        Options {
+            log_path: path.to_string_lossy().into_owned(),
+            ..Default::default()
+        },
+    );
+    let got = e.decide(&bash("echo hi"));
+    assert_eq!(
+        got.layer, LAYER_LLM,
+        "the call is decided as before: {got:?}"
+    );
+    let entries = declog::read_tail(&path.to_string_lossy(), "s1").unwrap();
+    assert!(
+        entries.len() == 1
+            && entries[0].shadow
+                == [ShadowVerdict {
+                    layer: "nah".into(),
+                    decision: "ask".into(),
+                    rule: "nah".into()
+                }],
+        "log: {entries:?}"
+    );
+}
+
 #[test]
 fn facts_reach_the_judge() {
     let facts_of = |o: Options, mutate: Option<&dyn Fn(&mut Request)>| -> Option<String> {
