@@ -165,7 +165,7 @@ fn normalize_and_in_dir() {
 }
 
 #[test]
-fn go_path_clean_and_base() {
+fn path_clean_and_base() {
     for (p, want) in [
         ("", "."),
         ("a//b/./c/..", "a/b"),

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::fallback::fallback_verdict;
-use crate::gojson;
+use crate::json_text;
 use crate::schema::{
     Decision, LAYER_FALLBACK, REQUEST_SCHEMA, Request, ToolCall, Transcript, VERDICT_SCHEMA,
     Verdict,
@@ -338,7 +338,7 @@ fn claude_inner(
         Decision::Ask => ask_message(&v),
         Decision::Deny => deny_message(&v),
     };
-    let written = gojson::to_string(&ClaudeOutput {
+    let written = json_text::to_string(&ClaudeOutput {
         hook_specific_output: ClaudeDecision {
             hook_event_name: "PreToolUse",
             permission_decision: v.decision.as_str(),
@@ -476,7 +476,7 @@ fn hermes_inner(
 }
 
 fn hermes_write(out: &mut dyn Write, err_out: &mut dyn Write, o: &HermesOutput, code: i32) -> i32 {
-    let written = gojson::to_string(o)
+    let written = json_text::to_string(o)
         .map_err(|e| e.to_string())
         .and_then(|b| {
             out.write_all(format!("{b}\n").as_bytes())
@@ -585,7 +585,7 @@ fn generic_inner(
         }
     };
 
-    let Ok(b) = gojson::to_string(&v) else {
+    let Ok(b) = json_text::to_string(&v) else {
         let _ = out.write_all(LAST_RESORT_JSON.as_bytes());
         return 0;
     };
@@ -1329,7 +1329,7 @@ mod tests {
                 &Options::default(),
                 &d,
             );
-            let want = format!("{}\n", gojson::to_string(&v).unwrap());
+            let want = format!("{}\n", json_text::to_string(&v).unwrap());
             assert!(
                 out == want && code == 0 && err.is_empty(),
                 "{name}: out={out:?} err={err:?} code={code}"
@@ -1414,7 +1414,7 @@ mod tests {
             )
         };
         assert_eq!(
-            format!("{}\n", gojson::to_string(&lr).unwrap()),
+            format!("{}\n", json_text::to_string(&lr).unwrap()),
             LAST_RESORT_JSON
         );
     }

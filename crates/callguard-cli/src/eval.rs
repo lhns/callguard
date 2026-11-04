@@ -8,7 +8,7 @@ use callguard::backend::{self, Backend};
 use callguard::engine::{self, Engine};
 use callguard::evalrun::{self, Meter, Report};
 use callguard::evals;
-use callguard::gojson;
+use callguard::json_text;
 use callguard::policy;
 use callguard::schema::Request;
 
@@ -167,11 +167,11 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
 
     if f.bool("json") {
         let text = match &second {
-            Some(second) => gojson::to_string_indent(&serde_json::json!({
+            Some(second) => json_text::to_string_indent(&serde_json::json!({
                 "facts_on": first,
                 "facts_off": second,
             })),
-            None => gojson::to_string_indent(&first),
+            None => json_text::to_string_indent(&first),
         };
         return match text {
             Ok(t) => {

@@ -1,7 +1,7 @@
 //! Builds the reasoning-blind prompt for the LLM layer, calls a backend and
 //! validates its answer.
 //!
-//! Every JSON line of the user prompt goes through [`crate::gojson`], so `<`,
+//! Every JSON line of the user prompt goes through [`crate::json_text`], so `<`,
 //! `>` and `&` are escaped: no value can close the `<transcript>` tag
 //! or start a line with markup.
 
@@ -14,8 +14,8 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 
 use crate::backend::{Backend, BackendError, ClassifyRequest};
-use crate::gojson;
 use crate::hostmeta::{GitStatus, RepoVisibility};
+use crate::json_text;
 use crate::serde_util::{nullable, raw_some};
 use crate::transcript;
 
@@ -150,7 +150,7 @@ pub fn judge(
     input.tool_input = tool_input;
     input.facts = cap_facts(input.facts.take());
     input.git_status = input.git_status.take().map(cap_git_status);
-    let structured = gojson::to_string(&input)
+    let structured = json_text::to_string(&input)
         .ok()
         .and_then(|s| RawValue::from_string(s).ok())
         .ok_or_else(|| JudgeError::Encoding("cannot serialize the input".into()))?;
@@ -246,7 +246,7 @@ fn cap_json(
         Err(_) => cap_raw(text, max_total),
         Ok(v) => {
             // Keep the original key order when nothing needs shrinking.
-            let compact = gojson::compact(text);
+            let compact = json_text::compact(text);
             if compact.len() <= max_total && !has_long_string(&v, max_string) {
                 cut = false;
                 compact
@@ -254,7 +254,7 @@ fn cap_json(
                 let mut limit = max_string;
                 let mut shrunk = None;
                 while limit >= 128 {
-                    if let Ok(out) = gojson::to_string(&shrink(&v, limit))
+                    if let Ok(out) = json_text::to_string(&shrink(&v, limit))
                         && out.len() <= max_total
                     {
                         shrunk = Some(out);
@@ -281,7 +281,7 @@ fn has_long_string(v: &Value, limit: usize) -> bool {
 }
 
 fn cap_raw(raw: &str, max_total: usize) -> String {
-    gojson::to_string(&cut_string(raw, max_total / 2)).unwrap_or_else(|_| "\"\"".into())
+    json_text::to_string(&cut_string(raw, max_total / 2)).unwrap_or_else(|_| "\"\"".into())
 }
 
 fn shrink(v: &Value, limit: usize) -> Value {
@@ -473,13 +473,13 @@ fn line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
             .unwrap_or_else(|_| r#"{"meta":{"error":"unencodable line"}}"#.into()),
     );
     s.push('}');
-    gojson::escape(&s)
+    json_text::escape(&s)
 }
 
 /// `{"meta":{key: value}}` as one escaped JSON line.
 fn meta_line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
     let inner = line(key, v);
-    gojson::escape(&format!("{{\"meta\":{inner}}}"))
+    json_text::escape(&format!("{{\"meta\":{inner}}}"))
 }
 
 /// The rendered user message: session info, transcript, the pending call.
@@ -534,7 +534,7 @@ pub fn user_prompt(input: &Input) -> String {
                     && transcript::valid_outcome(&m.outcome)
                 {
                     push(
-                        gojson::to_string(&OutcomeLine {
+                        json_text::to_string(&OutcomeLine {
                             outcome: &m.outcome,
                             id,
                         })

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-use crate::gojson;
+use crate::json_text;
 use crate::policy;
 use crate::serde_util::{is_zero, nullable, raw_some};
 
@@ -563,7 +563,7 @@ impl Backend for Anthropic {
             },
             thinking: haiku5.then_some(Thinking { kind: "disabled" }),
         };
-        let body = gojson::to_string(&body).map_err(|e| other(e.to_string()))?;
+        let body = json_text::to_string(&body).map_err(|e| other(e.to_string()))?;
         let raw = post_json(
             &self.agent,
             &format!("{}/v1/messages", self.base_url),
@@ -721,7 +721,7 @@ impl Backend for OpenAi {
                 },
             },
         };
-        let body = gojson::to_string(&body).map_err(|e| other(e.to_string()))?;
+        let body = json_text::to_string(&body).map_err(|e| other(e.to_string()))?;
         let auth;
         let mut headers = vec![("content-type", "application/json")];
         if !self.key_env.is_empty() {
@@ -829,7 +829,7 @@ impl Backend for ExecBackend {
         req: &ClassifyRequest,
         deadline: Instant,
     ) -> Result<ClassifyResult, BackendError> {
-        let stdin_json = gojson::to_string(&ExecInput {
+        let stdin_json = json_text::to_string(&ExecInput {
             schema: CLASSIFY_SCHEMA,
             system: &req.system,
             prompt: &req.prompt,

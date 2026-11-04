@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 
-use callguard::gojson;
+use callguard::json_text;
 use callguard::policy::{self, LoadOptions, Policy};
 use callguard::rules::{Env, Set};
 use serde::Serialize;
@@ -47,7 +47,7 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
     };
     let rep = check_policy(&lo);
     if f.bool("json") {
-        let b = gojson::to_string_indent(&rep).unwrap_or_default();
+        let b = json_text::to_string_indent(&rep).unwrap_or_default();
         let _ = writeln!(stdout, "{b}");
     } else {
         rep.print(stdout);
@@ -143,7 +143,7 @@ impl PolicyReport {
             let _ = writeln!(w, "  {f}");
         }
         if let Some(p) = &self.policy {
-            let b = gojson::to_string_indent(p).unwrap_or_default();
+            let b = json_text::to_string_indent(p).unwrap_or_default();
             let _ = writeln!(w, "merged policy:\n{b}\npolicy_rev: {}", self.policy_rev);
         }
         if let Some(t) = &self.project_trust {

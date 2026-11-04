@@ -22,7 +22,7 @@ use crate::hostmeta::{self, Meta};
 use crate::judge::{self, JudgeError, JudgeResult};
 use crate::nah::{NahEngine, NahRequest, NahResult, NahVerdict};
 use crate::permissions::Permissions;
-use crate::policy::{self, Policy, go_quote};
+use crate::policy::{self, Policy, quote_string};
 use crate::rules::{self, Builtin, Call, CallInput, Env, Set, input_string_field};
 use crate::schema::{
     Decision, Facts, LAYER_BUILTIN, LAYER_LLM, LAYER_NAH, LAYER_NONE, LAYER_RULES, REQUEST_SCHEMA,
@@ -175,7 +175,7 @@ fn panic_message(p: &(dyn Any + Send)) -> String {
 }
 
 /// A duration in the form `250ms`, `1.5s`, `2m3s`, for whole milliseconds.
-fn go_duration(ms: u64) -> String {
+fn format_duration(ms: u64) -> String {
     if ms < 1000 {
         return format!("{ms}ms");
     }
@@ -354,7 +354,7 @@ impl Engine {
                     req,
                     &format!(
                         "deadline of {} exceeded",
-                        go_duration(deadline.as_millis() as u64)
+                        format_duration(deadline.as_millis() as u64)
                     ),
                 ),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -714,7 +714,10 @@ impl Inner {
                     return fail(
                         "backend",
                         "",
-                        &format!("llm backend {} is not configured", go_quote(&llm.backend)),
+                        &format!(
+                            "llm backend {} is not configured",
+                            quote_string(&llm.backend)
+                        ),
                         Vec::new(),
                     );
                 };
@@ -724,7 +727,10 @@ impl Inner {
                         return fail(
                             "backend",
                             "",
-                            &format!("llm backend {} unavailable: {e}", go_quote(&llm.backend)),
+                            &format!(
+                                "llm backend {} unavailable: {e}",
+                                quote_string(&llm.backend)
+                            ),
                             Vec::new(),
                         );
                     }
@@ -740,7 +746,7 @@ impl Inner {
                 &name,
                 &format!(
                     "data class {} may not be sent to backend {name}",
-                    go_quote(dc)
+                    quote_string(dc)
                 ),
                 Vec::new(),
             );
@@ -825,7 +831,7 @@ impl Inner {
                 &b.name(),
                 &format!(
                     "the llm judge returned decision {}",
-                    go_quote(&res.decision)
+                    quote_string(&res.decision)
                 ),
                 warns,
             );

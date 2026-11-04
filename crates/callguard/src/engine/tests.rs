@@ -2146,12 +2146,12 @@ fn resolve_project_dir_finds_the_git_root() {
 }
 
 #[test]
-fn go_duration_and_timestamps() {
-    assert_eq!(go_duration(150), "150ms");
-    assert_eq!(go_duration(8000), "8s");
-    assert_eq!(go_duration(1500), "1.5s");
-    assert_eq!(go_duration(90_000), "1m30s");
-    assert_eq!(go_duration(3_600_000), "1h0m0s");
+fn duration_and_timestamps() {
+    assert_eq!(format_duration(150), "150ms");
+    assert_eq!(format_duration(8000), "8s");
+    assert_eq!(format_duration(1500), "1.5s");
+    assert_eq!(format_duration(90_000), "1m30s");
+    assert_eq!(format_duration(3_600_000), "1h0m0s");
     let t = UNIX_EPOCH + Duration::new(1_793_620_800, 120_000_000);
     assert_eq!(rfc3339_nano(t), "2026-11-02T12:00:00.12Z");
     assert_eq!(

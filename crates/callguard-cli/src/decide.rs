@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 
 use callguard::engine::{self, Engine};
 use callguard::fallback::fallback_verdict;
-use callguard::gojson;
+use callguard::json_text;
 use callguard::schema::{Decision, Request};
 
 use crate::engine_child;
@@ -118,7 +118,7 @@ pub fn run(
 }
 
 fn print_json<T: serde::Serialize>(w: &mut dyn Write, v: &T) {
-    let b = gojson::to_string(v).unwrap_or_default();
+    let b = json_text::to_string(v).unwrap_or_default();
     let _ = writeln!(w, "{b}");
 }
 

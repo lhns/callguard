@@ -13,7 +13,7 @@ use regex::Regex;
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-use crate::policy::{self, go_quote};
+use crate::policy::{self, quote_string};
 
 /// Tool kinds (design section 4).
 pub const KIND_SHELL: &str = "shell";
@@ -62,7 +62,7 @@ pub fn kind_of(tool: &str) -> &'static str {
 // --- RE2 semantics ---------------------------------------------------
 
 /// `\s` in RE2: `[\t\n\f\r ]`.
-const GO_SPACE: &str = r"\t\n\f\r ";
+const RE2_SPACE: &str = r"\t\n\f\r ";
 
 /// Whether `chars[i..]` starts a repetition `{n}`, `{n,}` or `{n,m}`; returns
 /// its length. RE2 reads any other `{` as a literal, the `regex` crate fails.
@@ -105,9 +105,9 @@ fn translate_regex(pat: &str) -> String {
             match e {
                 'b' if !in_class => out.push_str(r"(?-u:\b)"),
                 'B' if !in_class => out.push_str(r"(?-u:\B)"),
-                's' if in_class => out.push_str(GO_SPACE),
-                's' => out.push_str(&format!("[{GO_SPACE}]")),
-                'S' => out.push_str(&format!("[^{GO_SPACE}]")),
+                's' if in_class => out.push_str(RE2_SPACE),
+                's' => out.push_str(&format!("[{RE2_SPACE}]")),
+                'S' => out.push_str(&format!("[^{RE2_SPACE}]")),
                 'd' if in_class => out.push_str("0-9"),
                 'd' => out.push_str("[0-9]"),
                 'D' => out.push_str("[^0-9]"),
@@ -663,7 +663,10 @@ impl Env {
                 i += 1;
             } else if c == b'[' {
                 let Some(end) = g[i..].find(']') else {
-                    return Err(RulesError(format!("glob {}: unclosed [", go_quote(glob))));
+                    return Err(RulesError(format!(
+                        "glob {}: unclosed [",
+                        quote_string(glob)
+                    )));
                 };
                 let class = &g[i + 1..i + end];
                 let class = match class.strip_prefix('!') {
@@ -679,7 +682,7 @@ impl Env {
             }
         }
         b.push('$');
-        compile_regex(&b).map_err(|e| RulesError(format!("glob {}: {e}", go_quote(glob))))
+        compile_regex(&b).map_err(|e| RulesError(format!("glob {}: {e}", quote_string(glob))))
     }
 }
 
@@ -1449,7 +1452,7 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
     if !["allow", "ask", "deny"].contains(&r.decision.as_str()) {
         return Err(format!(
             "decision {} must be allow, ask or deny",
-            go_quote(&r.decision)
+            quote_string(&r.decision)
         ));
     }
     let m = &r.r#match;
@@ -1472,8 +1475,10 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
         c.url = Some(re(&m.url, "match.url".into())?);
     }
     for (k, v) in &m.field {
-        c.fields
-            .insert(k.clone(), re(v, format!("match.field[{}]", go_quote(k)))?);
+        c.fields.insert(
+            k.clone(),
+            re(v, format!("match.field[{}]", quote_string(k)))?,
+        );
     }
     for g in &m.path {
         c.path.push(
@@ -1506,7 +1511,7 @@ impl Set {
         for r in rules {
             set.push(
                 compile_rule(r, env)
-                    .map_err(|e| RulesError(format!("rule {}: {e}", go_quote(&r.id))))?,
+                    .map_err(|e| RulesError(format!("rule {}: {e}", quote_string(&r.id))))?,
             );
         }
         Ok(Set { rules: set })

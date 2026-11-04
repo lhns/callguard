@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::backend::{Backend, BackendError, ClassifyRequest, ClassifyResult};
-use crate::policy::go_float_raw;
+use crate::policy::f64_raw;
 use crate::schema::{Decision, LAYER_LLM, LAYER_NONE, Request, Verdict};
 use crate::serde_util::nullable;
 
@@ -50,12 +50,12 @@ pub struct Mismatch {
 }
 
 fn num<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
-    go_float_raw(*v, s)
+    f64_raw(*v, s)
 }
 
 fn opt_num<S: Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
     match v {
-        Some(f) => go_float_raw(*f, s),
+        Some(f) => f64_raw(*f, s),
         None => s.serialize_none(),
     }
 }
@@ -347,7 +347,7 @@ impl Report {
     /// Writes the report as indented JSON, with a two-space indent, a trailing
     /// newline and `<`, `>`, `&` escaped.
     pub fn write_json(&self, w: &mut dyn Write) -> io::Result<()> {
-        let json = crate::gojson::to_string_indent(self).map_err(io::Error::other)?;
+        let json = crate::json_text::to_string_indent(self).map_err(io::Error::other)?;
         w.write_all(json.as_bytes())?;
         w.write_all(b"\n")
     }

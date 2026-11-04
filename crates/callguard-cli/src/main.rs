@@ -12,8 +12,8 @@ mod trust;
 use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use callguard::gojson;
 use callguard::hook::{LAST_RESORT_JSON, last_resort, panic_message};
+use callguard::json_text;
 use callguard::schema::Request;
 
 const USAGE: &str = "callguard - allow, ask or deny a coding-agent tool call
@@ -103,7 +103,7 @@ fn guarded(
         }
         ("decide", _) => {
             let v = last_resort(Some(&req), &format!("internal error: {panic}"));
-            match gojson::to_string(&v) {
+            match json_text::to_string(&v) {
                 Ok(b) => {
                     let _ = writeln!(stdout, "{b}");
                 }

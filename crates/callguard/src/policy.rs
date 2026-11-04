@@ -270,10 +270,7 @@ pub struct Llm {
     #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
     pub timeout_ms: i64,
     /// Default 0.7.
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "opt_go_float"
-    )]
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "opt_float")]
     pub min_confidence: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<TranscriptLimits>,
@@ -540,7 +537,7 @@ fn apply(
     };
     for k in &f.unknown {
         out.warnings
-            .push(format!("{path}: unknown key {} ignored", go_quote(k)));
+            .push(format!("{path}: unknown key {} ignored", quote_string(k)));
     }
     // Allow rules that would loosen the guard too far are dropped here, per
     // layer, before the merge (the file itself stays as written).
@@ -807,7 +804,7 @@ pub fn unknown_keys(data: &[u8]) -> Vec<String> {
 }
 
 /// A string in double quotes, escaped as the messages have always shown it.
-pub(crate) fn go_quote(s: &str) -> String {
+pub(crate) fn quote_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -839,13 +836,13 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
     if !one_of(&p.mode, &[MODE_ENFORCE, MODE_SHADOW]) {
         out.push(format!(
             "mode {} must be enforce or shadow",
-            go_quote(&p.mode)
+            quote_string(&p.mode)
         ));
     }
     if !one_of(&p.unattended_ask, &["deny", "ask"]) {
         out.push(format!(
             "unattended_ask {} must be deny or ask",
-            go_quote(&p.unattended_ask)
+            quote_string(&p.unattended_ask)
         ));
     }
     if p.deadline_ms < 0 {
@@ -855,7 +852,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
         if !BUILTIN_IDS.contains(&id.as_str()) {
             out.push(format!(
                 "disable_builtin: unknown built-in rule {}",
-                go_quote(id)
+                quote_string(id)
             ));
         }
     }
@@ -863,7 +860,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
     for (list, key) in [(&p.permissions.deny, "deny"), (&p.permissions.ask, "ask")] {
         for (i, r) in list.iter().enumerate() {
             if let Err(e) = permissions::parse(r) {
-                out.push(format!("permissions.{key}[{i}] {}: {e}", go_quote(r)));
+                out.push(format!("permissions.{key}[{i}] {}: {e}", quote_string(r)));
             }
         }
     }
@@ -878,7 +875,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
         if !["allow", "ask", "deny"].contains(&r.decision.as_str()) {
             out.push(format!(
                 "{name}: decision {} must be allow, ask or deny",
-                go_quote(&r.decision)
+                quote_string(&r.decision)
             ));
         }
         if r.r#match.is_empty() {
@@ -889,7 +886,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
         if !one_of(&n.mode, &[MODE_ENFORCE, MODE_SHADOW]) {
             out.push(format!(
                 "nah.mode {} must be enforce or shadow",
-                go_quote(&n.mode)
+                quote_string(&n.mode)
             ));
         }
         if n.timeout_ms < 0 {
@@ -920,7 +917,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
         if !one_of(&l.mode, &[MODE_ENFORCE, MODE_SHADOW]) {
             out.push(format!(
                 "llm.mode {} must be enforce or shadow",
-                go_quote(&l.mode)
+                quote_string(&l.mode)
             ));
         }
         if l.min_confidence.is_some_and(|c| !(0.0..=1.0).contains(&c)) {
@@ -936,7 +933,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
         {
             out.push(format!(
                 "llm.backend {} is not defined in backends",
-                go_quote(&l.backend)
+                quote_string(&l.backend)
             ));
         }
     }
@@ -950,13 +947,13 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
             }
             t => out.push(format!(
                 "backends.{k}: unknown type {} (anthropic, openai, exec, fake)",
-                go_quote(t)
+                quote_string(t)
             )),
         }
         if b.model.ends_with("-latest") {
             out.push(format!(
                 "backends.{k}: model {} is a moving alias; use an exact model id",
-                go_quote(&b.model)
+                quote_string(&b.model)
             ));
         }
     }
@@ -970,7 +967,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
 
 /// A float as JSON writes it in policy_rev ('f' form, 'e' form below 1e-6 or
 /// from 1e21, no fraction for whole numbers, "e-7" not "e-07").
-pub(crate) fn go_f64(v: f64) -> String {
+pub(crate) fn format_f64(v: f64) -> String {
     let abs = v.abs();
     if v == 0.0 {
         return "0".into();
@@ -988,25 +985,25 @@ pub(crate) fn go_f64(v: f64) -> String {
     format!("{v}")
 }
 
-/// Serializes `v` as `go_f64` writes it.
-pub(crate) fn go_float_raw<S: Serializer>(v: f64, s: S) -> Result<S::Ok, S::Error> {
-    match RawValue::from_string(go_f64(v)) {
+/// Serializes `v` as `format_f64` writes it.
+pub(crate) fn f64_raw<S: Serializer>(v: f64, s: S) -> Result<S::Ok, S::Error> {
+    match RawValue::from_string(format_f64(v)) {
         Ok(raw) => raw.serialize(s),
         Err(_) => s.serialize_f64(v), // NaN or infinity
     }
 }
 
-fn opt_go_float<S: Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
+fn opt_float<S: Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error> {
     match v {
-        Some(f) => go_float_raw(*f, s),
+        Some(f) => f64_raw(*f, s),
         None => s.serialize_none(),
     }
 }
 
 /// The canonical bytes of `p`: fields in declaration order, maps sorted,
-/// HTML-escaped (see `gojson`).
+/// HTML-escaped (see `json_text`).
 fn canonical_json(p: &Policy) -> String {
-    crate::gojson::to_string(p).unwrap_or_default()
+    crate::json_text::to_string(p).unwrap_or_default()
 }
 
 /// "sha256:<hex>" of the canonical JSON of `p`. Its form is frozen: it

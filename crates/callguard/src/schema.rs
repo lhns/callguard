@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 pub use crate::hostmeta::{GitStatus, Meta, RepoVisibility};
-use crate::serde_util::{go_float, is_false, is_zero, nullable, raw_some};
+use crate::serde_util::{is_false, is_zero, nullable, raw_some, whole_float};
 
 /// Schema identifiers (ADR 0002).
 pub const REQUEST_SCHEMA: &str = "callguard/request/v1";
@@ -243,7 +243,7 @@ pub struct Verdict {
         deserialize_with = "nullable"
     )]
     pub rule: String,
-    #[serde(default, serialize_with = "go_float", deserialize_with = "nullable")]
+    #[serde(default, serialize_with = "whole_float", deserialize_with = "nullable")]
     pub confidence: f64,
     #[serde(
         default,

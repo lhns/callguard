@@ -8,8 +8,8 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use crate::gojson;
-use crate::serde_util::{go_float, is_false, is_zero, nullable, raw_some};
+use crate::json_text;
+use crate::serde_util::{is_false, is_zero, nullable, raw_some, whole_float};
 
 /// How much of the log's end the deny-streak reader looks at.
 pub const TAIL_BYTES: u64 = 1 << 20;
@@ -55,7 +55,7 @@ pub struct Entry {
         deserialize_with = "nullable"
     )]
     pub rule: String,
-    #[serde(serialize_with = "go_float", deserialize_with = "nullable")]
+    #[serde(serialize_with = "whole_float", deserialize_with = "nullable")]
     pub confidence: f64,
     #[serde(
         skip_serializing_if = "String::is_empty",
@@ -164,7 +164,7 @@ impl Logger {
 
     /// Writes `e` as one line, in a single write.
     pub fn append(&self, e: &Entry) -> io::Result<()> {
-        let mut line = gojson::to_string(e).map_err(io::Error::other)?;
+        let mut line = json_text::to_string(e).map_err(io::Error::other)?;
         line.push('\n');
         let _guard = self.lock.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(dir) = Path::new(&self.path).parent()

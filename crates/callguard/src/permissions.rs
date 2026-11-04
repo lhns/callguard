@@ -38,7 +38,7 @@ mod spec;
 mod web;
 
 use crate::nah::{NahResult, NahVerdict};
-use crate::policy::{self, go_quote};
+use crate::policy::{self, quote_string};
 use crate::rules::{
     Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, PATH_KEYS, RulesError, field_values,
     kind_of,
@@ -390,7 +390,7 @@ pub fn vet_allow_list(allow: &[String], layer: &str, src: &str) -> (Vec<String>,
             Ok(_) => kept.push(r.clone()),
             Err(why) => warns.push(format!(
                 "{src}: permissions.allow {} dropped: {why}",
-                go_quote(r)
+                quote_string(r)
             )),
         }
     }
@@ -455,7 +455,10 @@ impl Permissions {
         ] {
             for (i, text) in list.iter().enumerate() {
                 let rule = parse(text).map_err(|e| {
-                    RulesError(format!("permissions.{key}[{i}] {}: {e}", go_quote(text)))
+                    RulesError(format!(
+                        "permissions.{key}[{i}] {}: {e}",
+                        quote_string(text)
+                    ))
                 })?;
                 dst.push(Entry {
                     text: text.trim().to_owned(),
@@ -472,7 +475,7 @@ impl Permissions {
                 }),
                 Err(why) => warns.push(format!(
                     "permissions.allow {} dropped: {why}",
-                    go_quote(text)
+                    quote_string(text)
                 )),
             }
         }

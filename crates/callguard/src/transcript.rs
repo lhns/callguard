@@ -9,7 +9,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use crate::gojson;
+use crate::json_text;
 use crate::serde_util::{nullable, raw_some};
 
 /// Roles of a [`Message`].
@@ -436,7 +436,7 @@ fn truncate(mut m: Message, max: usize) -> Message {
         && raw.len() > max
     {
         // A cut JSON document is invalid, so the truncated input becomes a string.
-        let s = gojson::to_string(&cut(raw, max)).unwrap_or_default();
+        let s = json_text::to_string(&cut(raw, max)).unwrap_or_default();
         m.input = RawValue::from_string(s).ok();
     }
     m

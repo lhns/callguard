@@ -486,7 +486,7 @@ fn default_policy_rev_is_pinned() {
 }
 
 #[test]
-fn go_float_formatting() {
+fn float_formatting() {
     for (v, want) in [
         (1.0, "1"),
         (0.0, "0"),
@@ -499,14 +499,14 @@ fn go_float_formatting() {
         (1e21, "1e+21"),
         (0.00001, "0.00001"),
     ] {
-        assert_eq!(go_f64(v), want);
+        assert_eq!(format_f64(v), want);
     }
 }
 
 #[test]
-fn go_quote_matches_percent_q() {
-    assert_eq!(go_quote("a\"b\\c\n"), r#""a\"b\\c\n""#);
-    assert_eq!(go_quote("é\u{1}"), "\"é\\x01\"");
+fn quote_string_matches_percent_q() {
+    assert_eq!(quote_string("a\"b\\c\n"), r#""a\"b\\c\n""#);
+    assert_eq!(quote_string("é\u{1}"), "\"é\\x01\"");
 }
 
 #[test]

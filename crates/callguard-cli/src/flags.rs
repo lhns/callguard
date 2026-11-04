@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn go_spellings() {
+    fn flag_spellings() {
         let p = parse(
             SPECS,
             &args(&[

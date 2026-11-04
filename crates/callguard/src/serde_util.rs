@@ -35,7 +35,7 @@ pub fn is_false(v: &bool) -> bool {
 
 /// A whole float is written without a fraction (`1`, not `1.0`), as confidences
 /// always have been in the logs; serde_json does not.
-pub fn go_float<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
+pub fn whole_float<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
     if v.is_finite() && v.fract() == 0.0 && v.abs() < 1e15 {
         s.serialize_i64(*v as i64)
     } else {
