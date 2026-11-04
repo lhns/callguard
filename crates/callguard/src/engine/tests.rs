@@ -1,4 +1,4 @@
-//! Ports of engine_test.go, engine_judge_test.go and failsafe_test.go.
+//! Engine, judge and fail-safe tests.
 //!
 //! The Go tests fake nah with a re-executed test binary; here a `NahEngine`
 //! fake plays that part.
@@ -1864,7 +1864,7 @@ fn the_probe_reads_the_command_like_go_does() {
     assert_eq!(*seen.lock().unwrap(), "git push origin main");
 }
 
-// --- failsafe_test.go (needs the real judge and the fake backends) ---------------
+// --- fail-safe (needs the real judge and the fake backends) ---------------
 
 /// End-to-end fail-safe checks through the real judge and fake backends: a
 /// timeout, a bad model output and an injection attempt never yield allow.
@@ -1952,7 +1952,7 @@ fn fail_safe_with_the_real_judge() {
     }
 }
 
-// --- engine_test.go: Load, ResolveProjectDir ---------------------------------------
+// --- engine: Load, ResolveProjectDir ---------------------------------------
 
 fn path_str(p: &std::path::Path) -> String {
     p.to_string_lossy().into_owned()

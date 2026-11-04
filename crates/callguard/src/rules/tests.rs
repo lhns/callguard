@@ -1,4 +1,4 @@
-//! Ports of internal/rules/rules_test.go and defaults_test.go, plus tests for
+//! Rule tests, plus tests for
 //! the places where Go and Rust differ (regex classes, JSON string decoding,
 //! field-name case).
 
@@ -766,7 +766,7 @@ fn compile_errors() {
     assert!(e.0.starts_with("rule \"x\": match.command:"), "{e}");
 }
 
-// --- defaults_test.go ---------------------------------------------------------
+// --- default rules ---------------------------------------------------------
 
 #[test]
 fn default_rules() {

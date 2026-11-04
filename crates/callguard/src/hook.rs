@@ -570,10 +570,7 @@ mod tests {
     use super::*;
 
     fn payload(name: &str) -> String {
-        let p = format!(
-            "{}/../../internal/hook/testdata/{name}",
-            env!("CARGO_MANIFEST_DIR")
-        );
+        let p = format!("{}/testdata/hook/{name}", env!("CARGO_MANIFEST_DIR"));
         std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}"))
     }
 

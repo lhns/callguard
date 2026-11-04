@@ -1,5 +1,5 @@
 //! Builds the reasoning-blind prompt for the LLM layer, calls a backend and
-//! validates its answer (internal/judge).
+//! validates its answer.
 //!
 //! Every JSON line of the user prompt goes through [`crate::gojson`], so `<`,
 //! `>` and `&` are escaped as in Go: no value can close the `<transcript>` tag
@@ -20,7 +20,7 @@ use crate::serde_util::{nullable, raw_some};
 use crate::transcript;
 
 /// The system prompt template; one copy, shared with the Go tree until Phase 5.
-const PROMPT_FILE: &str = include_str!("../../../internal/judge/prompt.md");
+const PROMPT_FILE: &str = include_str!("../assets/prompt.md");
 
 /// The only decisions the judge may return.
 pub const LABELS: [&str; 3] = ["allow", "ask", "deny"];

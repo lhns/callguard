@@ -62,7 +62,7 @@ fn many(rule: &'static str, cmds: &[&str]) -> Vec<Case> {
     cmds.iter().map(|c| sh(rule, c)).collect()
 }
 
-/// The positive cases of the ported rule tests (`internal/rules/defaults_test.go`
+/// The positive cases of the default-rule tests (`rules/tests.rs`
 /// and the built-in tests), plus the eval set.
 #[allow(clippy::vec_init_then_push)]
 fn cases() -> Vec<Case> {

@@ -5,7 +5,7 @@
 //! dataflow). The judge needs what it says, not its plumbing: the commands
 //! the call unwraps into, what each may do to which resource, where analysis
 //! gave up, and what the host looked like. Dataflow (occurrences, relations)
-//! is left out. The shape is documented in docs/nahwasm.md ("Facts").
+//! is left out.
 //!
 //! The projection works on nah's serialized graph rather than its Rust types,
 //! so new payload variants and fields pass through without a code change.

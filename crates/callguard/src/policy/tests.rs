@@ -1,5 +1,5 @@
-//! Ports of policy/policy_test.go, plus the policy_rev golden files captured
-//! from the Go binary.
+//! Policy tests, plus the policy_rev golden files captured
+//! from the last Go binary (tag `go-final`).
 
 use std::fs;
 use std::path::Path;

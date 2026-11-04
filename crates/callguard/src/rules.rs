@@ -1,5 +1,5 @@
 //! Maps tool calls to kinds, extracts paths and commands from their input, and
-//! evaluates the built-in and policy rules (internal/rules).
+//! evaluates the built-in and policy rules.
 //!
 //! Every regex here and in a policy is Go RE2. [`compile_regex`] makes the
 //! `regex` crate read it the way Go does, because the two differ where it

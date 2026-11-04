@@ -458,7 +458,7 @@ mod tests {
 
     fn fixture() -> String {
         format!(
-            "{}/../../internal/transcript/testdata/claude.jsonl",
+            "{}/testdata/transcript/claude.jsonl",
             env!("CARGO_MANIFEST_DIR")
         )
     }

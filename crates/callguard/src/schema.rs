@@ -1,5 +1,5 @@
 //! The wire types: `callguard/request/v1` and `callguard/verdict/v1`
-//! (ADR 0002). Field-for-field with callguard.go: same JSON names, same
+//! (ADR 0002). Same JSON names and
 //! omit-when-empty rules. `Tool.input` stays raw JSON.
 
 use std::collections::BTreeMap;
@@ -471,10 +471,7 @@ mod tests {
     fn hook_fixtures_are_json_objects() {
         // The fixtures are harness payloads, not callguard requests, so the
         // hook adapters (not this module) parse them; this only guards the files.
-        let dir = format!(
-            "{}/../../internal/hook/testdata",
-            env!("CARGO_MANIFEST_DIR")
-        );
+        let dir = format!("{}/testdata/hook", env!("CARGO_MANIFEST_DIR"));
         let mut n = 0;
         for e in std::fs::read_dir(dir).unwrap() {
             let p = e.unwrap().path();

@@ -1,5 +1,5 @@
 //! The engine: policy loading, the pipeline (builtin, nah, rules, llm) and the
-//! common finishing steps (engine.go + pipeline.go).
+//! common finishing steps.
 //!
 //! Go's `Decide(ctx, req)` becomes `decide(&self, req)`: the deadline is the
 //! policy's `deadline_ms`, counted from the call. Nah is a [`NahEngine`] held

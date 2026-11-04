@@ -1,4 +1,4 @@
-//! Ports of internal/evalrun/evalrun_test.go and usage_test.go.
+//! Tests of the eval runner and its cost accounting.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -353,7 +353,7 @@ fn text_report_and_comparison() {
     assert!(out.ends_with(&row("cases run", "0", "0")), "{out}");
 }
 
-// --- usage_test.go ----------------------------------------------------------------
+// --- usage ----------------------------------------------------------------
 
 struct Priced {
     name: String,

@@ -1,4 +1,4 @@
-//! The decision log: one JSON line per decision (internal/declog).
+//! The decision log: one JSON line per decision.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};

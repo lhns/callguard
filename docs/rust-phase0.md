@@ -1,6 +1,6 @@
 # Rust rewrite, Phase 0: native nah
 
-Spike: `spike/nah-native/`, nah v1.7.0 (rev 07fea9d), Rust 1.91.1. Raw notes on the plan's Phase 0, "Crash safety", "Duplicate danger rules" and "Rule gaps".
+Spike: `spike/nah-native/` (deleted in Phase 5; `git show 29a22b7:spike/nah-native/<file>`), nah v1.7.0 (rev 07fea9d), Rust 1.91.1. Raw notes on the plan's Phase 0, "Crash safety", "Duplicate danger rules" and "Rule gaps".
 
 ## Verdict
 
@@ -187,7 +187,7 @@ The five flips: two 46-command `&&` chains ending in a home delete (564 and 578 
 
 ## 6. Conformance
 
-Spike vs official v1.7.0 binary, same real directories, `conformance/main.go`, adapted from the nah-wasm test. Rows are in fixture name order. Idle, no load.
+Spike vs official v1.7.0 binary, same real directories, `spike/nah-native/conformance/main.go` (at 29a22b7; its Rust successor is the ignored `corpus_conformance` test in `callguard-nah`), adapted from the nah-wasm test. Rows are in fixture name order. Idle, no load.
 
 | Set | Compared | Spike 100 ms: agree | Spike 60 s: agree | Disagreements |
 |---|---|---|---|---|

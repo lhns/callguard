@@ -1,11 +1,11 @@
-//! The verdict for a call callguard could not evaluate (fallback.go).
+//! The verdict for a call callguard could not evaluate.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::schema::{Decision, LAYER_FALLBACK, Request, VERDICT_SCHEMA, Verdict};
 
-/// A fresh 32-hex-digit verdict id (engine.go's `newID`; it lives here because
+/// A fresh 32-hex-digit verdict id (it lives here because
 /// the fallback needs it and must never fail). Falls back to a clock-and-counter
 /// id if the system random source is unavailable.
 pub fn new_id() -> String {
