@@ -418,7 +418,13 @@ pub(crate) fn resolve_real(p: &str) -> Option<String> {
     for name in rest.iter().rev() {
         out.push(name);
     }
-    let s = out.to_string_lossy().replace('\\', "/");
+    let s = out.to_string_lossy();
+    // A backslash separates only on Windows; in a Unix file name it is a letter.
+    let s = if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s.into_owned()
+    };
     Some(if let Some(unc) = s.strip_prefix("//?/UNC/") {
         format!("//{unc}") // a network share
     } else {

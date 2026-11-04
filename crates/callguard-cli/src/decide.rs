@@ -233,11 +233,12 @@ mod tests {
     #[test]
     fn decide_exit_codes() {
         let dir = tempfile::tempdir().unwrap();
-        // LLM off so that nothing needs a backend.
+        // LLM off so that nothing needs a backend; nah off because the test binary
+        // is no nah child, and a failing nah now allows nothing.
         let pol = write_file(
             dir.path(),
             "sys.json",
-            r#"{"policy_version":1,"llm":{"enabled":false}}"#,
+            r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"enabled":false}}"#,
         );
         let base = ["--policy", pol.as_str(), "--no-user-policy", "--log", "-"];
         let d = dir.path();

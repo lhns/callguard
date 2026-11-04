@@ -21,10 +21,20 @@ use serde_json::Value;
 /// Listed expected differences: (case or fixture id, why). Only intended ones.
 /// JSON nested past 128 levels is intended too, but the edge cases show no
 /// difference (the tool input is kept raw), so it has no entry.
-const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[(
-    "hook-duplicate-tool-name",
-    "Rust rejects a duplicate struct field (strict) and takes the fail-safe ask; Go keeps the last one",
-)];
+const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
+    (
+        "hook-duplicate-tool-name",
+        "Rust rejects a duplicate struct field (strict) and takes the fail-safe ask; Go keeps the last one",
+    ),
+    (
+        "edge-nesting-129",
+        "nah cannot read input nested past its recursion limit; nah is required, so Rust takes the fail-safe ask where Go let the judge allow",
+    ),
+    (
+        "hook-nesting-129",
+        "as edge-nesting-129, through the hook: Rust asks, Go printed nothing",
+    ),
+];
 
 /// Cases where the Rust binary has nah and the Go one does not, and nah decides:
 /// (case id, nah's rule). Linux and Windows differ in what nah sees, so a case
