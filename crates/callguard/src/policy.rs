@@ -229,8 +229,8 @@ pub struct Nah {
         deserialize_with = "nullable"
     )]
     pub mode: String,
-    /// nah's own analysis budget. Default 2000, provisional until the load
-    /// run reports; it must not exceed `timeout_ms`, the hard kill.
+    /// nah's own analysis budget. Default 2000, kept by the load run
+    /// (docs/rust-phase0.md); it must not exceed `timeout_ms`, the hard kill.
     #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
     pub budget_ms: i64,
     /// Shipped nah guards by name: `true` turns a default-off guard on. Every
@@ -1257,7 +1257,7 @@ pub const DEFAULT_DEADLINE_MS: i64 = 11_000;
 /// The hard deadline for the nah process (see [`Nah::timeout_ms`]).
 pub const DEFAULT_NAH_TIMEOUT_MS: i64 = 10_000;
 
-/// nah's analysis budget (provisional until the load run reports).
+/// nah's analysis budget (kept by the load run, docs/rust-phase0.md).
 pub const DEFAULT_NAH_BUDGET_MS: i64 = 2_000;
 
 /// The built-in policy: the default rules plus the default of every setting.

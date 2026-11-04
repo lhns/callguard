@@ -1,9 +1,9 @@
 //! The engine: policy loading, the pipeline (builtin, nah, rules, llm) and the
 //! common finishing steps.
 //!
-//! Go's `Decide(ctx, req)` becomes `decide(&self, req)`: the deadline is the
-//! policy's `deadline_ms`, counted from the call. Nah is a [`NahEngine`] held
-//! in `Options`; the default is a supervised child process running nah.
+//! The deadline of `decide` is the policy's `deadline_ms`, counted from the
+//! call. Nah is a [`NahEngine`] held in `Options`; the default is a supervised
+//! child process running nah.
 
 use std::any::Any;
 use std::collections::HashSet;

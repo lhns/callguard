@@ -1,6 +1,6 @@
 # 0001 Go, single static binary, no third-party dependencies
 
-Status: Accepted (2026-11-02)
+Status: Superseded by ADR 0007 (2026-11-04)
 
 ## Context
 callguard runs once per tool call inside a harness hook, so process start time matters. Switchboard, its first host, is written in Go and wants to embed it. Supply-chain risk counts double for a security tool that sits in every agent's path.

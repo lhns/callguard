@@ -2,15 +2,20 @@
 
 callguard decides whether one pending coding-agent tool call may run without a human prompt: `allow`, `ask` or `deny`, with a reason, the layer and rule that decided, and a confidence. It is a peer of Claude Code's auto-mode classifier that works for any harness through hook adapters (Claude Code, Hermes, opencode, pi).
 
-Layers run in order and the first that decides wins: built-in hard-deny and self-protection rules, an optional nah subprocess, policy rules (regex, path and context matches), then an optional LLM judge. The judge sees user messages, tool calls and how they ended, the agent's prose only where the user replied to it, and facts callguard computes itself (git status, repo visibility, nah's parse), never tool output. Its prompt is adapted from a published version of Claude Code's auto-mode classifier prompt ([source](https://github.com/collinzrj/claude-code-auto-safeguard-prompt), which presents itself as that prompt; see [docs/design.md](docs/design.md) §7). Any error becomes `ask`, or `deny` when nobody can answer a prompt; callguard never fails open. Details: [docs/design.md](docs/design.md), decisions: [docs/adr](docs/adr).
+Layers run in order and the first that decides wins: built-in hard-deny and self-protection rules, nah (by Manuel Schipper, MIT; a deterministic shell and file guard, linked into the binary), policy rules (regex rules and rules in Claude Code's permission syntax), then an optional LLM judge. The judge sees user messages, tool calls and how they ended, the agent's prose only where the user replied to it, and facts callguard computes itself (git status, repo visibility, nah's parse), never tool output. Its prompt is adapted from a published version of Claude Code's auto-mode classifier prompt ([source](https://github.com/collinzrj/claude-code-auto-safeguard-prompt), which presents itself as that prompt; see [docs/design.md](docs/design.md) §7). Any error becomes `ask`, or `deny` when nobody can answer a prompt; callguard never fails open. Details: [docs/design.md](docs/design.md), decisions: [docs/adr](docs/adr).
 
 ## Install
 
+Download the archive for your system from the [releases](https://github.com/lhns/callguard/releases) (Linux musl x64 and arm64, macOS x64 and arm64, Windows x64), check it against `SHA256SUMS`, and put `callguard` on your `PATH`. Each archive carries the licence and the third-party notices.
+
+Or build from source with the Rust toolchain named in `rust-toolchain.toml` (rustup installs it on first use):
+
 ```sh
-go install github.com/lhns/callguard/cmd/callguard@<version>
+git clone https://github.com/lhns/callguard && cd callguard
+cargo build --profile dist -p callguard-cli    # target/dist/callguard
 ```
 
-Or from source: `git clone https://github.com/lhns/callguard && cd callguard && go build -o callguard ./cmd/callguard`. Go only, no other dependencies.
+The first build compiles nah and takes a long time (tens of minutes on a small machine, several GB of memory during the final link with `dist`'s fat LTO; plain `--release` links faster). nah is fetched from `github.com/lhns/nah` (a fork of nah v1.7.0 that adds an analysis budget), so the build needs network access to GitHub. Set `CALLGUARD_VERSION=1.2.3` while building to have `callguard version` print it.
 
 ## Harness setup
 
@@ -75,13 +80,18 @@ The plugins run `callguard hook generic` (found via `CALLGUARD_BIN`, else `PATH`
 
 ## Configuration
 
-Policy is JSON (`"policy_version": 1`) in layers: built-in defaults, system (`--policy`), user (`<user config dir>/callguard/policy.json`), project (`<project>/.callguard/policy.json`). **User and project layers can only tighten**: they may add `deny`/`ask` rules, add `llm.block` entries and raise `llm.min_confidence`; everything else in them is dropped with a warning. A system file with `"final": true` ignores the lower layers.
+Policy is JSON (`"policy_version": 1`) in layers: built-in defaults, system (`--policy`), user (`<user config dir>/callguard/policy.json`), project (`<project>/.callguard/policy.json`). **User and project layers can only tighten**: they may add `deny`/`ask` rules, enable nah guards and raise `llm.min_confidence` (the user layer may also add `llm.block` entries; a project's are ignored, because they go into the judge's prompt); everything else in them is dropped with a warning. The exception is `permissions.allow`, below. A system file with `"final": true` ignores the lower layers.
 
 ```json
 {
   "policy_version": 1,
   "final": false,
   "mode": "enforce",
+  "permissions": {
+    "deny": ["Bash(git push:*)", "Read(~/.ssh/**)"],
+    "ask": ["Bash(npm publish:*)"],
+    "allow": ["Bash(git status)", "Edit(src/**)"]
+  },
   "rules": [
     {"id": "no-prod-kubectl", "description": "kubectl against prod needs a human",
      "decision": "ask",
@@ -99,6 +109,10 @@ Policy is JSON (`"policy_version": 1`) in layers: built-in defaults, system (`--
 ```
 
 - `callguard policy check` loads and lints the layers and reports dropped keys.
+- **Rules** (`rules`) are regexes, with ids, on the command, URL, path or a field; the default rules are of this kind and run after nah.
+- **Permission rules** (`permissions.deny`, `ask`, `allow`) use Claude Code's syntax: `Bash(git push:*)` (a command prefix), `Bash(npm run build)` (exact), `Bash(git * main)` (a glob over words), `Read(~/.ssh/**)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, `mcp__server__tool`, or a bare tool name. Paths: `//abs`, `~/`, `/project-relative`, `./cwd-relative`. `Bash` also covers a harness's own shell tool. They match nah's parse word by word, so `Bash(git push:*)` also catches `bash -c 'git push'` and `xargs`. A deny or ask matches if any command of the call matches; an allow only if every command does and nah's parse and callguard's own lexer agree, so `git status; rm x` does not match `Bash(git status:*)`. An allow skips the judge; it never overrides a deny, nah or the built-in rules. Blanket and interpreter allows (`Bash(*)`, `Bash(python:*)`, ...), `npm run *`-style wildcards, `Agent` and `Monitor` are dropped with a warning in every layer.
+- **`callguard trust`**: a project's `permissions.allow` rules do nothing until you run `callguard trust` in that project. It prints the rules and asks, and needs a real terminal (no `--yes`, no environment override). Trust is tied to a hash of the project path and the rules, so a changed rule must be approved again. `callguard trust --list` and `--revoke` show and remove it. Deny and ask rules from a project apply without trust, since they only tighten.
+- **nah** is part of the binary and always on (`nah.enabled: false` is for debugging). It runs in a child process with a 2 s analysis budget (`nah.budget_ms`), a 10 s hard kill (`nah.timeout_ms`) and a 512 MiB memory cap. If it fails, rules still run but no allow can match, and the answer is the fail-safe one; the judge is not asked. `nah.guards` switches nah's guards on or off (system layer; other layers can only switch on). nah's own config files are not read.
 - **Unattended**: when nobody can answer a prompt (`--unattended`, or Claude's `dontAsk` mode), `ask` becomes `deny` (`"unattended_ask": "deny"`, the default; only the system layer can set `"ask"`). Errors then deny too.
 - **nah** is optional: with `"nah": {"enabled": true}` in the system policy, callguard runs `nah decide` after its built-in rules; without it callguard works alone.
 - **Shadow mode**: rules are enforced while the LLM layer defaults to `shadow`. A shadowed verdict has `enforced: false` and the harness behaves as without callguard, while the decision log records what callguard would have done. A shadowed nah layer does not stop the pipeline: its would-be verdict is logged and the later layers decide. Switch `llm.mode` to `enforce` once the log and `callguard eval` justify it.
@@ -109,7 +123,28 @@ Policy is JSON (`"policy_version": 1`) in layers: built-in defaults, system (`--
 
 ## Fail-safe
 
-Never `allow` on error. Bad input, a policy load error, a backend failure, a timeout or a panic in the hook yields an `ask` verdict, or `deny` when unattended, in the harness's native format. The overall deadline (`deadline_ms`, default 8000) sits below the harness timeouts.
+Never `allow` on error. Bad input, a policy load error, a backend failure, a timeout or a panic in the hook yields an `ask` verdict, or `deny` when unattended, in the harness's native format. The overall deadline (`deadline_ms`, default 11000) sits below the harness timeouts. Raise the timeout of anything that runs the hook or `decide` (Switchboard's `judge.timeout`, a plugin's) to at least 12 s.
+
+## Known limits
+
+- **Shell guards read quotes and backslashes, not globs or variables.** The guards for callguard's own files (`trusted-*`, `$HOME/.c*/`) see the text after quotes are removed; a glob or an expansion that only the shell resolves is not seen.
+- **`git $X push`**: a variable in place of the git subcommand is not recognised by rules that name `git push`; the call is left to the later layers (the judge, or an ask).
+- **A pty can satisfy the terminal check of `callguard trust`.** An agent that can allocate a pseudo-terminal and type "yes" could trust its own project rules. The guard keeps the agent from writing the trust file and from running the verb directly (self-protection), but this is not a hard boundary. `callguard trust` cannot run under mintty on Windows.
+- **Deep nesting**: nah follows `bash -c` three layers deep and gives up with partial coverage at four, and reads input nested past a limit not at all. The raw-text fallback still applies to deny and ask rules, an allow never matches, and unreadable input gets the fail-safe verdict.
+- **Windows under heavy load** (a median call about 50 times slower) lost two `fs-project-root` blocks (PowerShell rows) in the load test; a walk of `C:\` or `/` can take up to 9 s idle and longer under load, then the 10 s kill gives the fail-safe verdict.
+- **macOS**: the memory cap uses `RLIMIT_AS`, which macOS may not enforce. A runaway analysis is then stopped by the 10 s kill only.
+- **Permission paths cover tool calls**, not what a shell command reads or writes (the same as Claude Code).
+
+## Build and test
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --release --workspace --features callguard-cli/test-engines -- --include-ignored --test-threads=1
+node adapters/selftest.mjs
+```
+
+The ignored tests run the real nah; they need a release build to be fast. Four tests that walk the file system root are skipped by CI and run weekly (`slow.yml`): add `--skip` for them, as `ci.yml` does. `cargo test -p callguard-nah --test corpus_conformance -- --ignored` runs nah's own corpus through callguard's engine (about ten minutes). The Go implementation is at tag `go-final`.
 
 ## License
 

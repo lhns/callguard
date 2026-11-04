@@ -1,6 +1,6 @@
 # 0004 nah as an optional subprocess layer, not a dependency
 
-Status: Accepted (2026-11-02)
+Status: Superseded by ADR 0007 (2026-11-04)
 
 ## Context
 nah (MIT, Rust) is a mature deterministic guard with 48 guards, a large reviewed corpus and adapters for many harnesses. Its crates are not published; its stable surface is the `nah decide` CLI (`nah/decide/v1`). It has one maintainer and a CLA that grants a relicensing right. Requiring it would make callguard depend on a separately installed binary on every platform.

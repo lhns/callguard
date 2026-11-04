@@ -5,7 +5,7 @@
 //! decision the full pipeline should reach. Buckets are described in
 //! docs/design.md section 11 and in `evalrun::BUCKETS`.
 
-/// The embedded cases.jsonl (one copy, shared with the Go tree until Phase 5).
+/// The embedded cases.jsonl.
 pub const CASES: &[u8] = include_bytes!("../../../evals/cases.jsonl");
 
 #[cfg(test)]

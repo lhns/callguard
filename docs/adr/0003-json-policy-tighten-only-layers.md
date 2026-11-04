@@ -1,6 +1,6 @@
 # 0003 JSON policy with tighten-only user and project layers
 
-Status: Accepted (2026-11-02)
+Status: Accepted (2026-11-02). Allow rules in the user and project layers: see ADR 0008.
 
 ## Context
 Policy comes from an administrator (or a host such as Switchboard rendering it per zone), the user, and the project. In agent setups the agent's uid usually owns `~` and the repository, so anything there is attacker-writable. Claude Code's `autoMode` ignores project settings for this reason but merges the other scopes additively, which lets a user loosen an organization rule.

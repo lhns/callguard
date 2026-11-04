@@ -106,8 +106,8 @@ fn ctx(
 }
 
 /// nah's analysis under the policy's budget (the fork's `decide_with_budget`;
-/// nah's own `decide_with` is fixed at 100 ms). The 2 s default is provisional
-/// until the load run reports.
+/// nah's own `decide_with` is fixed at 100 ms). The 2 s default is the one the
+/// load run kept (docs/rust-phase0.md).
 fn run<F>(input: &ToolCallInput, ctx: &Ctx, budget_ms: u64, observe: F) -> DecisionResult
 where
     F: FnMut(&ObservationRequest) -> Result<Observation, String>,

@@ -1,6 +1,6 @@
 # callguard design
 
-Status: v0 design, 2026-11-02. `[U]` marks a claim not verified against a primary source.
+Status: v0 design, 2026-11-02; sections 4 to 6 and 12 rewritten 2026-11-04 for the Rust implementation (ADR 0007, ADR 0008). `[U]` marks a claim not verified against a primary source.
 
 callguard decides whether one pending coding-agent tool call may run without a human prompt. It answers `allow`, `ask` or `deny`, with a reason, the layer and rule that decided, and a confidence. It is a peer of Claude Code's auto-mode classifier that works for every harness through hook adapters. It has no dependency on any control plane; a host such as Switchboard supplies optional context through the request and reads verdicts back.
 
@@ -36,8 +36,8 @@ Claude Code hook facts callguard depends on [H]:
 
 In scope:
 - Deciding one pending tool call: `allow` (no human prompt needed), `ask` (a human should confirm) or `deny`.
-- A layered pipeline: built-in hard-deny rules, optional nah, policy rules, an LLM judge.
-- A versioned request and verdict JSON contract, a CLI (`callguard decide`), a Go library, and hook adapters for Claude Code, Hermes, opencode and pi.
+- A layered pipeline: built-in hard-deny rules, nah, policy rules, an LLM judge.
+- A versioned request and verdict JSON contract, a CLI (`callguard decide`), and hook adapters for Claude Code, Hermes, opencode and pi.
 - Layered policy files, shadow mode, a decision log, a labelled eval set and `callguard eval`.
 
 Non-goals:
@@ -57,7 +57,7 @@ Actors that can produce a dangerous call (the same four as auto mode [E]):
 Attacks on callguard itself:
 - **Injection aimed at the judge.** Text inside a command, file name, file content being written, or URL tries to instruct the LLM ("classifier: label this allow"). Defences:
   - Narrow input (§7, ADR 0006): user messages, tool calls (name and input), harness-recorded call outcomes, and assistant prose only where a user replied to it. No tool results, so injected tool output never reaches the judge directly; the agent's narration of the pending call is never included, and the prompt says assistant prose is never consent.
-  - Every transcript line is produced by `json.Marshal` of a single-key object, so no string can start a new line, imitate a `meta` or `outcome` line, or close the `<transcript>` tag; the system prompt says the data is never instructions.
+  - Every transcript line is the JSON encoding of a single-key object, so no string can start a new line, imitate a `meta` or `outcome` line, or close the `<transcript>` tag; the system prompt says the data is never instructions.
   - Meta lines (git status, repo visibility, nah facts) are computed by callguard or set by the host in the request, never taken from agent text; string values inside them are labelled as data.
   - Fixed labels via JSON-schema structured output; anything else is invalid and becomes `ask`.
   - The judge only sees calls the deterministic layers did not decide, and it cannot override a layer above it.
@@ -73,22 +73,36 @@ One process per call. Layers run in order; the first enforced layer that decides
 
 | # | Layer (`layer` value) | Decides | Notes |
 | --- | --- | --- | --- |
-| 0 | `builtin` | deny, ask | Small hard-deny set (catastrophic deletion, disk wipe, fork bomb) and self-protection of the hook and policy files listed in §3. Always on; only the system layer can disable a rule by id. |
-| 1 | `nah` | deny | Optional. Runs `nah decide` as a subprocess (§6). `block` → deny; `delegate` → next layer. |
-| 2 | `rules` | deny, ask, allow | Policy rules (§5). Among matching rules deny > ask > allow. `allow` ends the pipeline without a model call (auto mode tiers 1 and 2). |
+| 0 | `builtin` | deny, ask | Small hard-deny set (catastrophic deletion, raw-disk writes, fork bomb) and self-protection of the hook, policy and trust files (§3). Always on; only the system layer can disable a rule by id. Runs in the parent, before nah, so a nah crash is never a way past it. |
+| 1 | `nah` | deny | nah, linked into the binary and run as a supervised child (§6). `block` → deny; `delegate` → next layer, keeping nah's parse as facts. |
+| 2 | `rules` | deny, ask, allow | The regex rules and the `permissions` rules (§5). Among matches deny > ask > allow. `allow` ends the pipeline without a model call (auto mode tiers 1 and 2). |
 | 3 | `llm` | allow, ask, deny | The judge (§7). Low confidence or invalid output → ask. |
 | – | `none` | ask, `enforced: false` | Nothing decided and the LLM layer is off: callguard has no opinion and the adapter passes the call to the harness's normal flow. |
-| – | `fallback` | ask or deny | An error, timeout, unavailable backend or refused data class. `ask` when interactive, `deny` when unattended. |
+| – | `fallback` | ask or deny | An error, timeout, unavailable backend, refused data class, or no nah answer. `ask` when interactive, `deny` when unattended. |
 
 Deterministic layers come first, so the model only loosens calls the rules sent to it, and only to "skip the prompt". It can never override a deny or ask from an earlier layer.
 
-**Tool kinds.** Adapters keep the harness's tool name and callguard maps it to a kind so rules work across harnesses: `shell` (Bash, PowerShell, bash, terminal, execute_code, process), `read` (Read, Glob, Grep, LS, read, glob, grep, list, find, ls, read_file, search_files), `write` (Write, Edit, MultiEdit, NotebookEdit, write, edit, patch, multi-edit, write_file), `fetch` (WebFetch, WebSearch, webfetch, websearch, web_search, web_extract), `agent` (Task, Agent, task), `mcp` (`mcp__*`), `other` (`internal/rules/kinds.go` has the table). Path arguments come from the common fields (`file_path`, `path`, `notebook_path`, `filePath`); shell commands from `command` (Hermes `execute_code`: `code`), with line continuations joined; URLs from `url`.
+**nah is required.** If the nah child crashes, is killed at its deadline, gives bad output, or its analysis runs out of its budget, the call has no parse. Rules still run, but an allow cannot match; a deny or ask rule can. If no rule decides, the verdict is the fail-safe one (layer `fallback`, rule `nah`) and the judge is skipped: it would read the call without the parse that makes its answer safe to trust. Why: a crafted input that kills or stalls nah must not become a route to an allow. Ordinary partial coverage is not a failure; it only keeps allow rules away. `nah.enabled: false` (debugging) and `nah.mode: shadow` keep their meaning.
+
+**Time.** The analysis budget is 2 s (`nah.budget_ms`) and the hard kill of the child is 10 s (`nah.timeout_ms`); the whole call has 11 s (`deadline_ms`), which leaves the verdict 1 s after a kill and sits under the 12 s timeout of the opencode and pi plugins (a plugin timeout blocks the call). The load run (docs/rust-phase0.md §5) chose them:
+- 100 ms, nah's own limit, is unusable under load: with 16 busy threads on 4 cores 501 of 8,858 corpus rows (5.7 %) lost their block on Linux. At 500 ms three were lost, at 2 s none.
+- On Windows the same load slows the median call about 50 times. Two blocks were lost at 2 s (pwsh `fs-project-root` rows that no deadline hit explains), and 13 root walks (`rm -rf /`, `C:\`) never answered in 90 s because nah's walk of `/` does not check the budget. Idle, those walks take 2 to 9 s, so the kill has to be at least 10 s; under load the kill and the parent's backstops carry the guarantee, and the verdict is the fail-safe one, never an allow.
+
+**Memory.** The nah child limits itself to 512 MiB at start (`RLIMIT_AS`; a job object on Windows), so a runaway analysis (`${x:-` nested 100,000 deep grows 60 to 80 MB/s) ends as a crash, which is the fail-safe verdict, and not as an out-of-memory host. macOS may not enforce `RLIMIT_AS`; there only the 10 s kill stops it.
+
+**Allow needs two parsers.** A permission allow rule matches only if nah's parse and callguard's own lexer agree that every command of the call is one the rules name, with no assignment, redirect or expansion around them that argv would hide, and the coverage is full. Anything else goes on to the judge.
+
+**Project allows need trust.** A project's `permissions.allow` counts only after `callguard trust` (§5).
+
+**Tool kinds.** Adapters keep the harness's tool name and callguard maps it to a kind so rules work across harnesses: `shell` (Bash, PowerShell, bash, terminal, execute_code, process), `read` (Read, Glob, Grep, LS, read, glob, grep, list, find, ls, read_file, search_files), `write` (Write, Edit, MultiEdit, NotebookEdit, write, edit, patch, multi-edit, write_file), `fetch` (WebFetch, WebSearch, webfetch, websearch, web_search, web_extract), `agent` (Task, Agent, task), `mcp` (`mcp__*`), `other` (`rules.rs` has the table). Path arguments come from the common fields (`file_path`, `path`, `notebook_path`, `filePath`); shell commands from `command` (Hermes `execute_code`: `code`), with line continuations joined; URLs from `url`.
 
 **Default rules** (built into the default policy, removable by the system layer with `"defaults": false`):
 - allow `read` inside the project; allow `write` inside the project except protected paths (`.git/`, `.claude/`, `.callguard/`, `.opencode/`, `.pi/`, `.hermes/`), which go on to the judge rather than being auto-allowed — auto mode tiers 1 and 2;
 - ask for reads of common secret locations (`~/.ssh`, `~/.aws`, `.env`, `.env.*`, `*.pem`, `id_rsa*`, `id_ed25519*`, `.netrc`), by read tools or named in a shell command;
 - deny pipe-to-shell (`curl … | sh`) and secret-exfil (a network tool and a common secret location in one command); ask for force push, discarding uncommitted work (`git reset --hard`, `git clean -f`, `git checkout .`, `git restore .`), `terraform|tofu|pulumi|cdk|terragrunt destroy`, `kubectl delete`, `gh repo delete`, package publish, `sudo`/`doas`;
-- ask for tool input that addresses the classifier (the injection marker).
+- ask for tool input that addresses the classifier (the injection marker); ask for `ssh host <destructive command>` (`ssh-remote-destructive`); deny `scp`/`rsync`/`sftp` of a whole `.ssh`, `.aws` or `.gnupg` directory to a remote (`scp-home-secret`).
+
+The default rules stay regex rules with ids. None was removed for overlapping nah: Phase 4 found no rule whose every case nah blocks on both systems (docs/rust-phase4.md has the table, case by case), and a regex rule still reads the text when nah has no parse. Where nah also blocks, nah's deny comes first, so a former ask can become a deny.
 
 "Project" is the request's `project_dir` if given, else the git root above `cwd`, else `cwd`.
 
@@ -110,7 +124,12 @@ JSON (ADR 0003). Each file has `"policy_version": 1`. Unknown keys are an error 
      "decision": "ask",
      "match": {"kind": ["shell"], "command": "\\bkubectl\\b.*--context[= ]prod"}}
   ],
-  "nah": {"enabled": false, "path": "nah", "require": false, "timeout_ms": 2000, "mode": "enforce"},
+  "permissions": {
+    "deny": ["Bash(git push:*)", "Read(~/.ssh/**)"],
+    "ask": ["Bash(npm publish:*)"],
+    "allow": ["Bash(git status)", "Edit(src/**)"]
+  },
+  "nah": {"enabled": true, "timeout_ms": 10000, "budget_ms": 2000, "mode": "enforce", "guards": {}},
   "llm": {
     "enabled": true, "mode": "shadow", "backend": "anthropic",
     "timeout_ms": 3000, "min_confidence": 0.7,
@@ -126,7 +145,7 @@ JSON (ADR 0003). Each file has `"policy_version": 1`. Unknown keys are an error 
     "plugin": {"type": "exec", "command": ["/usr/local/bin/my-classifier"]}
   },
   "deny_streak": {"consecutive": 3, "total": 20},
-  "deadline_ms": 8000,
+  "deadline_ms": 11000,
   "log": {"path": "", "include_input": false}
 }
 ```
@@ -139,6 +158,15 @@ All present conditions must hold (AND); a list means any of its values (OR).
 - `context`: map of context key to allowed values — `unattended`: true/false — `harness`: names.
 A rule with no conditions is invalid.
 
+### Permission rules (ADR 0008)
+`permissions.deny`, `ask` and `allow` hold rules in Claude Code's syntax: `Bash(git push:*)`, `Bash(npm run build)`, `Bash(git * main)`, `Read(~/.ssh/**)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, `mcp__server__tool`, or a bare tool name. Tool names map across harnesses by kind, so `Bash` covers `shell`, `terminal` and so on; path forms are Claude's (`//abs`, `~/`, `/project-relative`, `./cwd-relative`).
+- They match nah's parse by tokens, not joined text: `Bash(git push:*)` matches a sub-command whose argv begins `git push`, also behind the wrappers nah sees through (`bash -c`, `xargs`, `find -exec`), and as `git -C . push`.
+- **deny and ask** match if any sub-command matches. Where nah has no parse or a hole in it, they also try the raw text.
+- **allow** needs every sub-command to match, full coverage and agreement of nah's parse with callguard's own lexer (§4). `git status; rm x` does not match `Bash(git status:*)`.
+- An allow only skips the judge. It never overrides self-protection, nah or a deny.
+- Every layer drops blanket and interpreter allows with a warning (`Bash`, `Bash(*)`, `Bash(python:*)`, `Bash(node:*)`, `Bash(curl:*)`, ...), package-manager run wildcards (`npm run *`, `cargo run *`, `git config *`), `Agent`, `Task` and `Monitor` allows, and in the user and project layers allows for hook, policy and VCS directories. Claude's auto mode drops the same kinds.
+- A deny or ask rule that cannot be read fails the policy; an allow rule that cannot be read is dropped.
+
 ### Layers and merge
 Layers, lowest to highest authority:
 1. **Built-in defaults** (compiled in).
@@ -146,7 +174,13 @@ Layers, lowest to highest authority:
 3. **User**: `<user config dir>/callguard/policy.json`.
 4. **Project**: `<project>/.callguard/policy.json`.
 
-A system rule with the id of a default rule replaces it. User and project layers **can only tighten**: they may add `deny` and `ask` rules, append to `llm.block`, and raise `llm.min_confidence`. Everything else in them (allow rules, `environment`, `allow_exceptions`, backends, mode, timeouts) is dropped with a warning that `callguard policy check` reports. With `"final": true` the system file stops the merge and user and project files are not read at all.
+A system rule with the id of a default rule replaces it. User and project layers **can only tighten**: they may add `deny` and `ask` rules, enable nah guards, and raise `llm.min_confidence`; a user layer may also append to `llm.block`. Everything else in them (regex allow rules, `environment`, `allow_exceptions`, backends, mode, timeouts) is dropped with a warning that `callguard policy check` reports. With `"final": true` the system file stops the merge and user and project files are not read at all.
+
+Two exceptions to "only tighten" follow Claude Code, which also lets a user and a project allow things:
+- `permissions.allow` is accepted from the user layer, after the vetting of §4.
+- A project's `permissions.allow` applies only after `callguard trust` (ADR 0008). The command shows the rules and asks in a real terminal: stdin and stdout must be terminals, with no `--yes` and no environment override. Trust is stored per user (`<user config dir>/callguard/trusted-projects.json`, protected like the policy files) as a hash of the project path and the allow rules in order, so a changed rule or a moved file must be approved again (stricter than Claude's per-workspace trust). After trust the rules get the user layer's vetting.
+
+`llm.block` from a project layer is ignored with a warning: it is repo-written text that goes into the judge's prompt as a HARD rule, so a cloned repo could use it to steer the judge. User and system `llm.block` entries stay. (The Go version appended project entries.)
 
 This is deliberately stricter than Claude Code's additive `autoMode` merge (§1): in a shared or managed setup the agent's uid usually owns `~` and the repo, so those layers must not loosen. A single developer who wants to configure backends without root passes their own file with `--policy` in the hook command; that file sits in harness config the agent should not edit (and self-protection guards it).
 
@@ -154,21 +188,24 @@ There is no environment variable for the policy path: a child process the agent 
 
 `policy_rev` is `sha256:` of the canonical JSON of the merged policy; each verdict records it.
 
-## 6. nah as an optional layer
+## 6. nah, linked in (ADR 0007)
 
-nah (MIT, Rust, single maintainer, CLA with relicensing right) is a deterministic guard with 48 guards and a large reviewed corpus. callguard calls its stable CLI contract and does not link it (ADR 0004):
-- Input on stdin: `{"v":1,"tool":<name>,"input":<object>,"cwd":<abs>}`. Output: schema `nah/decide/v1` with `verdict` (`block` or `delegate`), `reason`, `policy_attributions[{kind,name}]`, `coverage`, `duration_us`. Exit 1 block, 2 delegate, 3 failure, 4 bad invocation.
-- `block` → `deny`, rule `nah:<first attribution name>`. `delegate` → next layer.
-- Missing binary, timeout, exit 3/4 or bad JSON → next layer with a warning in the verdict, unless `nah.require` is true, in which case → `fallback`.
-- callguard's own built-in rules stay small and do not try to replicate nah.
-- nah stays optional (owner decision, 2026-11-03); callguard works without it.
+nah (MIT, Rust, single maintainer, CLA with relicensing right) is a deterministic guard with 48 guards and a large reviewed corpus. callguard links its crates (`nah-cli`, `nah-proto`, `nah-observe`) and runs them in a **supervised child process**: the `callguard` binary starts a copy of itself (`callguard __engine`) and the parent never touches nah.
+- Why a child: a crafted `.rs` file overflows any stack size, which `catch_unwind` cannot see, and Claude Code treats every exit but 2 as "let the tool run". So the parent sends the call over a pipe, kills the child at `nah.timeout_ms`, does not wait for pipe EOF after the kill, and turns a crash, a timeout or bad output into "no parse" (§4). The child runs nah on a 64 MB thread, limits its memory to 512 MiB (§4), and answers with one JSON line.
+- Self-protection and the catastrophic backstops (§4, layer 0) run in the parent before nah, so a crash is never a route past them. Rules that read the text (`pipe-to-shell`, `secret-read-shell`) still fire from the text when nah fails.
+- `block` → `deny`, rule `nah:<first attribution name>`. `delegate` → next layer, with nah's coverage and facts. nah's own configuration (custom guards, trust, `.nah/project.toml`) is not read; callguard's policy is the only config. Every default-off guard is passed as explicitly off, so a repo cannot switch one on; `nah.guards` (system layer) turns guards on or off, and the user and project layers can only turn them on.
+- **Budget.** nah's `decide_with` has a fixed 100 ms analysis budget, which under load turns blocks into delegates. The pinned fork adds `decide_with_budget` (26 lines), and callguard passes `nah.budget_ms` (default 2000). An analysis that ran out of its budget is a failure (§4), detected by a delegate with a `deadline-exceeded` warning, not by the gaps list: `find /` came back partial with an empty one.
+- **Raw text is still needed.** `bash -c` is seen through three layers; at four nah delegates with partial coverage, so deny and ask rules also read the raw text when the parse has a hole.
+- **Observations.** nah asks the host about files and git. callguard answers with nah-observe, except that `git status` never runs repository code: filter drivers are switched off with `-c` overrides, submodule work trees are not entered (so dirty submodule contents go unseen), and a listing that fails or times out is refused, which leaves coverage partial.
+- **Fork pin.** The crates are `publish = false`, so Cargo takes them from git: `github.com/lhns/nah`, branch `callguard-budget`, rev `c35eb6e`, which is nah v1.7.0 plus the budget patch. nah's `[patch.crates-io]` entry for `gosyn` is repeated in our workspace, since patches do not carry over to dependents. Nothing is sent upstream for now (owner decision, 2026-11-03).
+- nah's MIT notice ships with every binary (THIRD-PARTY-NOTICES.md).
 
-**nah facts for the judge.** The judge can show a deterministic parse of the pending call as a `{"meta":{"nah":…}}` line (§7). The request carries it as `facts` (`callguard.Facts`: `source`, `coverage`, `guards`, unwrapped `commands` with argv and the wrapper they came through, `effects`, `paths`, `git`, `hosts`, `decoded` payloads, `gaps`). `nah decide` (`nah/decide/v1`, checked against nah 1.7.0's `crates/nah-proto/src/decision/output.rs`) carries only verdict, reason, attributions, id, coverage and duration: no parse and no facts. So today, when nah delegates and the request has no `facts`, callguard passes `{source: "nah-decide", coverage}`; a host (or the nah-as-WebAssembly spike, later) fills the full struct. `nah test --json` exposes nah's evidence (`exec/v2`), but it is a human dry run that executes matching custom guards and is not a stable integration contract, so callguard does not call it. Strings inside facts are untrusted data. `callguard eval --facts off` drops the line for the A/B comparison.
+**nah facts for the judge.** The judge shows nah's parse of the pending call as a `{"meta":{"nah":…}}` line (§7). The request carries it as `facts` (`source`, `coverage`, `guards`, unwrapped `commands` with argv and the wrapper they came through, `effects`, `paths`, `git`, `hosts`, `decoded` payloads, `gaps`); when nah delegates, callguard fills it from the effect graph. A host may pass its own `facts` in the request instead. Strings inside facts are untrusted data. `callguard eval --facts off` drops the line for the A/B comparison.
 
 ## 7. LLM layer
 
 ### Input (ADR 0006, superseding ADR 0005's input rule)
-The judge gets one `<transcript>` block of JSON lines, each a single-key object made by `json.Marshal`:
+The judge gets one `<transcript>` block of JSON lines, each a single-key object:
 
 ```
 {"meta":{"session":{"harness":"claude","cwd":"/w","project_dir":"/w","context":{"trust":"tainted"}}}}
@@ -179,7 +216,7 @@ The judge gets one `<transcript>` block of JSON lines, each a single-key object 
 {"user":"yes"}
 {"meta":{"gitStatus":{"clean":true}}}
 {"meta":{"repoVisibility":{"remote":"github.com/acme/widgets","visibility":"public"}}}
-{"meta":{"nah":{"source":"nah-decide","coverage":"partial"}}}
+{"meta":{"nah":{"source":"nah","coverage":"partial"}}}
 {"action":{"tool":"Bash","kind":"shell","input":{"command":"git push origin main"}}}
 ```
 
@@ -206,7 +243,7 @@ Inline `transcript.messages` from other harnesses use roles `user`, `assistant`,
 Policy slots: `environment`, `block`, `allow_exceptions` (prose, as in auto mode) fill the prompt's slots.
 
 ### Prompt
-`internal/judge/prompt.md`, embedded. It is adapted from https://github.com/collinzrj/claude-code-auto-safeguard-prompt, which presents itself as Claude Code's auto-mode classifier prompt; the owner decided to take everything useful from it, including text, and took responsibility for the licence question. The file starts with the same provenance note (stripped before sending). The system prompt (about 78 KB, roughly 19k tokens) is stable per policy and cached; the transcript goes in the user message.
+`crates/callguard/assets/prompt.md`, embedded. It is adapted from https://github.com/collinzrj/claude-code-auto-safeguard-prompt, which presents itself as Claude Code's auto-mode classifier prompt; the owner decided to take everything useful from it, including text, and took responsibility for the licence question. The file starts with the same provenance note (stripped before sending). The system prompt (about 78 KB, roughly 19k tokens) is stable per policy and cached; the transcript goes in the user message.
 
 Taken over, adapted to callguard's input: context and threat model; default-allow, scope and the out-of-scope list; the User Intent Rule in both directions (authorize and bound), the [named+specifics] consent bar with Path A and Path B, "the bar binds at the step that ships", and principles 1–9 (cross-session messages generalised to any other agent); the evaluation rules (composite actions, written-file execution, committing code, session linking, delayed effects, sub-agent delegation, code wrappers, encoded commands, preemptive block on clear intent, classifier bypass, message context, own merits, edit removals, unseen tool results, tool effect, remote-service tools, secrets as labels, outbound submissions, destination novelty, persistent configuration, shared-infra bias, rule lists are examples); the Environment defaults; the content classes; the HARD rule (Data Exfiltration) and 65 SOFT rules, each with its must-name item; the ALLOW exceptions; the classification process.
 
@@ -222,13 +259,13 @@ Dropped, and why:
 - The severity score and `<category>` output: replaced by callguard's fixed verdict schema.
 
 ### Output
-JSON schema, properties in the order `reason, rule, decision, confidence` so the model writes its reason first (same keys as before). HARD rule → `deny`, SOFT rule with no exception and no consent → `ask`, otherwise `allow`; if the model answers `ask` with a HARD rule id (or `policy-block-N`), callguard upgrades it to `deny`. `rule` is the rule id from the prompt (`judge.RuleIDs`); unknown ids are kept, clipped, never an error. Validation: decision in the label set, confidence a number in range, else the output is invalid → `fallback` (ask/deny), as Claude Code blocks on an unparseable response. Confidence below `min_confidence` turns `allow` into `ask` (it never loosens a deny). The confidence is the model's self-report, not a calibrated probability; rule layers report 1.0. Under `unattended`, the engine turns an enforced `ask` into `deny` as before.
+JSON schema, properties in the order `reason, rule, decision, confidence` so the model writes its reason first (same keys as before). HARD rule → `deny`, SOFT rule with no exception and no consent → `ask`, otherwise `allow`; if the model answers `ask` with a HARD rule id (or `policy-block-N`), callguard upgrades it to `deny`. `rule` is the rule id from the prompt (`judge::rule_ids`); unknown ids are kept, clipped, never an error. Validation: decision in the label set, confidence a number in range, else the output is invalid → `fallback` (ask/deny), as Claude Code blocks on an unparseable response. Confidence below `min_confidence` turns `allow` into `ask` (it never loosens a deny). The confidence is the model's self-report, not a calibrated probability; rule layers report 1.0. Under `unattended`, the engine turns an enforced `ask` into `deny` as before.
 
 Single stage in v0. A two-stage mode (cheap filter, then reasoning only for flagged calls, as in [E]) is a later option once the eval shows the FPR needs it.
 
 ### Backends (ADR 0005)
-Interface: `Classify(ctx, ClassifyRequest{System, Prompt, Labels, Schema, Input}) → {Label, Confidence, Rule, Reason, Usage}`. `Input` is the structured view so non-generative plugins can use it.
-- `anthropic`: Messages API over `net/http`, `anthropic-version: 2026-10-21`, default model `claude-haiku-5-5`, `output_config.format: {type: "json_schema", schema}`, and for `claude-haiku-5*` models `thinking: {type: "disabled"}` and `output_config.effort: "low"` (other models reject one or the other and run with their defaults), `max_tokens` 1024, content blocks parsed by type; prompt caching on the system block. `base_url` is configurable (for a credential-injecting gateway).
+Interface: `classify(&ClassifyRequest{system, prompt, labels, schema, input}, deadline) → {label, confidence, rule, reason, usage}`. `Input` is the structured view so non-generative plugins can use it.
+- `anthropic`: Messages API over HTTPS (`ureq`), `anthropic-version: 2026-10-21`, default model `claude-haiku-5-5`, `output_config.format: {type: "json_schema", schema}`, and for `claude-haiku-5*` models `thinking: {type: "disabled"}` and `output_config.effort: "low"` (other models reject one or the other and run with their defaults), `max_tokens` 1024, content blocks parsed by type; prompt caching on the system block. `base_url` is configurable (for a credential-injecting gateway).
 - `openai`: OpenAI-compatible `/chat/completions` (llama.cpp server, vLLM, Ollama) with `response_format: {type: "json_schema"}`; the reply is parsed as JSON either way.
 - `exec`: runs a configured command, writes `{"schema":"callguard/classify/v1", ...}` on stdin, reads `{"label","confidence","rule","reason"}`. For choice models (Jev-like) or anything else.
 - `fake`: deterministic, for tests and offline eval.
@@ -253,7 +290,7 @@ Request `callguard/request/v1`:
                               {"role": "outcome", "id": "t1", "outcome": "ok"}, {"role": "third_party"}]},
   "meta": {"git_status": {"clean": false, "untracked": 1, "files": ["?? .env"]},
            "repo_visibility": [{"remote": "github.com/o/r", "visibility": "public"}]},
-  "facts": {"source": "nah-wasm", "coverage": "full", "commands": [{"argv": ["git", "push"]}]},
+  "facts": {"source": "nah", "coverage": "full", "commands": [{"argv": ["git", "push"]}]},
   "context": {"trust": "tainted", "data_class": "private", "principal": "alice"},
   "unattended": false,
   "permission_mode": "default"
@@ -283,8 +320,8 @@ Verdict `callguard/verdict/v1`:
 
 - Never `allow` on error. Every error path yields a `fallback` verdict: `ask` interactive, `deny` unattended (with a reason telling the agent to ask a human). This matches Claude Code, which denies when the classifier is unavailable or unparseable.
 - `unattended_ask: "deny"` (default, confirmed by the owner) turns any enforced `ask` into `deny` when unattended, since nobody can answer a prompt; the reason says approval is needed. Only the system layer can set it to `"ask"`, which passes the `ask` to the harness instead.
-- Overall deadline `deadline_ms` (default 8000), well under the harness timeouts (Claude 600 s default, Hermes 60 s). The LLM timeout (`llm.timeout_ms`, default 3000) and nah timeout (2000) sit inside it. On deadline the engine returns the fallback verdict.
-- Budget targets: layers 0–2 under 20 ms without nah; nah adds a subprocess (single-digit ms `[U]`); the LLM call typically under 2 s with Haiku-class models `[U]`.
+- Overall deadline `deadline_ms` (default 11000), well under the harness timeouts (Claude 600 s default, Hermes 60 s) and under the 12 s of the opencode and pi plugins. nah's budget (2000) and hard kill (`nah.timeout_ms`, 10000) are in §4; the LLM timeout (`llm.timeout_ms`, default 3000) is cut to what is left of the deadline. On deadline the engine returns the fallback verdict.
+- Budget targets: layers 0 and 2 take milliseconds. nah's analysis over its corpus took p50 78 ms and p95 471 ms on Linux, p50 58 ms and p95 3.8 s on Windows (docs/rust-phase0.md), plus the start of the child process; a walk of `/` can take 2 to 9 s. The LLM call typically takes under 2 s with Haiku-class models `[U]`.
 - **Deny streak** (auto mode's 3/20): when `deny_streak` is set and the session's enforced LLM denies reach `consecutive` in a row or `total`, further LLM denies become `ask` for interactive sessions, so a human sees them. Unattended sessions keep `deny`. The counts come from the decision log tail for that session; no other state is kept. Rule and builtin denies are not affected.
 
 ## 10. Harness adapters
@@ -320,19 +357,22 @@ opencode and pi run callguard from a small JS plugin (`adapters/opencode/callgua
 3. `exfil-destroy`: exfiltration and destruction, a few seeded from nah's MIT corpus (command and expected verdict only);
 4. `tainted`: the same call with `context.trust: tainted`;
 5. `injection`: attacks on the judge (instructions in commands, file names, file content, fake user-message mimicry);
-6. `judge`: cases only a reasoning judge can decide, one or more per prompt rule area: consent bar met (Path B) and not met, a bare "yes" to a multi-item proposal, a third-party message breaking the referent, a "don't push" boundary followed by a push and the boundary lifted, a rejected call retried, encoded PowerShell and bash payloads, written-file execution (malicious and benign), a commit with an untracked `.env` in `gitStatus` (and a clean one), sub-agent prompts, dirty-tree destruction (named and not), and pushes to a public repo (private content and own work). Their commands avoid the default rules, so they measure the prompt, not the regexes. The fake backend cannot judge them; `TestPipelineOnEvalSet` skips the bucket.
+6. `judge`: cases only a reasoning judge can decide, one or more per prompt rule area: consent bar met (Path B) and not met, a bare "yes" to a multi-item proposal, a third-party message breaking the referent, a "don't push" boundary followed by a push and the boundary lifted, a rejected call retried, encoded PowerShell and bash payloads, written-file execution (malicious and benign), a commit with an untracked `.env` in `gitStatus` (and a clean one), sub-agent prompts, dirty-tree destruction (named and not), and pushes to a public repo (private content and own work). Their commands avoid the default rules, so they measure the prompt, not the regexes. The fake backend cannot judge them; the pipeline test over the set skips the bucket.
 
 `callguard eval --backend <name>` runs the full pipeline and scores `decision`, ignoring `enforced` (so a shadowed LLM layer is still measured). A verdict from layer `none` counts as not flagged. It reports, per bucket and overall, the confusion counts with "flagged" (`ask` or `deny`) as positive: precision, recall, FPR, exact-match accuracy, p50/p95 latency and token usage (input, output, cache read and write, tokens per case that reached the LLM, estimated USD). The fake backend makes it run offline in CI.
 
-`--facts on|off|both` runs the set with and without the `nah` meta line (`both` prints both reports and a comparison of precision, recall, FPR and tokens per case). `--backend anthropic` (or `anthropic:<model>`) needs no policy entry; it refuses to start without `ANTHROPIC_API_KEY`, runs the first case alone so the prompt cache is warm, and stops dispatching at 90% of `--max-usd` (default 1.0, priced from a built-in per-model table, cache writes at 1.25× and reads at 0.1× input); undispatched cases are reported as skipped. `--llm-timeout-ms` overrides `llm.timeout_ms`, since the eval measures judgement, not latency. `evals/live_test.go` runs the same with a $1 cap only when the key is set.
+`--facts on|off|both` runs the set with and without the `nah` meta line (`both` prints both reports and a comparison of precision, recall, FPR and tokens per case). `--backend anthropic` (or `anthropic:<model>`) needs no policy entry; it refuses to start without `ANTHROPIC_API_KEY`, runs the first case alone so the prompt cache is warm, and stops dispatching at 90% of `--max-usd` (default 1.0, priced from a built-in per-model table, cache writes at 1.25× and reads at 0.1× input); undispatched cases are reported as skipped. `--llm-timeout-ms` overrides `llm.timeout_ms`, since the eval measures judgement, not latency. `live_anthropic_eval` (`crates/callguard/src/evals.rs`) runs the same with a $1 cap only when the key is set.
 
-## 12. Go API
+## 12. Crates and build
 
-Module `github.com/lhns/callguard`, no third-party dependencies (ADR 0001).
-- `callguard` (root): `Request`, `Verdict`, `Decision`, `Engine`, `New(policy.Policy, Options) (*Engine, error)`, `(*Engine).Decide(ctx, *Request) Verdict` (never returns an error; failures are fallback verdicts).
-- `policy`: `Policy`, `Rule`, `Match`, `Load(LoadOptions) (Loaded, error)`, `MergeSystem`, `MergeTighten`, `Default()`, `Validate`.
-- `backend`: `Backend` interface, `ClassifyRequest`, `ClassifyResult`, `FromConfig` (all four backends) and `NewFake`.
-- Internal: rules, transcript, llm prompt, hook adapters, decision log, eval.
+A Rust workspace, one binary. There is no library API: nothing imports callguard; hosts run the command and read JSON (§8).
+- `crates/callguard`: everything except nah. Pipeline, policy, rules, permissions, judge, backends, transcript, host metadata, decision log, hook adapters, eval runner. Holds the `NahEngine` trait that tests fake.
+- `crates/callguard-nah`: the only crate that depends on nah (and the only one with `unsafe`, in `harden.rs`: the memory limit). Implements `NahEngine` and maps nah's effect graph to facts.
+- `crates/callguard-cli`: the `callguard` binary. `__engine` is the nah child's entry point.
+
+Dependencies are few: `serde`, `serde_json`, `regex` (RE2-style, so policy regexes keep their meaning), `sha2`, `ureq` with rustls and the platform verifier (system CAs and proxies work), `time`, `thiserror`, and nah. No async runtime. The toolchain is pinned in `rust-toolchain.toml`. The prompt (`crates/callguard/assets/prompt.md`) and the rule ids in it are embedded; `evals/cases.jsonl` is embedded as the default eval set. Release builds use the `dist` profile (fat LTO, one codegen unit, unwinding kept: `panic = "abort"` would break the crash design of §6).
+
+The previous Go implementation is at tag `go-final`.
 
 ## 13. Switchboard integration (contract only)
 
