@@ -173,7 +173,11 @@ fn tighten_only() {
             && lm.transcript.as_ref().unwrap().max_bytes == 24000,
         "llm loosened: {lm:?}"
     );
-    assert_eq!(lm.block.join(","), "u-block,p-block");
+    assert_eq!(
+        lm.block.join(","),
+        "u-block",
+        "a project layer's llm.block goes into the judge's prompt and is ignored"
+    );
     assert_eq!(
         lm.min_confidence,
         Some(0.95),
@@ -213,6 +217,7 @@ fn tighten_only() {
         "llm.allow_exceptions",
         "llm.transcript",
         "llm.min_confidence",
+        "llm.block",
     ] {
         let want = format!("policy.json: {key} ignored");
         assert!(

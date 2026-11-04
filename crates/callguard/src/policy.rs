@@ -564,6 +564,17 @@ fn apply(
     };
     layer_policy.permissions.allow = kept;
     out.warnings.extend(dropped);
+    // llm.block goes into the judge's prompt; text written by a repo must not.
+    if layer == LAYER_PROJECT {
+        if let Some(l) = layer_policy.llm.as_mut() {
+            if !l.block.is_empty() {
+                l.block.clear();
+                out.warnings.push(format!(
+                    "{path}: llm.block ignored: it goes into the judge's prompt, so a project file may not set it"
+                ));
+            }
+        }
+    }
     if layer == LAYER_SYSTEM {
         out.policy = merge_system(&out.policy, &layer_policy);
     } else {
