@@ -32,6 +32,7 @@ fn main() {
             exit(2);
         }
         "garbage" => print!("not json"),
+        "array" => print!(r#"["ask",0.8,"x","y"]"#),
         "big" => print!("{}", "a".repeat(70 << 10)),
         "hang" => std::thread::sleep(Duration::from_secs(60)),
         _ => {}

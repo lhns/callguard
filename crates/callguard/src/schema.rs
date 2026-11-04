@@ -121,6 +121,34 @@ pub struct Request {
     pub facts: Option<Facts>,
 }
 
+impl Request {
+    /// Decodes a request object. Field names match in any letter case (the
+    /// exact spelling wins), also inside `tool`; `tool.input` stays as sent.
+    pub fn from_json(body: &[u8]) -> Result<Request, String> {
+        crate::serde_util::decode_object(
+            body,
+            &[
+                "schema",
+                "v",
+                "harness",
+                "session_id",
+                "tool_use_id",
+                "cwd",
+                "project_dir",
+                "tool",
+                "transcript",
+                "context",
+                "unattended",
+                "permission_mode",
+                "meta",
+                "facts",
+            ],
+            &[("tool", &["name", "input"])],
+            false,
+        )
+    }
+}
+
 /// The pending call. `input` is the harness's argument object, as sent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -494,6 +522,30 @@ mod tests {
             serde_json::to_string(&req).unwrap(),
             r#"{"tool":{"name":"Bash"}}"#
         );
+    }
+
+    #[test]
+    fn request_keys_match_in_any_letter_case() {
+        let r = Request::from_json(
+            br#"{"Unattended":true,"TOOL":{"Name":"Bash","INPUT":{"Command":"ls"}}}"#,
+        )
+        .unwrap();
+        assert!(r.unattended);
+        assert_eq!(r.tool.name, "Bash");
+        // The tool input is raw: its keys and spacing are not touched.
+        assert_eq!(r.tool.input_str(), r#"{"Command":"ls"}"#);
+        // The exact name wins, whatever the order.
+        let r = Request::from_json(br#"{"cwd":"/a","CWD":"/b"}"#).unwrap();
+        assert_eq!(r.cwd, "/a");
+        let r = Request::from_json(br#"{"CWD":"/b","cwd":"/a"}"#).unwrap();
+        assert_eq!(r.cwd, "/a");
+        // Without an exact name the last one wins.
+        let r = Request::from_json(br#"{"Cwd":"/a","CWD":"/b"}"#).unwrap();
+        assert_eq!(r.cwd, "/b");
+        // Still refused: an exact duplicate, a null in a string map, a non-object.
+        assert!(Request::from_json(br#"{"cwd":"/a","cwd":"/b"}"#).is_err());
+        assert!(Request::from_json(br#"{"context":{"a":null}}"#).is_err());
+        assert!(Request::from_json(b"[1]").is_err());
     }
 
     #[test]

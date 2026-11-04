@@ -487,6 +487,8 @@ fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
     if data.starts_with(b"\xef\xbb\xbf") {
         data.drain(..3);
     }
+    // A derived Deserialize would also take an array as a list of field values.
+    crate::serde_util::require_object(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
     let parse = |d: &[u8]| serde_json::from_slice::<Policy>(d);
     let mut policy = parse(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
     // Policies have always matched keys case-insensitively, so "Rules"

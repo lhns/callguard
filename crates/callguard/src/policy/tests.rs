@@ -399,6 +399,17 @@ fn rev_is_stable_and_follows_the_policy() {
     assert_ne!(rev(&p), a);
 }
 
+#[test]
+fn a_policy_file_that_is_not_an_object_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    for body in ["[1]", "[]", "\"x\"", "7", "null"] {
+        let p = dir.path().join("policy.json");
+        fs::write(&p, body).unwrap();
+        let err = read_file(&p.to_string_lossy(), "user").unwrap_err();
+        assert!(err.0.contains("not a JSON object"), "{body}: {err:?}");
+    }
+}
+
 fn golden(name: &str) -> (Policy, String) {
     let dir = format!("{}/testdata/rev", env!("CARGO_MANIFEST_DIR"));
     let src = fs::read_to_string(format!("{dir}/{name}.src.json")).unwrap();

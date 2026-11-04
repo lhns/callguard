@@ -42,3 +42,118 @@ pub fn go_float<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_f64(*v)
     }
 }
+
+/// Refuses anything but a JSON object: a derived `Deserialize` would also
+/// take an array as a list of field values.
+pub fn require_object(body: &[u8]) -> Result<(), String> {
+    if body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{') {
+        Ok(())
+    } else {
+        Err("not a JSON object".into())
+    }
+}
+
+/// The members of a JSON object in order, each value kept as raw text.
+fn members(body: &[u8]) -> Result<Vec<(String, Box<RawValue>)>, String> {
+    use serde::de::{MapAccess, Visitor};
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = Vec<(String, Box<RawValue>)>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a JSON object")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut m: A) -> Result<Self::Value, A::Error> {
+            let mut out = Vec::new();
+            while let Some(kv) = m.next_entry::<String, Box<RawValue>>()? {
+                out.push(kv);
+            }
+            Ok(out)
+        }
+    }
+    require_object(body)?;
+    let mut de = serde_json::Deserializer::from_slice(body);
+    let out = de.deserialize_map(V).map_err(|e| e.to_string())?;
+    de.end().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+/// The members of a JSON object with the keys in `known` matched in any
+/// letter case: an exact spelling wins, otherwise the last of the other
+/// spellings. Other keys are dropped. An exact key given twice is refused.
+/// Values stay raw, so `tool.input` and the like are not touched.
+fn fold_members(body: &[u8], known: &[&str]) -> Result<Vec<(String, Box<RawValue>)>, String> {
+    let mut exact: Vec<Option<Box<RawValue>>> = known.iter().map(|_| None).collect();
+    let mut loose: Vec<Option<Box<RawValue>>> = known.iter().map(|_| None).collect();
+    for (k, v) in members(body)? {
+        let Some(i) = known.iter().position(|n| n.eq_ignore_ascii_case(&k)) else {
+            continue;
+        };
+        if known[i] == k {
+            if exact[i].is_some() {
+                return Err(format!("duplicate field `{k}`"));
+            }
+            exact[i] = Some(v);
+        } else {
+            loose[i] = Some(v);
+        }
+    }
+    let mut out = Vec::new();
+    for (i, name) in known.iter().enumerate() {
+        if let Some(v) = exact[i].take().or_else(|| loose[i].take()) {
+            out.push(((*name).to_owned(), v));
+        }
+    }
+    Ok(out)
+}
+
+fn object_text(fields: &[(&str, &RawValue)]) -> String {
+    let mut s = String::from("{");
+    for (i, (k, v)) in fields.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&serde_json::to_string(k).expect("a string serializes"));
+        s.push(':');
+        s.push_str(v.get());
+    }
+    s.push('}');
+    s
+}
+
+/// Decodes a JSON object into `T`, matching the field names in `known` in any
+/// letter case (exact spelling wins, otherwise the last). Values of the
+/// fields in `raw_fields` are folded again one level down with the names in
+/// the pair's list, e.g. the members of `tool`. A payload that is not an
+/// object is an error. With `lenient`, a field whose value has the wrong type
+/// is left out instead of failing the whole payload.
+pub fn decode_object<T: serde::de::DeserializeOwned>(
+    body: &[u8],
+    known: &[&str],
+    nested: &[(&str, &[&str])],
+    lenient: bool,
+) -> Result<T, String> {
+    let mut fields = fold_members(body, known)?;
+    for (name, inner) in nested {
+        if let Some((_, v)) = fields.iter_mut().find(|(k, _)| k.as_str() == *name)
+            && v.get().trim_start().starts_with('{')
+        {
+            let folded = fold_members(v.get().as_bytes(), inner)?;
+            let refs: Vec<(&str, &RawValue)> =
+                folded.iter().map(|(k, v)| (k.as_str(), &**v)).collect();
+            *v = RawValue::from_string(object_text(&refs)).map_err(|e| e.to_string())?;
+        }
+    }
+    let refs: Vec<(&str, &RawValue)> = fields.iter().map(|(k, v)| (k.as_str(), &**v)).collect();
+    match serde_json::from_str::<T>(&object_text(&refs)) {
+        Ok(v) => Ok(v),
+        Err(e) if !lenient => Err(e.to_string()),
+        Err(_) => {
+            let good: Vec<(&str, &RawValue)> = refs
+                .iter()
+                .copied()
+                .filter(|one| serde_json::from_str::<T>(&object_text(&[*one])).is_ok())
+                .collect();
+            serde_json::from_str(&object_text(&good)).map_err(|e| e.to_string())
+        }
+    }
+}

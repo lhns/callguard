@@ -20,7 +20,7 @@ use crate::schema::{
     Decision, LAYER_FALLBACK, REQUEST_SCHEMA, Request, ToolCall, Transcript, VERDICT_SCHEMA,
     Verdict,
 };
-use crate::serde_util::{nullable, raw_some};
+use crate::serde_util::{decode_object, nullable, raw_some};
 
 /// Caps the hook payload read from stdin.
 pub const MAX_INPUT: usize = 4 << 20;
@@ -59,13 +59,16 @@ fn read_input(input: &mut dyn Read) -> Result<Vec<u8>, String> {
     Ok(b)
 }
 
-/// Parses a hook payload: a JSON object, or an error. (A derived `Deserialize`
-/// would also take a JSON array as a field list; it is refused.)
-fn parse_object<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, String> {
-    if body.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
-        return Err("payload is not a JSON object".into());
-    }
-    serde_json::from_slice(body).map_err(|e| e.to_string())
+/// Parses a hook payload: a JSON object, or an error. Field names match in any
+/// letter case. With `lenient`, a field of the wrong type is dropped and the
+/// rest of the payload is kept, so a mistyped field cannot hide the others
+/// (such as `permission_mode`).
+fn parse_object<T: for<'de> Deserialize<'de>>(
+    body: &[u8],
+    known: &[&str],
+    lenient: bool,
+) -> Result<T, String> {
+    decode_object(body, known, &[], lenient).map_err(|e| format!("payload: {e}"))
 }
 
 /// The text of a panic payload.
@@ -192,6 +195,17 @@ fn deny_message(v: &Verdict) -> String {
 // ---------------------------------------------------------------------------
 // Claude Code
 
+const CLAUDE_FIELDS: &[&str] = &[
+    "session_id",
+    "transcript_path",
+    "cwd",
+    "permission_mode",
+    "hook_event_name",
+    "tool_name",
+    "tool_input",
+    "tool_use_id",
+];
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct ClaudeInput {
@@ -265,7 +279,8 @@ fn claude_inner(
 ) -> i32 {
     let mut req = new_request("claude");
     let mut in0 = ClaudeInput::default();
-    let parsed = read_input(input).and_then(|body| parse_object::<ClaudeInput>(&body));
+    let parsed =
+        read_input(input).and_then(|body| parse_object::<ClaudeInput>(&body, CLAUDE_FIELDS, true));
     let mut err = None;
     match parsed {
         Ok(v) if v.hook_event_name.is_empty() => {
@@ -347,6 +362,14 @@ fn claude_inner(
 // ---------------------------------------------------------------------------
 // Hermes
 
+const HERMES_FIELDS: &[&str] = &[
+    "hook_event_name",
+    "tool_name",
+    "tool_input",
+    "session_id",
+    "cwd",
+];
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct HermesInput {
@@ -408,7 +431,8 @@ fn hermes_inner(
     req.unattended = opt.unattended;
     let mut in0 = HermesInput::default();
     let mut err = None;
-    match read_input(input).and_then(|body| parse_object::<HermesInput>(&body)) {
+    match read_input(input).and_then(|body| parse_object::<HermesInput>(&body, HERMES_FIELDS, true))
+    {
         Ok(v) if v.hook_event_name.is_empty() => {
             in0 = v;
             err = Some("missing hook_event_name".to_owned());
@@ -476,6 +500,18 @@ fn hermes_write(out: &mut dyn Write, err_out: &mut dyn Write, o: &HermesOutput, 
 // ---------------------------------------------------------------------------
 // opencode and pi
 
+// Strict: a mistyped `unattended` must not be dropped silently.
+const GENERIC_FIELDS: &[&str] = &[
+    "harness",
+    "tool",
+    "input",
+    "cwd",
+    "session_id",
+    "project_dir",
+    "context",
+    "unattended",
+];
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct GenericInput {
@@ -532,7 +568,9 @@ fn generic_inner(
 ) -> i32 {
     let mut req = new_request("generic");
     req.unattended = opt.unattended;
-    let v = match read_input(input).and_then(|body| parse_object::<GenericInput>(&body)) {
+    let v = match read_input(input)
+        .and_then(|body| parse_object::<GenericInput>(&body, GENERIC_FIELDS, false))
+    {
         Err(e) => fallback(Some(&req), &format!("bad hook input: {e}")),
         Ok(in0) if in0.tool.is_empty() => fallback(Some(&req), "bad hook input: missing tool"),
         Ok(in0) => {
@@ -930,6 +968,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A field of the wrong type must not hide the rest of the payload: the
+    /// permission mode still makes the missing tool a deny.
+    #[test]
+    fn claude_mistyped_field_keeps_the_rest_of_the_payload() {
+        let (d, _) = capture(verdict(Decision::Allow, true));
+        let (out, err, code) = run_claude(
+            r#"{"hook_event_name":"PreToolUse","permission_mode":"dontAsk","tool_name":5}"#,
+            &Options::default(),
+            &d,
+        );
+        assert_claude_safe(&out, &err, code, "deny");
+        // A mistyped optional field is dropped; the call still goes through.
+        let (d, got) = capture(verdict(Decision::Allow, true));
+        run_claude(
+            r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"},"cwd":7}"#,
+            &Options::default(),
+            &d,
+        );
+        let r = seen(&got);
+        assert_eq!((r.tool.name.as_str(), r.cwd.as_str()), ("Bash", ""));
+    }
+
+    /// Hook field names are read in any letter case.
+    #[test]
+    fn hook_fields_are_read_in_any_letter_case() {
+        let (d, got) = capture(verdict(Decision::Allow, true));
+        run_claude(
+            r#"{"Hook_Event_Name":"PreToolUse","TOOL_NAME":"Bash","tool_input":{"Command":"ls"},"permission_mode":"dontAsk"}"#,
+            &Options::default(),
+            &d,
+        );
+        let r = seen(&got);
+        assert!(r.unattended && r.tool.name == "Bash", "{r:?}");
+        // The input stays as sent.
+        assert_eq!(r.tool.input_str(), r#"{"Command":"ls"}"#);
+        // The exact spelling wins over another case.
+        let (d, got) = capture(verdict(Decision::Allow, true));
+        run_hermes(
+            r#"{"hook_event_name":"pre_tool_call","TOOL_NAME":"A","tool_name":"B","tool_input":{}}"#,
+            &Options::default(),
+            &d,
+        );
+        assert_eq!(seen(&got).tool.name, "B");
+        let (d, got) = capture(verdict(Decision::Allow, true));
+        run_generic(r#"{"Tool":"Read","input":{}}"#, &Options::default(), &d);
+        assert_eq!(seen(&got).tool.name, "Read");
     }
 
     #[test]

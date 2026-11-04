@@ -77,14 +77,7 @@ pub fn run(
             &format!("request is larger than {MAX_REQUEST_BYTES} bytes"),
         );
     }
-    // A derived Deserialize would also take a JSON array as a field list.
-    let is_object = data.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{');
-    let parsed = if is_object {
-        serde_json::from_slice::<Request>(&data).map_err(|e| e.to_string())
-    } else {
-        Err("request is not a JSON object".to_owned())
-    };
-    let mut req = match parsed {
+    let mut req = match Request::from_json(&data) {
         Ok(r) => r,
         Err(e) => {
             return fail(
