@@ -177,15 +177,6 @@ pub struct Match {
     pub unattended: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
     pub harness: Vec<String>,
-    /// Matches only when nah's parse of the call has a hole (nah crashed,
-    /// timed out, covered part of it, met an unknown command, or is off). For
-    /// a rule whose job nah does when it understands the call. It is no
-    /// condition by itself: a rule needs another one.
-    #[serde(
-        skip_serializing_if = "std::ops::Not::not",
-        deserialize_with = "nullable"
-    )]
-    pub incomplete_parse: bool,
 }
 
 impl Match {
@@ -676,7 +667,6 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("context", Leaf),
             ("unattended", Leaf),
             ("harness", Leaf),
-            ("incomplete_parse", Leaf),
         ],
         Obj::Permissions => &[("deny", Leaf), ("ask", Leaf), ("allow", Leaf)],
         Obj::Nah => &[
@@ -1401,13 +1391,7 @@ pub fn default_rules() -> Vec<Rule> {
             "secret-read-shell",
             "ask",
             "shell command touches a common secret location",
-            // nah blocks every positive case on Linux and Windows
-            // (docs/rust-phase4.md), so the text only counts when nah's parse
-            // of the call has a hole.
-            Match {
-                incomplete_parse: true,
-                ..shell_cmd(r"\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc")
-            },
+            shell_cmd(r"\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc"),
         ),
         rule(
             "secret-exfil",
@@ -1502,24 +1486,29 @@ pub const PACKAGE_PUBLISH_RE: &str = r"\b(?:npm|pnpm|yarn)\s+(?:[^;&|\n]*\s)?pub
 pub const SUDO_RE: &str = r"(?:^|[^\w.-])(?:sudo|doas)\s+\S";
 /// `ssh` with a destructive verb in the remote command: the verbs of the
 /// `rm-root` and `disk-wipe` checks, power commands, and cluster and
-/// infrastructure deletes, Linux and Windows. The verb must stand alone, so
-/// `ssh rm@host ls` and `ssh host ls rmdir.txt` do not match; `ssh-add` is not
-/// `ssh`.
+/// infrastructure deletes, Linux and Windows (`ssh`, `autossh`, `ssh.exe`). The
+/// verb may carry a path (`/bin/rm`) and `.exe`. It must start a word, so
+/// `ssh rm@host ls`, `ssh host ls rmdir.txt` and `--format=rm` do not match;
+/// `ssh-add` is not `ssh`. Known limit: a path that ends in a verb
+/// (`ssh host cat /tmp/rm`) also asks.
 pub const SSH_REMOTE_DESTRUCTIVE_RE: &str = concat!(
-    r#"(?i)(?:^|[\s;&|(`'"/\\])ssh(?:\.exe)?\s[^;&|\n]*[\s'"`;&|(]+"#,
-    r"(?:rm|rmdir|rd|del|erase|remove-item|ri|mkfs(?:\.\w+)?|dd|format(?:\.com)?|shutdown|reboot|poweroff|halt|stop-computer|restart-computer",
-    r"|kubectl\b[^;&|\n]*\bdelete|(?:terraform|tofu)\b[^;&|\n]*\bdestroy)",
+    r#"(?i)(?:^|[\s;&|(`'"/\\])(?:auto)?ssh(?:\.exe)?\s[^;&|\n]*[\s'"`;&|(/\\]+"#,
+    r"(?:rm|rmdir|rd|del|erase|remove-item|ri|mkfs(?:\.\w+)?|dd|format(?:\.com)?|shutdown|reboot|poweroff|halt|shred|wipefs|stop-computer|restart-computer",
+    r"|find\b[^;&|\n]*\s-delete|kubectl\b[^;&|\n]*\bdelete|(?:terraform|tofu)\b[^;&|\n]*\bdestroy)(?:\.exe)?",
     r#"(?:[\s'"`;&|)]|$)"#
 );
 /// `scp`, `rsync` or `sftp` of a whole secret directory (`~/.aws`, `~/.ssh/`,
-/// `$HOME/.gnupg/*`) with a remote `host:` after it. `secret-exfil` names files
-/// (`.aws/credentials`, `id_rsa`), not directories. A `-i ~/.ssh/key` identity
-/// file is not a directory, and `C:` is no host.
+/// `$HOME/.gnupg/*`) with a remote target after it: `host:`, `user@h:` (any
+/// host length) or `[::1]:`. `secret-exfil` names files (`.aws/credentials`,
+/// `id_rsa`), not directories. A `-i ~/.ssh/key` identity file is not a
+/// directory, and a bare one-letter `h:` is taken for a drive. Known limit:
+/// the regex has no lookbehind, so `--exclude .ssh` and `--exclude ~/.aws`
+/// (with a space) are denied like a copy; `--exclude=.ssh` is not.
 pub const SCP_HOME_SECRET_RE: &str = concat!(
-    r#"(?i)\b(?:scp|rsync|sftp)(?:\.exe)?\s[^;&|\n]*[\s'"=]"#,
+    r#"(?i)\b(?:scp|rsync|sftp)(?:\.exe)?\s[^;&|\n]*[\s'"]"#,
     r"(?:~|\$home|\$\{home\}|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/\s'\x22]+|/(?:home|users)/[^/\s'\x22]+|/root)?",
     r#"[\\/]?\.(?:ssh|aws|gnupg)(?:[\\/]\*?)?['"]?\s"#,
-    r"[^;&|\n]*?[\w.-]{2,}:"
+    r"[^;&|\n]*?(?:[\w.-]{2,}|@[\w.-]+|\]):"
 );
 
 /// Separators include _ - . so file names like IGNORE_PREVIOUS_INSTRUCTIONS match.

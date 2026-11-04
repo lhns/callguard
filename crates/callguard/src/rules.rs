@@ -13,7 +13,6 @@ use regex::Regex;
 use serde_json::Value;
 use serde_json::value::RawValue;
 
-use crate::nah::NahResult;
 use crate::policy::{self, go_quote};
 
 /// Tool kinds (design section 4).
@@ -24,26 +23,6 @@ pub const KIND_FETCH: &str = "fetch";
 pub const KIND_AGENT: &str = "agent";
 pub const KIND_MCP: &str = "mcp";
 pub const KIND_OTHER: &str = "other";
-
-/// The only shell tools an allow rule can match, and the only ones whose
-/// commands nah is taken to have parsed.
-pub const ALLOW_SHELL_TOOLS: [&str; 3] = ["Bash", "bash", "terminal"];
-
-/// Whether nah's parse of `call` leaves something unseen, so that deny and ask
-/// must also look at the raw text. No nah answer (off, failed, shadow-blocked)
-/// is a hole.
-pub fn parse_has_hole(call: &Call, nah: Option<&NahResult>) -> bool {
-    let Some(n) = nah else {
-        return true;
-    };
-    !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str())
-        || n.coverage != "full"
-        || n.facts.as_ref().is_none_or(|f| !f.gaps.is_empty())
-        || n.calls.is_empty()
-        || n.calls
-            .iter()
-            .any(|c| c.argv.as_ref().is_none_or(Vec::is_empty))
-}
 
 /// A rule could not be built (bad regex or glob). The text names the rule.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -749,9 +728,13 @@ static DISK_WIPE: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         builtin_regex(concat!(r"\bdd\b[^;&|\n]*\bof=/dev/", disk_dev_re!())),
         builtin_regex(concat!(r">\s*/dev/", disk_dev_re!())),
         builtin_regex(r"(?i)(?:^|[;&|])\s*format(?:\.com)?\s+[a-z]:"),
-        // A raw Windows disk, however the command writes it: \\.\PhysicalDrive0
-        // (backslashes doubled for a shell too) or //./PhysicalDrive0.
-        builtin_regex(r"(?i)(?:\\+|/+)\.(?:\\+|/+)physicaldrive\d"),
+        // A raw Windows disk, however the command writes it: \\.\PhysicalDrive0,
+        // \\?\PhysicalDrive0, \\.\Harddisk0, \\.\HarddiskVolume1 (backslashes
+        // doubled for a shell too, or slashes).
+        builtin_regex(r"(?i)(?:\\+|/+)[.?](?:\\+|/+)(?:physicaldrive|harddisk(?:volume)?)\d"),
+        // A raw volume, \\.\C: or \\?\C:, only when the colon ends the path:
+        // \\?\C:\Users\x is an ordinary long path.
+        builtin_regex(r#"(?i)(?:\\+|/+)[.?](?:\\+|/+)[a-z]:(?:$|[\s'"`;&|)<>])"#),
     ]
 });
 
@@ -1115,11 +1098,8 @@ struct Compiled {
 }
 
 impl Compiled {
-    fn matches(&self, call: &Call, parse_hole: bool) -> bool {
+    fn matches(&self, call: &Call) -> bool {
         let m = &self.rule.r#match;
-        if m.incomplete_parse && !parse_hole {
-            return false;
-        }
         if !m.tool.is_empty() && !m.tool.contains(&call.tool) {
             return false;
         }
@@ -1257,13 +1237,11 @@ impl Set {
     }
 
     /// The matching rule that wins: deny over ask over allow, then list order.
-    /// (Go: `Set.Match`; `match` is a keyword.) `parse_hole` is
-    /// [`parse_has_hole`] for this call: a rule with `incomplete_parse` only
-    /// matches when it is true.
-    pub fn match_call(&self, call: &Call, parse_hole: bool) -> Option<policy::Rule> {
+    /// (Go: `Set.Match`; `match` is a keyword.)
+    pub fn match_call(&self, call: &Call) -> Option<policy::Rule> {
         let mut best: Option<&Compiled> = None;
         for c in &self.rules {
-            if !c.matches(call, parse_hole) {
+            if !c.matches(call) {
                 continue;
             }
             if best.is_none_or(|b| rank(&c.rule.decision) > rank(&b.rule.decision)) {

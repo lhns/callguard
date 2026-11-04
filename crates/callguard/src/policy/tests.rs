@@ -464,7 +464,7 @@ fn rev_matches_the_go_binary() {
 fn default_policy_rev_is_pinned() {
     assert_eq!(
         rev(&default()),
-        "sha256:a86dc8ca4ec66f7cfd90fecf6a2901a7e533a4d2341b4e5acf62b5be3d1f5a8c"
+        "sha256:53321eb274f273583885759acd5b2c1ee533b6898c520739eeaed83f0f6a1eab"
     );
 }
 
@@ -780,31 +780,4 @@ fn final_still_stops_the_merge_for_permissions() {
     let user = r#"{"policy_version":1,"permissions":{"deny":["Bash(ls:*)"]}}"#;
     let (_d, o) = layers(sys, user, "");
     assert_eq!(load(&o).unwrap().policy.permissions.deny, ["Bash(rm:*)"]);
-}
-
-#[test]
-fn incomplete_parse_is_a_match_key_and_leaves_the_rev_alone() {
-    let rule = |extra: &str| {
-        format!(
-            r#"{{"policy_version":1,"rules":[{{"id":"a","decision":"ask","match":{{"command":"x"{extra}}}}}]}}"#
-        )
-    };
-    let (plain, flagged) = (rule(""), rule(r#","incomplete_parse":true"#));
-    assert!(unknown_keys(flagged.as_bytes()).is_empty());
-    let p: Policy = serde_json::from_str(&plain).unwrap();
-    let q: Policy = serde_json::from_str(&flagged).unwrap();
-    assert!(!p.rules[0].r#match.incomplete_parse && q.rules[0].r#match.incomplete_parse);
-    assert!(
-        !serde_json::to_string(&p)
-            .unwrap()
-            .contains("incomplete_parse")
-    );
-    assert!(
-        serde_json::to_string(&q)
-            .unwrap()
-            .contains("\"incomplete_parse\":true")
-    );
-    assert_ne!(rev(&p), rev(&q));
-    let null: Policy = serde_json::from_str(&rule(r#","incomplete_parse":null"#)).unwrap();
-    assert_eq!(null, p);
 }

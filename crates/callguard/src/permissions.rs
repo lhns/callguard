@@ -40,8 +40,8 @@ mod web;
 use crate::nah::{NahResult, NahVerdict};
 use crate::policy::{self, go_quote};
 use crate::rules::{
-    ALLOW_SHELL_TOOLS, Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, PATH_KEYS,
-    RulesError, field_values, kind_of, parse_has_hole,
+    Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, PATH_KEYS, RulesError, field_values,
+    kind_of,
 };
 
 use paths::{Ctx, PathSpec};
@@ -50,6 +50,8 @@ use web::{Domain, Mcp};
 
 const WEBFETCH_TOOLS: [&str; 3] = ["WebFetch", "webfetch", "web_extract"];
 const WEBSEARCH_TOOLS: [&str; 3] = ["WebSearch", "websearch", "web_search"];
+/// The only shell tools an allow rule can match.
+const ALLOW_SHELL_TOOLS: [&str; 3] = ["Bash", "bash", "terminal"];
 
 /// A rule read from its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -678,6 +680,21 @@ impl Permissions {
         }
         first.map(|e| e.text.clone())
     }
+}
+
+/// Whether nah's parse of `call` leaves something unseen, so that deny and ask
+/// must also look at the raw text.
+fn parse_has_hole(call: &Call, nah: Option<&NahResult>) -> bool {
+    let Some(n) = nah else {
+        return true;
+    };
+    !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str())
+        || n.coverage != "full"
+        || n.facts.as_ref().is_none_or(|f| !f.gaps.is_empty())
+        || n.calls.is_empty()
+        || n.calls
+            .iter()
+            .any(|c| c.argv.as_ref().is_none_or(Vec::is_empty))
 }
 
 /// The distinct URLs of a fetch call: the `url` field in any letter case, and

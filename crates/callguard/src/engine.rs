@@ -23,7 +23,7 @@ use crate::judge::{self, JudgeError, JudgeResult};
 use crate::nah::{NahEngine, NahRequest, NahResult, NahVerdict};
 use crate::permissions::Permissions;
 use crate::policy::{self, Policy, go_quote};
-use crate::rules::{self, Builtin, Call, CallInput, Env, Set, input_string_field, parse_has_hole};
+use crate::rules::{self, Builtin, Call, CallInput, Env, Set, input_string_field};
 use crate::schema::{
     Decision, Facts, LAYER_BUILTIN, LAYER_LLM, LAYER_NAH, LAYER_NONE, LAYER_RULES, REQUEST_SCHEMA,
     Request, VERDICT_SCHEMA, Verdict,
@@ -581,9 +581,7 @@ impl Inner {
 
         // 2 rules: the regex rules and the permission rules, the stricter
         // decision wins and a regex rule wins a tie.
-        let regex_hit = self
-            .rules
-            .match_call(&call, parse_has_hole(&call, nah_res.as_ref()));
+        let regex_hit = self.rules.match_call(&call);
         let perm_hit = self.perms.check(&call, nah_res.as_ref());
         let rank = |d: &str| match d {
             "deny" => 3,
