@@ -144,7 +144,6 @@ impl Request {
                 "facts",
             ],
             &[("tool", &["name", "input"])],
-            false,
         )
     }
 }
@@ -546,6 +545,10 @@ mod tests {
         assert!(Request::from_json(br#"{"cwd":"/a","cwd":"/b"}"#).is_err());
         assert!(Request::from_json(br#"{"context":{"a":null}}"#).is_err());
         assert!(Request::from_json(b"[1]").is_err());
+        // A tool that is neither an object nor null is refused, not read as a list.
+        assert!(Request::from_json(br#"{"tool":["Bash",{}]}"#).is_err());
+        assert!(Request::from_json(br#"{"tool":"Bash"}"#).is_err());
+        assert!(Request::from_json(br#"{"tool":null}"#).is_ok());
     }
 
     #[test]

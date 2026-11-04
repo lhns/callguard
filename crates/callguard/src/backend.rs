@@ -1441,17 +1441,35 @@ mod tests {
         assert_eq!(got.header("authorization"), None, "{got:?}");
     }
 
+    /// A socks5 proxy from the environment is really used: the first byte the
+    /// stub receives is the SOCKS5 version, whatever becomes of the request.
+    #[test]
+    fn a_socks5_proxy_is_spoken_to() {
+        let stub = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy = format!("socks5://{}", stub.local_addr().unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = stub.accept() {
+                let mut first = [0u8; 1];
+                if conn.read_exact(&mut first).is_ok() {
+                    let _ = tx.send(first[0]);
+                }
+            }
+        });
+        let pairs = [("HTTP_PROXY", proxy.as_str())];
+        let env = env_of(&pairs);
+        // A TEST-NET address (RFC 5737): ureq resolves the target locally before it
+        // talks SOCKS, so a name like `judge.invalid` would never reach the stub.
+        let url = "http://192.0.2.1/v1";
+        let agent = http_agent_from(url, &env).unwrap();
+        let _ = post_json(&agent, url, &[], "{}".into(), soon(), "test");
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(5));
+    }
+
     #[test]
     fn a_model_answer_that_is_not_an_object_is_refused() {
         assert!(parse_verdict_json(r#"["allow",1,"",""]"#).is_err());
-        assert!(
-            parse_verdict_json(
-                "```json
-[\"allow\",1,\"\",\"\"]
-```"
-            )
-            .is_err()
-        );
+        assert!(parse_verdict_json("```json\n[\"allow\",1,\"\",\"\"]\n```").is_err());
         assert!(parse_verdict_json(r#"{"decision":"allow"}"#).is_ok());
     }
 
@@ -1876,9 +1894,7 @@ mod tests {
         let script = dir.path().join("judge.cmd");
         std::fs::write(
             &script,
-            "@echo off
-echo {\"label\":\"allow\",\"confidence\":1,\"rule\":\"r\",\"reason\":\"ok\"}
-",
+            "@echo off\r\necho {\"label\":\"allow\",\"confidence\":1,\"rule\":\"r\",\"reason\":\"ok\"}\r\n",
         )
         .unwrap();
         let planted = dir.path().join("pwned.txt");

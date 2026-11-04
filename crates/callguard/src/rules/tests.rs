@@ -2510,6 +2510,18 @@ fn a_path_longer_than_the_platform_allows_is_not_resolved() {
     assert!(start.elapsed() < std::time::Duration::from_secs(1));
 }
 
+/// Just past 4096 bytes is still resolved on Unix (a relative path under a long
+/// working directory exists), just past 8192 is not. No disk is involved: only
+/// the length decision is looked at.
+#[cfg(unix)]
+#[test]
+fn the_unix_path_limit_allows_cwd_plus_a_relative_path() {
+    let of = |n: usize| format!("/{}", "a".repeat(n));
+    assert!(!path_too_long(&of(4100)));
+    assert!(!path_too_long(&of(8000)));
+    assert!(path_too_long(&of(8200)));
+}
+
 /// A made-up `Env` never touches the disk: a dangling link, which the host
 /// refuses to resolve, is its own real location.
 #[cfg(unix)]

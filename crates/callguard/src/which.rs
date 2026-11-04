@@ -30,6 +30,12 @@ pub(crate) fn find_with(
     if name.is_empty() || name.contains(['/', '\\', ':']) {
         return None;
     }
+    // Windows' own default when PATHEXT is unset or empty.
+    let pathext = if pathext.trim().is_empty() {
+        ".COM;.EXE;.BAT;.CMD"
+    } else {
+        pathext
+    };
     let exts: Vec<&str> = pathext.split(';').filter(|e| e.starts_with('.')).collect();
     let lower = name.to_ascii_lowercase();
     let has_ext = exts
@@ -85,6 +91,15 @@ mod tests {
         assert_eq!(low(got), low(at("C:tools", "judge.cmd")));
         let got = find_with("judge", "C:other;C:tools", EXT, &on_disk);
         assert_eq!(low(got), low(at("C:other", "judge.exe")));
+    }
+
+    #[test]
+    fn an_empty_pathext_means_the_default_extensions() {
+        let on_disk = files(&[("bin", "judge.cmd")]);
+        for pathext in ["", "  "] {
+            let got = find_with("judge", "bin", pathext, &on_disk);
+            assert_eq!(low(got), low(at("bin", "judge.cmd")), "{pathext:?}");
+        }
     }
 
     #[test]

@@ -63,9 +63,9 @@ pub fn memory_limit_warning() -> Option<String> {
 
 /// Caps this process's memory at `bytes` before nah runs, so an input that
 /// makes nah grow without bound ends as a crash (the parent then takes the
-/// fail-safe verdict) instead of exhausting the machine. Except on macOS the cap covers the
-/// processes this one starts, such as git. If it cannot be set the child
-/// carries on without it and `memory_limit_warning` says why.
+/// fail-safe verdict) instead of exhausting the machine. Except on macOS the
+/// cap covers the processes this one starts, such as git. If it cannot be set
+/// the child carries on without it and `memory_limit_warning` says why.
 ///
 /// Unix: `RLIMIT_AS`, the address space. Windows: a job object with a per-process
 /// memory limit, which this process joins. macOS: setrlimit refuses it with

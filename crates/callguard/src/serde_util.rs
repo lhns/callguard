@@ -120,40 +120,67 @@ fn object_text(fields: &[(&str, &RawValue)]) -> String {
     s
 }
 
+/// The members of `body` for `known`, with the nested objects of `nested`
+/// folded one level down. A nested value must be an object or null.
+fn prepare(
+    body: &[u8],
+    known: &[&str],
+    nested: &[(&str, &[&str])],
+) -> Result<Vec<(String, Box<RawValue>)>, String> {
+    let mut fields = fold_members(body, known)?;
+    for (name, inner) in nested {
+        if let Some((_, v)) = fields.iter_mut().find(|(k, _)| k.as_str() == *name) {
+            let text = v.get().trim_start();
+            if text.starts_with('{') {
+                let folded = fold_members(v.get().as_bytes(), inner)?;
+                let refs: Vec<(&str, &RawValue)> =
+                    folded.iter().map(|(k, v)| (k.as_str(), &**v)).collect();
+                *v = RawValue::from_string(object_text(&refs)).map_err(|e| e.to_string())?;
+            } else if text != "null" {
+                return Err(format!("`{name}` is not an object"));
+            }
+        }
+    }
+    Ok(fields)
+}
+
 /// Decodes a JSON object into `T`, matching the field names in `known` in any
-/// letter case (exact spelling wins, otherwise the last). Values of the
-/// fields in `raw_fields` are folded again one level down with the names in
-/// the pair's list, e.g. the members of `tool`. A payload that is not an
-/// object is an error. With `lenient`, a field whose value has the wrong type
-/// is left out instead of failing the whole payload.
+/// letter case (exact spelling wins, otherwise the last). The members of the
+/// fields in `nested` are matched the same way with the pair's names. Anything
+/// but an object (also for a nested field) is an error, and so is a field of
+/// the wrong type.
 pub fn decode_object<T: serde::de::DeserializeOwned>(
     body: &[u8],
     known: &[&str],
     nested: &[(&str, &[&str])],
-    lenient: bool,
 ) -> Result<T, String> {
-    let mut fields = fold_members(body, known)?;
-    for (name, inner) in nested {
-        if let Some((_, v)) = fields.iter_mut().find(|(k, _)| k.as_str() == *name)
-            && v.get().trim_start().starts_with('{')
-        {
-            let folded = fold_members(v.get().as_bytes(), inner)?;
-            let refs: Vec<(&str, &RawValue)> =
-                folded.iter().map(|(k, v)| (k.as_str(), &**v)).collect();
-            *v = RawValue::from_string(object_text(&refs)).map_err(|e| e.to_string())?;
-        }
-    }
+    let fields = prepare(body, known, nested)?;
+    let refs: Vec<(&str, &RawValue)> = fields.iter().map(|(k, v)| (k.as_str(), &**v)).collect();
+    serde_json::from_str::<T>(&object_text(&refs)).map_err(|e| e.to_string())
+}
+
+/// Like [`decode_object`], but a failure still returns what could be read:
+/// the fields that have the right type, so a caller can use them (a
+/// `permission_mode` that makes the fallback a deny) while it reports the error.
+pub fn decode_partial<T: serde::de::DeserializeOwned + Default>(
+    body: &[u8],
+    known: &[&str],
+) -> (T, Option<String>) {
+    let fields = match prepare(body, known, &[]) {
+        Ok(f) => f,
+        Err(e) => return (T::default(), Some(e)),
+    };
     let refs: Vec<(&str, &RawValue)> = fields.iter().map(|(k, v)| (k.as_str(), &**v)).collect();
     match serde_json::from_str::<T>(&object_text(&refs)) {
-        Ok(v) => Ok(v),
-        Err(e) if !lenient => Err(e.to_string()),
-        Err(_) => {
+        Ok(v) => (v, None),
+        Err(e) => {
             let good: Vec<(&str, &RawValue)> = refs
                 .iter()
                 .copied()
                 .filter(|one| serde_json::from_str::<T>(&object_text(&[*one])).is_ok())
                 .collect();
-            serde_json::from_str(&object_text(&good)).map_err(|e| e.to_string())
+            let v = serde_json::from_str(&object_text(&good)).unwrap_or_default();
+            (v, Some(e.to_string()))
         }
     }
 }

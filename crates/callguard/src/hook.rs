@@ -20,7 +20,7 @@ use crate::schema::{
     Decision, LAYER_FALLBACK, REQUEST_SCHEMA, Request, ToolCall, Transcript, VERDICT_SCHEMA,
     Verdict,
 };
-use crate::serde_util::{decode_object, nullable, raw_some};
+use crate::serde_util::{decode_object, decode_partial, nullable, raw_some};
 
 /// Caps the hook payload read from stdin.
 pub const MAX_INPUT: usize = 4 << 20;
@@ -60,15 +60,25 @@ fn read_input(input: &mut dyn Read) -> Result<Vec<u8>, String> {
 }
 
 /// Parses a hook payload: a JSON object, or an error. Field names match in any
-/// letter case. With `lenient`, a field of the wrong type is dropped and the
-/// rest of the payload is kept, so a mistyped field cannot hide the others
-/// (such as `permission_mode`).
-fn parse_object<T: for<'de> Deserialize<'de>>(
-    body: &[u8],
+/// letter case.
+fn parse_object<T: for<'de> Deserialize<'de>>(body: &[u8], known: &[&str]) -> Result<T, String> {
+    decode_object(body, known, &[]).map_err(|e| format!("payload: {e}"))
+}
+
+/// Like [`parse_object`], but a payload with a mistyped field still yields the
+/// fields that are right, next to the error: the caller must treat the payload
+/// as bad, and can still use `permission_mode` to make that a deny.
+fn parse_partial<T: for<'de> Deserialize<'de> + Default>(
+    input: &mut dyn Read,
     known: &[&str],
-    lenient: bool,
-) -> Result<T, String> {
-    decode_object(body, known, &[], lenient).map_err(|e| format!("payload: {e}"))
+) -> (T, Option<String>) {
+    match read_input(input) {
+        Ok(body) => {
+            let (v, e) = decode_partial(&body, known);
+            (v, e.map(|e| format!("payload: {e}")))
+        }
+        Err(e) => (T::default(), Some(e)),
+    }
 }
 
 /// The text of a panic payload.
@@ -278,17 +288,9 @@ fn claude_inner(
     d: Decider,
 ) -> i32 {
     let mut req = new_request("claude");
-    let mut in0 = ClaudeInput::default();
-    let parsed =
-        read_input(input).and_then(|body| parse_object::<ClaudeInput>(&body, CLAUDE_FIELDS, true));
-    let mut err = None;
-    match parsed {
-        Ok(v) if v.hook_event_name.is_empty() => {
-            in0 = v;
-            err = Some("missing hook_event_name".to_owned());
-        }
-        Ok(v) => in0 = v,
-        Err(e) => err = Some(e),
+    let (mut in0, mut err) = parse_partial::<ClaudeInput>(input, CLAUDE_FIELDS);
+    if err.is_none() && in0.hook_event_name.is_empty() {
+        err = Some("missing hook_event_name".to_owned());
     }
     // Set before any fallback, so a malformed payload in dontAsk still denies.
     req.unattended = opt.unattended || in0.permission_mode == "dontAsk";
@@ -429,16 +431,9 @@ fn hermes_inner(
 ) -> i32 {
     let mut req = new_request("hermes");
     req.unattended = opt.unattended;
-    let mut in0 = HermesInput::default();
-    let mut err = None;
-    match read_input(input).and_then(|body| parse_object::<HermesInput>(&body, HERMES_FIELDS, true))
-    {
-        Ok(v) if v.hook_event_name.is_empty() => {
-            in0 = v;
-            err = Some("missing hook_event_name".to_owned());
-        }
-        Ok(v) => in0 = v,
-        Err(e) => err = Some(e),
+    let (in0, mut err) = parse_partial::<HermesInput>(input, HERMES_FIELDS);
+    if err.is_none() && in0.hook_event_name.is_empty() {
+        err = Some("missing hook_event_name".to_owned());
     }
     let v = if let Some(e) = err {
         fallback(Some(&req), &format!("bad hook input: {e}"))
@@ -569,7 +564,7 @@ fn generic_inner(
     let mut req = new_request("generic");
     req.unattended = opt.unattended;
     let v = match read_input(input)
-        .and_then(|body| parse_object::<GenericInput>(&body, GENERIC_FIELDS, false))
+        .and_then(|body| parse_object::<GenericInput>(&body, GENERIC_FIELDS))
     {
         Err(e) => fallback(Some(&req), &format!("bad hook input: {e}")),
         Ok(in0) if in0.tool.is_empty() => fallback(Some(&req), "bad hook input: missing tool"),
@@ -981,15 +976,55 @@ mod tests {
             &d,
         );
         assert_claude_safe(&out, &err, code, "deny");
-        // A mistyped optional field is dropped; the call still goes through.
-        let (d, got) = capture(verdict(Decision::Allow, true));
-        run_claude(
-            r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"},"cwd":7}"#,
+        // A mistyped field of any kind makes the payload bad: the decider that
+        // would allow is not called, and the verdict is the fail-safe one.
+        let (allow, called) = capture(verdict(Decision::Allow, true));
+        let ls =
+            r#""hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls"}"#;
+        let (out, err, code) =
+            run_claude(&format!("{{{ls},\"cwd\":7}}"), &Options::default(), &allow);
+        assert_claude_safe(&out, &err, code, "ask");
+        let (out, err, code) = run_claude(
+            &format!("{{{ls},\"cwd\":7,\"permission_mode\":\"dontAsk\"}}"),
             &Options::default(),
-            &d,
+            &allow,
         );
-        let r = seen(&got);
-        assert_eq!((r.tool.name.as_str(), r.cwd.as_str()), ("Bash", ""));
+        assert_claude_safe(&out, &err, code, "deny");
+        let (out, err, code) = run_claude(
+            &format!("{{{ls},\"permission_mode\":5}}"),
+            &Options::default(),
+            &allow,
+        );
+        assert_claude_safe(&out, &err, code, "ask");
+        assert!(
+            called.lock().unwrap().is_none(),
+            "the decider ran for a bad payload"
+        );
+    }
+
+    #[test]
+    fn hermes_mistyped_field_is_a_bad_payload() {
+        let (allow, called) = capture(verdict(Decision::Allow, true));
+        let body =
+            r#"{"hook_event_name":"pre_tool_call","tool_name":"terminal","tool_input":{},"cwd":7}"#;
+        let (out, _, code) = run_hermes(body, &Options::default(), &allow);
+        assert!(
+            code == 0 && out.contains(r#""action":"approve""#),
+            "interactive: out={out:?} code={code}"
+        );
+        let opt = Options {
+            unattended: true,
+            ..Default::default()
+        };
+        let (out, _, code) = run_hermes(body, &opt, &allow);
+        assert!(
+            code == 2 && out.contains(r#""action":"block""#),
+            "unattended: out={out:?} code={code}"
+        );
+        assert!(
+            called.lock().unwrap().is_none(),
+            "the decider ran for a bad payload"
+        );
     }
 
     /// Hook field names are read in any letter case.

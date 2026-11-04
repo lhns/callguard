@@ -203,7 +203,7 @@ fn translate_regex(pat: &str) -> String {
 
 /// Compiles an RE2 pattern with its RE2 meaning (see the module comment).
 pub fn compile_regex(pat: &str) -> Result<Regex, RulesError> {
-    // Octal escapes (`A`) are RE2 syntax. The size limit stays at its
+    // Octal escapes (`\101`) are RE2 syntax. The size limit stays at its
     // default: a repository's policy must not cost compile time.
     regex::RegexBuilder::new(&translate_regex(pat))
         .octal(true)
@@ -409,8 +409,19 @@ pub struct Env {
     pub host: bool,
 }
 
-/// The longest path the platform accepts; a longer one cannot exist.
-const MAX_PATH_BYTES: usize = if cfg!(windows) { 32767 } else { 4096 };
+/// The longest path that can exist. Windows: 32767 UTF-16 units. Unix: the
+/// kernel takes 4096 bytes per path, but `p` is absolute, so it can be a
+/// relative path (up to 4096) under a working directory (up to 4096), which is
+/// longer than either and still exists.
+const MAX_PATH_LEN: usize = if cfg!(windows) { 32767 } else { 8192 };
+
+fn path_too_long(p: &str) -> bool {
+    if cfg!(windows) {
+        p.encode_utf16().count() > MAX_PATH_LEN
+    } else {
+        p.len() > MAX_PATH_LEN
+    }
+}
 
 /// The real location of the normalized path `p`: links and junctions
 /// resolved, with the deepest existing ancestor standing in for a file that
@@ -419,7 +430,7 @@ const MAX_PATH_BYTES: usize = if cfg!(windows) { 32767 } else { 4096 };
 pub(crate) fn resolve_real(p: &str) -> Option<String> {
     // Too long to exist: no system call per component. Deny and ask rules
     // still match the lexical path, and an allow cannot match None.
-    if p.len() > MAX_PATH_BYTES {
+    if path_too_long(p) {
         return None;
     }
     let mut existing = std::path::Path::new(p).to_path_buf();
