@@ -177,6 +177,15 @@ pub struct Match {
     pub unattended: Option<bool>,
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
     pub harness: Vec<String>,
+    /// Matches only when nah's parse of the call has a hole (nah crashed,
+    /// timed out, covered part of it, met an unknown command, or is off). For
+    /// a rule whose job nah does when it understands the call. It is no
+    /// condition by itself: a rule needs another one.
+    #[serde(
+        skip_serializing_if = "std::ops::Not::not",
+        deserialize_with = "nullable"
+    )]
+    pub incomplete_parse: bool,
 }
 
 impl Match {
@@ -667,6 +676,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("context", Leaf),
             ("unattended", Leaf),
             ("harness", Leaf),
+            ("incomplete_parse", Leaf),
         ],
         Obj::Permissions => &[("deny", Leaf), ("ask", Leaf), ("allow", Leaf)],
         Obj::Nah => &[
@@ -1391,7 +1401,13 @@ pub fn default_rules() -> Vec<Rule> {
             "secret-read-shell",
             "ask",
             "shell command touches a common secret location",
-            shell_cmd(r"\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc"),
+            // nah blocks every positive case on Linux and Windows
+            // (docs/rust-phase4.md), so the text only counts when nah's parse
+            // of the call has a hole.
+            Match {
+                incomplete_parse: true,
+                ..shell_cmd(r"\.ssh[\\/]id_|\.aws[\\/]credentials|\.netrc")
+            },
         ),
         rule(
             "secret-exfil",
@@ -1404,6 +1420,18 @@ pub fn default_rules() -> Vec<Rule> {
             "deny",
             "downloads and runs remote code without review (pipe to a shell or interpreter)",
             shell_cmd(PIPE_TO_SHELL_RE),
+        ),
+        rule(
+            "ssh-remote-destructive",
+            "ask",
+            "runs a destructive command on a remote host over ssh",
+            shell_cmd(SSH_REMOTE_DESTRUCTIVE_RE),
+        ),
+        rule(
+            "scp-home-secret",
+            "deny",
+            "copies a secret directory (.ssh, .aws, .gnupg) to a remote host",
+            shell_cmd(SCP_HOME_SECRET_RE),
         ),
         rule(
             "git-force-push",
@@ -1472,6 +1500,28 @@ pub const GIT_DISCARD_RE: &str = r"\bgit\b[^;&|\n]*(?:\breset\b[^;&|\n]*\s--hard
 pub const INFRA_DESTROY_RE: &str = r"\b(?:terraform|tofu|pulumi|cdk|terragrunt)\b[^;&|\n]*\bdestroy\b|\bkubectl\b[^;&|\n]*\bdelete\b|\bgh\s+repo\s+delete\b";
 pub const PACKAGE_PUBLISH_RE: &str = r"\b(?:npm|pnpm|yarn)\s+(?:[^;&|\n]*\s)?publish(?:\s|$)|\bcargo\s+publish(?:\s|$)|\btwine\s+upload\b|\bgem\s+push\b";
 pub const SUDO_RE: &str = r"(?:^|[^\w.-])(?:sudo|doas)\s+\S";
+/// `ssh` with a destructive verb in the remote command: the verbs of the
+/// `rm-root` and `disk-wipe` checks, power commands, and cluster and
+/// infrastructure deletes, Linux and Windows. The verb must stand alone, so
+/// `ssh rm@host ls` and `ssh host ls rmdir.txt` do not match; `ssh-add` is not
+/// `ssh`.
+pub const SSH_REMOTE_DESTRUCTIVE_RE: &str = concat!(
+    r#"(?i)(?:^|[\s;&|(`'"/\\])ssh(?:\.exe)?\s[^;&|\n]*[\s'"`;&|(]+"#,
+    r"(?:rm|rmdir|rd|del|erase|remove-item|ri|mkfs(?:\.\w+)?|dd|format(?:\.com)?|shutdown|reboot|poweroff|halt|stop-computer|restart-computer",
+    r"|kubectl\b[^;&|\n]*\bdelete|(?:terraform|tofu)\b[^;&|\n]*\bdestroy)",
+    r#"(?:[\s'"`;&|)]|$)"#
+);
+/// `scp`, `rsync` or `sftp` of a whole secret directory (`~/.aws`, `~/.ssh/`,
+/// `$HOME/.gnupg/*`) with a remote `host:` after it. `secret-exfil` names files
+/// (`.aws/credentials`, `id_rsa`), not directories. A `-i ~/.ssh/key` identity
+/// file is not a directory, and `C:` is no host.
+pub const SCP_HOME_SECRET_RE: &str = concat!(
+    r#"(?i)\b(?:scp|rsync|sftp)(?:\.exe)?\s[^;&|\n]*[\s'"=]"#,
+    r"(?:~|\$home|\$\{home\}|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/\s'\x22]+|/(?:home|users)/[^/\s'\x22]+|/root)?",
+    r#"[\\/]?\.(?:ssh|aws|gnupg)(?:[\\/]\*?)?['"]?\s"#,
+    r"[^;&|\n]*?[\w.-]{2,}:"
+);
+
 /// Separators include _ - . so file names like IGNORE_PREVIOUS_INSTRUCTIONS match.
 pub const INJECTION_RE: &str = concat!(
     r"(?i)ignore[\s_.-]+(?:(?:all|any)[\s_.-]+)?(?:previous|prior)[\s_.-]+instructions",

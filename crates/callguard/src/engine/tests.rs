@@ -379,7 +379,7 @@ fn default_policy_rev_is_pinned() {
     .unwrap();
     assert_eq!(
         e.policy_rev(),
-        "sha256:5125995b7e1b3faf4a9addf060e1a2f300c8b11f452e820bde1e373d30a4a957"
+        "sha256:a86dc8ca4ec66f7cfd90fecf6a2901a7e533a4d2341b4e5acf62b5be3d1f5a8c"
     );
 }
 
