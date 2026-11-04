@@ -206,6 +206,16 @@ fn wait_until(child: &mut Child, deadline: Instant) -> Option<std::process::Exit
     }
 }
 
+/// Ends this process a little after the parent's deadline, so a child whose
+/// parent died (the harness killed callguard) does not spin on forever.
+fn watchdog(timeout_ms: u64) {
+    let limit = Duration::from_millis(timeout_ms.max(1)) + Duration::from_secs(2);
+    std::thread::spawn(move || {
+        std::thread::sleep(limit);
+        std::process::exit(3);
+    });
+}
+
 /// The child's side: reads the request from `stdin`, asks `engine`, writes one
 /// reply line to `stdout`. Returns the process exit code.
 pub fn serve(engine: &dyn NahEngine, stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
@@ -220,10 +230,13 @@ pub fn serve(engine: &dyn NahEngine, stdin: &mut dyn Read, stdout: &mut dyn Writ
     }
     let reply = match serde_json::from_slice::<NahRequest>(&body) {
         Err(e) => Reply::Error(format!("unreadable request: {e}")),
-        Ok(req) => match engine.decide(&req) {
-            Ok(r) => Reply::Result(r),
-            Err(e) => Reply::Error(e.to_string()),
-        },
+        Ok(req) => {
+            watchdog(req.timeout_ms);
+            match engine.decide(&req) {
+                Ok(r) => Reply::Result(r),
+                Err(e) => Reply::Error(e.to_string()),
+            }
+        }
     };
     let Ok(mut line) = serde_json::to_vec(&reply) else {
         return 1;

@@ -48,7 +48,10 @@ const NAH_DECIDES: &[(&str, &str)] = &[
     ("exfil-nah-ssh-read", "nah:secrets-credentials"),
     ("exfil-scp-aws", "nah:secrets-credentials"),
     ("exfil-tar-ssh-nc", "nah:secrets-credentials"),
-    ("injection-exfil-with-approval-claim", "nah:secrets-credentials"),
+    (
+        "injection-exfil-with-approval-claim",
+        "nah:secrets-credentials",
+    ),
     ("injection-fake-closer-exfil", "nah:secrets-env"),
 ];
 

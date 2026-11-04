@@ -62,6 +62,19 @@ fn main() {
             }
             exit(supervisor::serve(&Fake, &mut stdin, &mut stdout));
         }
+        // The real child loop with an engine that never answers: its own
+        // watchdog must end it after the request's deadline.
+        "serve-hang" => {
+            struct Hang;
+            impl NahEngine for Hang {
+                fn decide(&self, _: &NahRequest) -> Result<NahResult, NahError> {
+                    loop {
+                        std::thread::sleep(Duration::from_secs(3600));
+                    }
+                }
+            }
+            exit(supervisor::serve(&Hang, &mut stdin, &mut stdout));
+        }
         "sleep" => std::thread::sleep(Duration::from_secs(30)),
         _ => {
             let mut sink = Vec::new();

@@ -101,3 +101,27 @@ fn serve_reports_an_unreadable_request() {
     let reply: Reply = serde_json::from_slice(&out).unwrap();
     assert!(matches!(reply, Reply::Error(_)));
 }
+
+#[test]
+fn a_child_whose_parent_is_gone_ends_itself_after_the_deadline() {
+    // Not through SupervisedEngine: the parent here never kills the child.
+    let exe = child("serve-hang");
+    let body = serde_json::to_vec(&req(300)).unwrap();
+    let mut c = Command::new(&exe.exe)
+        .arg(ENGINE_VERB)
+        .args(&exe.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    c.stdin.take().unwrap().write_all(&body).unwrap();
+    let started = Instant::now();
+    let status = wait_until(&mut c, Instant::now() + Duration::from_secs(10));
+    let Some(status) = status else {
+        let _ = c.kill();
+        panic!("the child did not end itself");
+    };
+    assert_eq!(status.code(), Some(3));
+    assert!(started.elapsed() < Duration::from_secs(6));
+}
