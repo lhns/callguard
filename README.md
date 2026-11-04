@@ -132,7 +132,7 @@ Never `allow` on error. Bad input, a policy load error, a backend failure, a tim
 - **A pty can satisfy the terminal check of `callguard trust`.** An agent that can allocate a pseudo-terminal and type "yes" could trust its own project rules. The guard keeps the agent from writing the trust file and from running the verb directly (self-protection), but this is not a hard boundary. `callguard trust` cannot run under mintty on Windows.
 - **Deep nesting**: nah follows `bash -c` three layers deep and gives up with partial coverage at four, and reads input nested past a limit not at all. The raw-text fallback still applies to deny and ask rules, an allow never matches, and unreadable input gets the fail-safe verdict.
 - **Windows under heavy load** (a median call about 50 times slower) lost two `fs-project-root` blocks (PowerShell rows) in the load test; a walk of `C:\` or `/` can take up to 9 s idle and longer under load, then the 10 s kill gives the fail-safe verdict.
-- **macOS**: the memory cap uses `RLIMIT_AS`, which macOS may not enforce. A runaway analysis is then stopped by the 10 s kill only.
+- **macOS has no memory cap**: `setrlimit` refuses it. A runaway analysis is stopped by the 10 s kill only, by which time it can reach about 800 MB.
 - **Permission paths cover tool calls**, not what a shell command reads or writes (the same as Claude Code).
 
 ## Build and test

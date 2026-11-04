@@ -67,20 +67,27 @@ pub fn memory_limit_warning() -> Option<String> {
 /// processes this one starts, such as git. If it cannot be set the child
 /// carries on without it and `memory_limit_warning` says why.
 ///
-/// Unix: `RLIMIT_AS`, the address space. macOS may not enforce it. Windows: a
-/// job object with a per-process memory limit, which this process joins.
+/// Unix: `RLIMIT_AS`, the address space. Windows: a job object with a per-process
+/// memory limit, which this process joins. macOS: none. setrlimit refuses it with
+/// EINVAL (seen on GitHub's macos-latest), so the hard kill is the only bound, and
+/// warning about that on every call would say nothing new.
 pub fn limit_memory(bytes: usize) {
     if let Err(e) = set_memory_limit(bytes) {
         let _ = LIMIT_FAILURE.set(format!("nah child runs without a memory limit: {e}"));
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+fn set_memory_limit(_bytes: usize) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 #[allow(unsafe_code)]
 fn set_memory_limit(bytes: usize) -> Result<(), String> {
     #[repr(C)]
     struct Rlimit {
-        cur: usize, // rlim_t is unsigned long on Linux and macOS
+        cur: usize, // rlim_t is unsigned long on Linux
         max: usize,
     }
     unsafe extern "C" {

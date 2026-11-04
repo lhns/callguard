@@ -88,7 +88,7 @@ Deterministic layers come first, so the model only loosens calls the rules sent 
 - 100 ms, nah's own limit, is unusable under load: with 16 busy threads on 4 cores 501 of 8,858 corpus rows (5.7 %) lost their block on Linux. At 500 ms three were lost, at 2 s none.
 - On Windows the same load slows the median call about 50 times. Two blocks were lost at 2 s (pwsh `fs-project-root` rows that no deadline hit explains), and 13 root walks (`rm -rf /`, `C:\`) never answered in 90 s because nah's walk of `/` does not check the budget. Idle, those walks take 2 to 9 s, so the kill has to be at least 10 s; under load the kill and the parent's backstops carry the guarantee, and the verdict is the fail-safe one, never an allow.
 
-**Memory.** The nah child limits itself to 512 MiB at start (`RLIMIT_AS`; a job object on Windows), so a runaway analysis (`${x:-` nested 100,000 deep grows 60 to 80 MB/s) ends as a crash, which is the fail-safe verdict, and not as an out-of-memory host. macOS may not enforce `RLIMIT_AS`; there only the 10 s kill stops it.
+**Memory.** The nah child limits itself to 512 MiB at start (`RLIMIT_AS`; a job object on Windows), so a runaway analysis (`${x:-` nested 100,000 deep grows 60 to 80 MB/s) ends as a crash, which is the fail-safe verdict, and not as an out-of-memory host. macOS refuses `RLIMIT_AS`; there only the 10 s kill stops it.
 
 **Allow needs two parsers.** A permission allow rule matches only if nah's parse and callguard's own lexer agree that every command of the call is one the rules name, with no assignment, redirect or expansion around them that argv would hide, and the coverage is full. Anything else goes on to the judge.
 

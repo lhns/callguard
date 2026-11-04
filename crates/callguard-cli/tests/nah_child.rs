@@ -188,10 +188,9 @@ fn a_misbehaving_nah_child_never_fails_open() {
 /// verdict is the fail-safe one, and the call is not left to run the machine out
 /// of memory. (`${x:-...}` nested 100k deep grows 60-80 MB/s.)
 ///
-/// macOS may not enforce `RLIMIT_AS`, so there the cap never fires. The test
-/// then runs with a 5 s timeout (about 400 MB of growth at most) and the child
-/// ends at the hard kill instead. The verdict is the same fail-safe one; only
-/// the cause differs, and a macOS run does not show which one it was.
+/// macOS has no cap (see `limit_memory`). The test then runs with a 5 s timeout
+/// (about 400 MB of growth at most) and the child ends at the hard kill instead.
+/// The verdict is the same fail-safe one; only the cause differs.
 #[test]
 #[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
 fn a_nah_that_outgrows_its_memory_cap_is_a_failure() {
@@ -1163,6 +1162,8 @@ impl Sandbox {
     fn config_dir(&self) -> PathBuf {
         if cfg!(windows) {
             self.home.join("AppData/Roaming")
+        } else if cfg!(target_os = "macos") {
+            self.home.join("Library/Application Support")
         } else {
             self.home.join(".config")
         }
