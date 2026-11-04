@@ -105,7 +105,7 @@ Everything else held: 100k levels of `$( )`, subshell, brace, pipeline; 1 and 16
 
 Invalid UTF-8, a lone surrogate and JSON nested past 128 levels never reach nah: `serde_json` returns an error, which must go down the fallback path.
 
-**Hang.** `${x:-…}` at 100k levels ran past 40 s at 100 ms and 2 s budgets; the deadline is cooperative. It is not consistent: on Linux single runs finished in 162–224 ms, so whether it hangs seems to depend on timing. Cause not established.
+**Memory growth, not a loop.** `${x:-…}` at 100k levels (600 KB) does not finish in most runs, because memory grows without bound until something stops it. Measured on Linux, 20 runs pinned to 4 cores, main thread and 64 MB stack, budget 100 ms and 2 s, five each, process killed at 2 GiB: 19 of 20 reached 2 GiB at a steady 60 to 80 MB/s (killed after 25.5 to 33.5 s), and one run (64 MB stack, 100 ms) finished in 190 ms at 30 MB with `deadline-exceeded`, gap `limit-saturated`, verdict delegate. The 25 to 33 s spread follows how much CPU the run got, since other jobs were running; the growth rate is the same, so the timing variation is not explained by memory. The deadline fired once in 20 and the other 19 never checked it, so a cooperative deadline does not help here, and the earlier 162 to 224 ms runs were the rare finishing kind. The supervised child therefore needs a memory cap (a job object on Windows, `RLIMIT_AS` or a cgroup on Linux) as well as the time limit, because a 40 s kill would let it take over 2 GiB first. Which allocation grows was not traced. Not run on Windows.
 
 **Conclusion: the plan's second design, a supervised child.** A stack overflow ends the whole process (Windows exit `0xC00000FD`, Linux SIGABRT), and `catch_unwind` and panic hooks do not see it. nah's own comment in `dispatch.rs` says the same. A big-stack thread alone would fail open on a crafted file in a repo.
 
@@ -139,40 +139,58 @@ A crash must also not be a way past nah. Crafted input that kills nah reaches po
 
 **Detect with `coverage != full`, not with the gaps list:** `find /` came back partial with empty gaps. No run had a deadline hit with full coverage: 0 of 1,923 hits in the recorded conformance rows, oracle and spike.
 
-**Under load: not measured**, the run was stopped. Idle data only:
+**Idle** (no other load), Linux, all 8,858 rows, spike vs its own 60 s run:
 
 | Set | Deadline hit at 100 ms | Verdict flips, 100 ms vs 60 s | Wall ms at 60 s, p50 / p95 / max |
 |---|---|---|---|
-| Linux, 4,472 rows | 508 (11 %) | 3, all delegate → block | 79 / 555 / 2,979 |
+| Linux, 8,858 rows | 537 (6.1 %) | 5, all block at 60 s, delegate at 100 ms | 78 / 471 / 2,979 |
 | Windows fixtures, 238 rows | 66 | 0 | 58 / 3,825 / 5,970 |
 | Linux rows on Windows, 885 (every 10th) | 372 | 0 | 117 / 5,753 / 7,554 |
 
-The three flips: 46-command `&&` chains ending in a home delete (564–578 ms at 60 s), and `curl -X DELETE https://api.github.com/repos/owner/project`.
+The five flips: two 46-command `&&` chains ending in a home delete (564 and 578 ms at 60 s), `curl -X DELETE https://api.github.com/repos/owner/project`, `curl -X DELETE` against a Vault URL, and `hatch publish`.
 
-**Recommendation, provisional until the load run:** analysis budget **2 s**, hard kill **10 s**.
+**Under load, Linux** (all 8,858 rows, three budgets, each compared with the idle 60 s verdict of the same row). Load applied: `conf -load 16` starts 16 busy-loop goroutines (`GOMAXPROCS=16`), and the whole run is pinned with `taskset -c 0-3`, so the spike's process competes with 16 busy threads on 4 cores. That slows the median call 3.3 times (260 ms against 78 ms) and p95 2.8 times (1.3 s against 0.47 s). It is a heavy but ordinary level: a busy machine, not a starved one. The run took 2 h 51 min; another worker's `cargo build` ran in the same container for part of it and added load that was not measured. One load run per budget, so no variance estimate.
 
-- 100 ms makes every call in a Windows git repo partial, which would disable allow rules there.
-- 500 ms leaves little margin: the first round gets 250 ms, the 46-command chain needs about 500 ms idle, and the Windows git cost comes off the top.
-- The kill must outlast the Windows `/` walk (up to 8.6 s seen). At 2 s budget, hostile Linux inputs ran about 9 s (`pipeline`, `heredocs`), and those are fine to kill.
+| Budget | Deadline hit | Verdict flips vs 60 s | Direction | Calls over 10 s wall |
+|---|---|---|---|---|
+| 100 ms | 3,417 (38.6 %) | **501 (5.7 %)**; 9 % of the 5,567 blocks lost | all block to delegate | 7 |
+| 500 ms | 504 (5.7 %) | **3** | all block to delegate | 8 |
+| 2 s | 62 (0.7 %) | **0** | none | 10 |
+
+- At 100 ms the lost blocks are spread over the guards, mostly `git-remote-repo-delete` (158), `self-protection` (121), `git-remote-resource-delete` (43), `secrets-exfil` (41), `fs-system-tree` (18), `fs-home` (18). 499 of the 501 are rows the corpus expects to block.
+- At 500 ms the three are the 46-command chains and `thirteen-status-wrappers`, all `fs-home`. At 2 s the same three still hit the deadline or came close (one at 2.5 s wall) and kept their block, because nah blocks from what it established before the deadline.
+- No deadline hit came back with `coverage: full` at any budget.
+- Wall time is not bounded by the budget. At 2 s, 19 calls took over 5 s and 10 over 10 s, up to 19 s, all in `fs-system-tree` (`mv /*` patterns and `find /` help text): the walk of `/` inside the observation callback does not check the deadline. Eight of the ten still blocked. Under a 10 s hard kill these ten would fall to the fallback instead.
+
+**Under load, Windows: not run yet.** Waiting for the host to be free of other timing-sensitive work. The flips above are Linux only; Windows idle showed 0 flips, but its calls are 10 to 50 times slower than Linux's, so Windows may need a larger budget than the Linux numbers show.
+
+**Recommendation: analysis budget 2 s, hard kill 10 s.** The provisional figure holds.
+
+- 100 ms is not usable under load: it loses a block in one call of 18, and idle it already makes every call in a Windows git repo partial, which would disable allow rules there.
+- 500 ms loses the 46-command chains under load. They are synthetic, but they are the shape of an agent chaining many commands before a delete.
+- 2 s lost nothing on Linux at this load level. Whether it holds under heavier load is not measured; the margin at 2 s is the chain at 2.5 s against a 2 s budget, which still blocked, so some headroom exists. Windows is not measured under load, so the 2 s figure stays provisional for Windows until that run is done.
+- The kill must outlast the Windows `/` walk (up to 8.6 s seen). Ten Linux calls ran past 10 s at the 2 s budget under load; these are hostile root-globbing inputs where falling back is acceptable.
 - The plan's catastrophic backstops stay needed: they answer before any of this. Their disk-wipe pattern should include `\\.\PhysicalDrive`, which nah misses live.
 
 ## 6. Conformance
 
-Spike vs official v1.7.0 binary, same real directories, `conformance/main.go`, adapted from the nah-wasm test. Rows are in fixture name order, so the Linux set is a prefix of the corpus, not a sample.
+Spike vs official v1.7.0 binary, same real directories, `conformance/main.go`, adapted from the nah-wasm test. Rows are in fixture name order. Idle, no load.
 
 | Set | Compared | Spike 100 ms: agree | Spike 60 s: agree | Disagreements |
 |---|---|---|---|---|
-| Linux, **partial: 4,472 of 8,858** | 4,472 | 4,453 (99.58 %) | 4,450 (99.51 %) | All: oracle delegated on its own deadline |
+| Linux, **all** | 8,858 | 8,812 (99.48 %) | 8,809 (99.45 %) | 100 ms: 45 oracle deadline, 1 spike deadline. 60 s: 49, all oracle deadline |
 | Windows fixtures | 238 | 237 | 237 | 1: the oracle ran past 90 s on one row, see below |
 | Linux rows on Windows, every 10th | 885 | 884 | 884 | 1: oracle deadline |
 
-**No logic disagreement.** Every one is the oracle running out of its own hardcoded 100 ms. A generous budget on our side does not reach 100 %, against the plan's expectation, because it widens this class: the oracle cannot be given more time. The official binary is also slower (Linux p50 108 ms vs 79 ms).
+The Linux run was resumed once: the first 4,472 rows ran earlier, the other 4,386 later, same binaries. The official binary hit its own deadline on 646 rows, the spike on 537 at 100 ms.
 
-Matching corpus expectations: Linux 4,299 at 100 ms and 4,302 at 60 s; oracle 4,280. Windows 218 of 238; oracle 217.
+**No logic disagreement.** Every one of the 49 at 60 s is the oracle running out of its own hardcoded 100 ms: it delegated where the spike, given time, blocked. A generous budget on our side does not reach 100 %, against the plan's expectation, because it widens this class: the oracle cannot be given more time. The one other disagreement is at 100 ms: `registry-publish.hatch`, where the oracle blocked and the spike ran past its own deadline (381 ms) and delegated; at 60 s it agrees. The official binary is also slower (Linux p50 106 ms vs 78 ms).
+
+Matching corpus expectations on Linux: oracle 8,549, spike 8,593 at 100 ms and 8,598 at 60 s, of 8,858. Windows 218 of 238; oracle 217.
 
 The other 20 Windows rows: the same verdict from the oracle wherever it answered. Eleven block under a different guard or none named, probably because the harness relocates the fixture home out of `C:\Users\test`. Eight expect block and get delegate; one expects delegate and gets block. A live spot-check of five delegates was inconclusive, because it lacked the fixture's repo and guard posture. Not diagnosed further; the gate is unaffected, since the oracle agrees on all of them.
 
-**Oracle hang, not ours:** `fs-system-tree.windows-pwsh-rm-program-files` made official `nah.exe` run past 90 s once; the spike took 6 s on the same row. The rerun was stopped with the others, so it may be a one-off.
+**The 90 s row, `fs-system-tree.windows-pwsh-rm-program-files`, is the walk of `C:\Program Files`, not an oracle fault.** Six reruns of the official binary, spike (100 ms) and spike (2 s), alone on Windows while the Linux load run was going in Docker: the walk took 4.8 to 6.2 s in 16 of 18 calls. Two outliers: the oracle once 33 s, and the spike at 2 s once past the 90 s limit of the harness (killed, no output). The oracle's first call took 0.4 s and delegated (its own deadline, before the walk). Peak working set of the nah processes was 16 to 23 MB, so it is time, not memory. The deadline does not reach the walk, so one call in 18 ran far beyond the budget, for the spike as for the oracle. The cause of the slow outliers is probably the filesystem (Defender scanning, cold cache), which this run did not isolate. The 10 s hard kill covers it.
 
 ## 7. Which APIs, and nah's config
 
@@ -198,21 +216,17 @@ The observe closure is ours, so it can also filter queries. Not needed so far.
 - Extra crash inputs beyond the brief: other engine frontends, as inline code and as source files. That is how the `.rs` case surfaced.
 - The prepared load run confines itself to 4 cores, so the shared Docker host is not saturated: `GOMAXPROCS=16 taskset -c 0-3 ./conf ... -load 16 -configs <budget>`, compared with `analyse.py flips`.
 - `-j2` in the container too, so build numbers compare.
+- `conf -done earlier.jsonl` skips rows that already have every config in that file, which is how the Linux conformance was resumed.
+- Load runs share the container with other jobs, so their load level is not exact; each ran once.
 
 ## Open
 
-**Needs the owner's OK; stopped under host memory pressure:**
-
-1. Linux conformance, the remaining 4,386 rows.
-2. Load: flips at 100 ms, 500 ms and 2 s. This decides the default budget. Also a load run on Windows.
-3. Probes: repeat `${x:-…}` at 100k to explain the hang; rerun the oracle's 90 s row.
-
-To resume: start container `callguard-phase0` (stopped, volume `callguard-phase0-target` holds the builds), run under the Docker lock. Windows binaries are in `C:\Users\pierr\Documents\git\.callguard-target` (3 GB).
+**Windows load run, not run yet.** Same flips at 100 ms, 500 ms and 2 s on the 238 Windows fixtures and the 885 Linux rows on Windows, with the Windows binaries in `C:\Users\pierr\Documents\git\.callguard-target` (3 GB). It needs at least 8 GB of free memory and a host without other timing-sensitive work. The load on Windows has no `taskset`: set the process affinity of `conf-win.exe` to cores 0-3 after starting it (children inherit it), with `-load 16` and `GOMAXPROCS=16`. Compare with `analyse.py flips` against `win-windows.jsonl:60000` and `win-linuxrows.jsonl:60000`.
 
 **For later phases:**
 
 - Fork or upstream `decide_with_budget`.
-- Report upstream: Rust source overflow, the `${x:-…}` hang, scp `C:` as host, `ssh host <destructive>`, `\\.\PhysicalDrive` live, four `bash -c` layers delegating.
+- Report upstream: Rust source overflow, the `${x:-…}` unbounded memory growth, scp `C:` as host, `ssh host <destructive>`, `\\.\PhysicalDrive` live, four `bash -c` layers delegating.
 - A normal clone on Windows, instead of this linked worktree.
 - macOS not run; nothing here covers it.
 - Defender is on and exclusions could not be read without admin. It may inflate Windows builds and the `/` walk. To test, the owner can run as admin: `Add-MpPreference -ExclusionPath C:\Users\pierr\Documents\git\.callguard-target`.

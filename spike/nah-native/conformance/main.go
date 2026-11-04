@@ -67,6 +67,7 @@ func main() {
 	filter := flag.String("filter", "", "row id substring")
 	out := flag.String("out", "rows.jsonl", "output")
 	every := flag.Int("every", 1, "only every Nth compared row")
+	done := flag.String("done", "", "earlier output: rows with all configs there are skipped (resume)")
 	flag.Parse()
 	log.SetFlags(log.Ltime)
 
@@ -79,6 +80,7 @@ func main() {
 		}()
 	}
 	cfgs := strings.Split(*configs, ",")
+	complete := completeRows(*done, len(cfgs))
 	guardsOut, err := exec.Command(*spikeBin, "guards").Output()
 	if err != nil {
 		log.Fatal(err)
@@ -140,6 +142,9 @@ func main() {
 				continue
 			case r.Code != "":
 				skipped["code row"]++
+				continue
+			}
+			if complete[r.ID] {
 				continue
 			}
 			seen++
@@ -218,6 +223,33 @@ func main() {
 		log.Printf("%s: %d rows, %d compared so far", name, len(group), compared)
 	}
 	log.Printf("rows %d compared %d skipped %v", len(rows), compared, skipped)
+}
+
+// completeRows is the IDs that have a record for every config in path; a row
+// cut off half way is not complete and runs again.
+func completeRows(path string, nconfigs int) map[string]bool {
+	complete := map[string]bool{}
+	if path == "" {
+		return complete
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+	count := map[string]int{}
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		var r struct{ ID string }
+		if json.Unmarshal(sc.Bytes(), &r) == nil && r.ID != "" {
+			count[r.ID]++
+		}
+	}
+	for id, n := range count {
+		complete[id] = n >= nconfigs
+	}
+	return complete
 }
 
 type output struct {
