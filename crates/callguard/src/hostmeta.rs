@@ -754,7 +754,7 @@ mod tests {
     fn probe_fills_in_what_is_missing() {
         let s = Arc::new(Script::new(&[
             (
-                "git -C /w -c core.fsmonitor=false status --porcelain=v1",
+                "git -C /w -c core.fsmonitor=false status --porcelain=v1 --ignore-submodules=dirty",
                 "?? .env\nM  main.go\n",
             ),
             (
