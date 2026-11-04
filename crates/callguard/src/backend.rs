@@ -112,7 +112,7 @@ pub fn from_config(cfg: &policy::Backend) -> Result<Box<dyn Backend>, BackendErr
         )));
     }
     match cfg.r#type.as_str() {
-        "anthropic" => Ok(Box::new(Anthropic::new(cfg))),
+        "anthropic" => Ok(Box::new(Anthropic::new(cfg)?)),
         "openai" => Ok(Box::new(OpenAi::new(cfg)?)),
         "exec" => Ok(Box::new(ExecBackend::new(cfg)?)),
         "fake" => Ok(Box::new(Fake::new(cfg)?)),
@@ -148,16 +148,159 @@ fn clip(s: &str, n: usize) -> &str {
 // ---------------------------------------------------------------------------
 // HTTP
 
-/// An HTTP client that uses the system trust store and proxy settings.
-fn http_agent() -> ureq::Agent {
+/// An HTTP client that uses the system trust store and the proxy the
+/// environment names for `url` (see [`proxy_for`]).
+fn http_agent(url: &str) -> Result<ureq::Agent, BackendError> {
+    http_agent_from(url, &|k| std::env::var(k).ok())
+}
+
+fn http_agent_from(
+    url: &str,
+    env: &dyn Fn(&str) -> Option<String>,
+) -> Result<ureq::Agent, BackendError> {
     let tls = ureq::tls::TlsConfig::builder()
         .root_certs(ureq::tls::RootCerts::PlatformVerifier)
         .build();
-    ureq::Agent::config_builder()
+    // An unusable proxy value is an error; connecting directly instead would
+    // send the request around a proxy the operator meant it to use.
+    let proxy = match proxy_for(url, env) {
+        Some(p) => Some(
+            ureq::Proxy::new(&p)
+                .map_err(|e| other(format!("proxy {p:?} from the environment: {e}")))?,
+        ),
+        None => None,
+    };
+    Ok(ureq::Agent::config_builder()
         .tls_config(tls)
+        .proxy(proxy)
+        .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
         .http_status_as_error(false)
         .build()
-        .into()
+        .into())
+}
+
+/// The scheme, lower-case host (no brackets) and port of `url`, the port
+/// defaulted from the scheme.
+fn url_target(url: &str) -> Option<(String, String, u16)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let scheme = scheme.to_ascii_lowercase();
+    let auth = rest.split(['/', '?', '#']).next()?;
+    let auth = auth.rsplit('@').next()?;
+    let (host, port) = if let Some(r) = auth.strip_prefix('[') {
+        let (h, after) = r.split_once(']')?;
+        (h, after.strip_prefix(':'))
+    } else if let Some((h, p)) = auth.split_once(':') {
+        (h, Some(p))
+    } else {
+        (auth, None)
+    };
+    let default = if scheme == "https" { 443 } else { 80 };
+    let port = match port {
+        Some(p) if !p.is_empty() => p.parse().ok()?,
+        _ => default,
+    };
+    Some((scheme, host.to_ascii_lowercase(), port))
+}
+
+fn is_loopback(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+fn first_set(env: &dyn Fn(&str) -> Option<String>, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .filter_map(|n| env(n))
+        .map(|v| v.trim().to_owned())
+        .find(|v| !v.is_empty())
+}
+
+/// The proxy for a request to `url`: `HTTPS_PROXY` for https, `HTTP_PROXY` for
+/// http (upper case wins over lower), nothing for loopback or for a target
+/// that `NO_PROXY` lists. `ALL_PROXY` is not read. None means connect directly.
+pub(crate) fn proxy_for(url: &str, env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let (scheme, host, port) = url_target(url)?;
+    if is_loopback(&host) {
+        return None;
+    }
+    let proxy = match scheme.as_str() {
+        "https" => first_set(env, &["HTTPS_PROXY", "https_proxy"]),
+        "http" => first_set(env, &["HTTP_PROXY", "http_proxy"]),
+        _ => None,
+    }?;
+    let no_proxy = first_set(env, &["NO_PROXY", "no_proxy"]).unwrap_or_default();
+    if no_proxy
+        .split(',')
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .any(|e| no_proxy_matches(e, &host, port))
+    {
+        return None;
+    }
+    Some(proxy)
+}
+
+/// Whether one `NO_PROXY` entry covers the target: `*`, an IP, a CIDR, a
+/// host (itself and its subdomains), `.host` (subdomains only), each with an
+/// optional `:port`.
+fn no_proxy_matches(entry: &str, host: &str, port: u16) -> bool {
+    if entry == "*" {
+        return true;
+    }
+    let entry = entry.to_ascii_lowercase();
+    if let Some((net, bits)) = entry.split_once('/') {
+        let (Ok(net), Ok(bits), Ok(ip)) = (
+            net.parse::<std::net::IpAddr>(),
+            bits.parse::<u32>(),
+            host.parse::<std::net::IpAddr>(),
+        ) else {
+            return false;
+        };
+        return in_cidr(ip, net, bits);
+    }
+    let (name, eport) = if let Some(r) = entry.strip_prefix('[') {
+        match r.split_once(']') {
+            Some((h, after)) => (h, after.strip_prefix(':')),
+            None => return false,
+        }
+    } else if entry.matches(':').count() == 1 {
+        let (h, p) = entry.split_once(':').unwrap_or((&entry, ""));
+        (h, Some(p))
+    } else {
+        (entry.as_str(), None)
+    };
+    if let Some(p) = eport
+        && !p.is_empty()
+        && p.parse::<u16>().is_ok_and(|p| p != port)
+    {
+        return false;
+    }
+    if let Ok(ip) = name.parse::<std::net::IpAddr>() {
+        return host.parse::<std::net::IpAddr>().is_ok_and(|h| h == ip);
+    }
+    let name = name.strip_prefix('*').unwrap_or(name);
+    if name.starts_with('.') {
+        host.ends_with(name)
+    } else {
+        host == name || host.ends_with(&format!(".{name}"))
+    }
+}
+
+fn in_cidr(ip: std::net::IpAddr, net: std::net::IpAddr, bits: u32) -> bool {
+    use std::net::IpAddr::{V4, V6};
+    match (ip, net) {
+        (V4(a), V4(n)) if bits <= 32 => {
+            let mask = u32::MAX.checked_shl(32 - bits).unwrap_or(0);
+            u32::from(a) & mask == u32::from(n) & mask
+        }
+        (V6(a), V6(n)) if bits <= 128 => {
+            let mask = u128::MAX.checked_shl(128 - bits).unwrap_or(0);
+            u128::from(a) & mask == u128::from(n) & mask
+        }
+        _ => false,
+    }
 }
 
 /// The time left until `deadline`, or `Timeout` if there is none.
@@ -266,7 +409,7 @@ struct Anthropic {
 }
 
 impl Anthropic {
-    fn new(cfg: &policy::Backend) -> Anthropic {
+    fn new(cfg: &policy::Backend) -> Result<Anthropic, BackendError> {
         let or = |v: &str, d: &str| {
             if v.is_empty() {
                 d.to_owned()
@@ -274,14 +417,15 @@ impl Anthropic {
                 v.to_owned()
             }
         };
-        Anthropic {
+        let base_url = or(cfg.base_url.trim_end_matches('/'), ANTHROPIC_DEFAULT_URL);
+        Ok(Anthropic {
             model: or(&cfg.model, ANTHROPIC_DEFAULT_MODEL),
-            base_url: or(cfg.base_url.trim_end_matches('/'), ANTHROPIC_DEFAULT_URL),
             key_env: or(&cfg.api_key_env, "ANTHROPIC_API_KEY"),
             max_tokens: max_tokens(cfg),
             classes: cfg.data_classes.clone(),
-            agent: http_agent(),
-        }
+            agent: http_agent(&base_url)?,
+            base_url,
+        })
     }
 }
 
@@ -473,13 +617,14 @@ impl OpenAi {
                 "openai backend needs base_url (e.g. http://127.0.0.1:8080/v1)",
             ));
         }
+        let base_url = cfg.base_url.trim_end_matches('/').to_owned();
         Ok(OpenAi {
             model: cfg.model.clone(),
-            base_url: cfg.base_url.trim_end_matches('/').to_owned(),
             key_env: cfg.api_key_env.clone(),
             max_tokens: max_tokens(cfg),
             classes: cfg.data_classes.clone(),
-            agent: http_agent(),
+            agent: http_agent(&base_url)?,
+            base_url,
         })
     }
 }
@@ -1142,14 +1287,29 @@ mod tests {
     impl Server {
         /// Answers every request with `status` and `body` after `delay`.
         fn start(status: u16, body: String, delay: Duration) -> Server {
+            Server::start_with(status, body, delay, "")
+        }
+
+        /// Answers 303 to `location`.
+        fn redirect(location: &str) -> Server {
+            Server::start_with(
+                303,
+                String::new(),
+                Duration::ZERO,
+                &format!("Location: {location}\r\n"),
+            )
+        }
+
+        fn start_with(status: u16, body: String, delay: Duration, extra: &str) -> Server {
+            let extra = extra.to_owned();
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}", listener.local_addr().unwrap());
             let seen = Arc::new(Mutex::new(Vec::new()));
             let seen2 = seen.clone();
             std::thread::spawn(move || {
                 for conn in listener.incoming().flatten() {
-                    let (seen, body) = (seen2.clone(), body.clone());
-                    std::thread::spawn(move || serve(conn, status, &body, delay, &seen));
+                    let (seen, body, extra) = (seen2.clone(), body.clone(), extra.clone());
+                    std::thread::spawn(move || serve(conn, status, &body, delay, &extra, &seen));
                 }
             });
             Server { url, seen }
@@ -1175,6 +1335,7 @@ mod tests {
         status: u16,
         body: &str,
         delay: Duration,
+        extra: &str,
         seen: &Mutex<Vec<Captured>>,
     ) {
         let mut buf = Vec::new();
@@ -1216,7 +1377,7 @@ mod tests {
         std::thread::sleep(delay);
         let _ = write!(
             conn,
-            "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status} X\r\n{extra}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
     }
@@ -1242,6 +1403,186 @@ mod tests {
             r#"{{"content":[{{"type":"thinking","thinking":"hm"}},{{"type":"text","text":{}}}],"stop_reason":"end_turn"{usage}}}"#,
             json_str(OK_TEXT)
         )
+    }
+
+    fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| (*v).to_owned())
+        }
+    }
+
+    #[test]
+    fn a_redirect_keeps_authorization_on_the_same_host_only() {
+        let target = Server::ok("{}".into());
+        let hdr = [("Authorization", "Bearer secret")];
+        // The same host (the port differs, the name does not).
+        let same = Server::redirect(&format!("{}/next", target.url));
+        let agent = http_agent_from(&same.url, &|_| None).unwrap();
+        post_json(&agent, &same.url, &hdr, "{}".into(), soon(), "test").unwrap();
+        let got = target.only_request();
+        assert_eq!(
+            got.header("authorization"),
+            Some("Bearer secret"),
+            "{got:?}"
+        );
+        // Another host name for the same server loses it.
+        let other_target = Server::ok("{}".into());
+        let port = other_target.url.rsplit(':').next().unwrap();
+        let cross = Server::redirect(&format!("http://localhost:{port}/next"));
+        post_json(&agent, &cross.url, &hdr, "{}".into(), soon(), "test").unwrap();
+        let got = other_target.only_request();
+        assert_eq!(got.header("authorization"), None, "{got:?}");
+    }
+
+    #[test]
+    fn the_proxy_is_chosen_per_target() {
+        const P: &str = "http://proxy:3128";
+        type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Option<&'a str>);
+        let cases: &[Case] = &[
+            // The scheme of the target picks the variable; ALL_PROXY is ignored.
+            ("https://api.example.com/v1", &[("HTTPS_PROXY", P)], Some(P)),
+            ("https://api.example.com", &[("HTTP_PROXY", P)], None),
+            ("http://api.example.com", &[("HTTP_PROXY", P)], Some(P)),
+            ("http://api.example.com", &[("HTTPS_PROXY", P)], None),
+            ("https://api.example.com", &[("ALL_PROXY", P)], None),
+            ("https://api.example.com", &[("https_proxy", P)], Some(P)),
+            (
+                "https://api.example.com",
+                &[
+                    ("HTTPS_PROXY", "http://upper:1"),
+                    ("https_proxy", "http://lower:1"),
+                ],
+                Some("http://upper:1"),
+            ),
+            (
+                "https://api.example.com",
+                &[("HTTPS_PROXY", ""), ("https_proxy", "http://lower:1")],
+                Some("http://lower:1"),
+            ),
+            ("https://api.example.com", &[], None),
+            // Loopback never uses a proxy.
+            ("http://localhost:8080/v1", &[("HTTP_PROXY", P)], None),
+            ("http://127.0.0.1:8080", &[("HTTP_PROXY", P)], None),
+            ("http://127.9.9.9", &[("HTTP_PROXY", P)], None),
+            ("http://[::1]:8080", &[("HTTP_PROXY", P)], None),
+            ("https://LOCALHOST", &[("HTTPS_PROXY", P)], None),
+            // NO_PROXY.
+            (
+                "https://a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "*")],
+                None,
+            ),
+            (
+                "https://a.test",
+                &[("HTTPS_PROXY", P), ("no_proxy", "b.test, a.test")],
+                None,
+            ),
+            (
+                "https://sub.a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "a.test")],
+                None,
+            ),
+            (
+                "https://xa.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "a.test")],
+                Some(P),
+            ),
+            (
+                "https://sub.a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", ".a.test")],
+                None,
+            ),
+            (
+                "https://a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", ".a.test")],
+                Some(P),
+            ),
+            (
+                "https://sub.a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "*.a.test")],
+                None,
+            ),
+            (
+                "https://10.1.2.3",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "10.0.0.0/8")],
+                None,
+            ),
+            (
+                "https://11.1.2.3",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "10.0.0.0/8")],
+                Some(P),
+            ),
+            (
+                "https://10.1.2.3",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "10.1.2.3")],
+                None,
+            ),
+            (
+                "https://10.1.2.4",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "10.1.2.3")],
+                Some(P),
+            ),
+            (
+                "https://[fd00::5]",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "fd00::/8")],
+                None,
+            ),
+            (
+                "https://a.test:8443",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "a.test:8443")],
+                None,
+            ),
+            (
+                "https://a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "a.test:8443")],
+                Some(P),
+            ),
+            (
+                "https://a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", "a.test:443")],
+                None,
+            ),
+            (
+                "https://a.test",
+                &[("HTTPS_PROXY", P), ("NO_PROXY", " , ,b.test")],
+                Some(P),
+            ),
+            (
+                "https://a.test",
+                &[("HTTPS_PROXY", "socks5://127.0.0.1:1080")],
+                Some("socks5://127.0.0.1:1080"),
+            ),
+        ];
+        for (url, env, want) in cases {
+            assert_eq!(
+                proxy_for(url, &env_of(env)).as_deref(),
+                *want,
+                "{url} with {env:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unusable_proxy_is_an_error_not_a_direct_connection() {
+        let env = env_of(&[("HTTPS_PROXY", "ftp://nope:1")]);
+        assert!(http_agent_from("https://api.example.com", &env).is_err());
+        let env = env_of(&[("HTTPS_PROXY", "socks5://127.0.0.1:1080")]);
+        assert!(http_agent_from("https://api.example.com", &env).is_ok());
+    }
+
+    #[test]
+    fn a_loopback_backend_ignores_a_dead_proxy_in_the_environment() {
+        let srv = Server::ok("{}".into());
+        let env = env_of(&[
+            ("HTTP_PROXY", "http://127.0.0.1:1"),
+            ("HTTPS_PROXY", "http://127.0.0.1:1"),
+        ]);
+        let agent = http_agent_from(&srv.url, &env).unwrap();
+        let got = post_json(&agent, &srv.url, &[], "{}".into(), soon(), "test").unwrap();
+        assert_eq!(got, b"{}");
     }
 
     #[test]

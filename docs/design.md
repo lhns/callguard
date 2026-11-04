@@ -270,6 +270,8 @@ Interface: `classify(&ClassifyRequest{system, prompt, labels, schema, input}, de
 - `exec`: runs a configured command, writes `{"schema":"callguard/classify/v1", ...}` on stdin, reads `{"label","confidence","rule","reason"}`. For choice models (Jev-like) or anything else.
 - `fake`: deterministic, for tests and offline eval.
 
+**Proxies and HTTP.** Judge traffic picks its proxy from the environment by the target's scheme: `HTTPS_PROXY` for https, `HTTP_PROXY` for http (upper case wins over lower), `ALL_PROXY` is not read. Loopback targets never use a proxy, and `NO_PROXY` (`*`, IPs, CIDRs, `host`, `.host`, `host:port`) exempts others. `http://`, `https://` and `socks5://` proxies work; a proxy value that cannot be parsed fails the backend, which ends as the fail-safe verdict, never as a direct connection. A redirect keeps `Authorization` only on the same host. The client speaks HTTP/1.1 only.
+
 **Model ids.** The brief asks for dated ids. Current Anthropic ids (`claude-haiku-5-5`) are fixed snapshot ids with no date suffix and no separate alias, per Anthropic's model table. callguard therefore requires an exact model id, rejects `*-latest` ids in `policy check`, and records `backend: "anthropic:<id>"` in every verdict. Older dated ids (`claude-haiku-4-5-20251001`) are accepted.
 
 **Data classes.** If a request carries `context.data_class` and the chosen backend's `data_classes` does not list it, the LLM is not called and the verdict is `fallback` with rule `data-class`. A backend without `data_classes` accepts only requests without `data_class`.
