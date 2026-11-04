@@ -8,6 +8,13 @@
 //!   cargo test --release -p callguard-cli --features test-engines -- --ignored
 //!
 //! `CALLGUARD_BIN` points the tests at another binary.
+//!
+//! Four tests walk the whole file system root (`find / -delete`) or take
+//! nah's wall-clock budget to its limit, and a slow runner turns them into the
+//! fail-safe verdict: `the_five_gap_commands_today`,
+//! `the_gap_commands_hold_when_wrapped`,
+//! `a_root_walk_past_the_hard_kill_is_never_an_allow` and (in rule_table.rs)
+//! `rule_table`. ci.yml skips them; slow.yml runs them weekly.
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
@@ -180,10 +187,19 @@ fn a_misbehaving_nah_child_never_fails_open() {
 /// A nah that grows without bound hits the child's memory cap and crashes: the
 /// verdict is the fail-safe one, and the call is not left to run the machine out
 /// of memory. (`${x:-...}` nested 100k deep grows 60-80 MB/s.)
+///
+/// macOS may not enforce `RLIMIT_AS`, so there the cap never fires. The test
+/// then runs with a 5 s timeout (about 400 MB of growth at most) and the child
+/// ends at the hard kill instead. The verdict is the same fail-safe one; only
+/// the cause differs, and a macOS run does not show which one it was.
 #[test]
 #[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
 fn a_nah_that_outgrows_its_memory_cap_is_a_failure() {
-    let policy = r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":25000,"budget_ms":24000},"deadline_ms":26000}"#;
+    let policy = if cfg!(target_os = "macos") {
+        r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":5000,"budget_ms":4000},"deadline_ms":6000}"#
+    } else {
+        r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":25000,"budget_ms":24000},"deadline_ms":26000}"#
+    };
     let sb = Sandbox::new(policy);
     let n = 100_000;
     let command = format!("echo {}a{}", "${x:-".repeat(n), "}".repeat(n));

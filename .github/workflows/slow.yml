@@ -1,0 +1,41 @@
+name: slow
+
+# Tests that walk the file system root or depend on wall time, and nah's own
+# corpus. They flake on a loaded runner, so they stay out of ci.yml.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  slow:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+      - name: Root walks and timing
+        run: >
+          cargo test --release -p callguard-cli --features test-engines
+          -- --ignored --test-threads=1
+          the_five_gap_commands_today
+          the_gap_commands_hold_when_wrapped
+          a_root_walk_past_the_hard_kill_is_never_an_allow
+          rule_table
+      # Fails below the OS's baseline in tests/corpus_conformance.rs; Windows has
+      # none yet, so there it only prints its numbers.
+      - name: nah corpus
+        run: cargo test --release -p callguard-nah --test corpus_conformance -- --ignored --nocapture

@@ -7,42 +7,55 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # rust-toolchain.toml names the version and the components.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets --features callguard-cli/test-engines -- -D warnings
+
   test:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
         with:
-          go-version-file: go.mod
-      - name: Build
-        run: go build ./...
-      - name: Vet
-        run: go vet ./...
+          shared-key: test
+      # Release mode: the nah tests need nah's analysis to run at release speed.
+      # The four skipped tests walk the file system root or run nah's wall-clock
+      # budget to its limit; slow.yml runs them (see nah_child.rs).
       - name: Test
-        if: runner.os == 'Windows'
-        run: go test ./...
-      - name: Test (race)
-        if: runner.os != 'Windows'
-        run: go test -race ./...
-      - name: gofmt
-        if: runner.os == 'Linux'
-        run: test -z "$(gofmt -l .)"
+        run: >
+          cargo test --release --workspace --features callguard-cli/test-engines
+          -- --include-ignored --test-threads=1
+          --skip the_five_gap_commands_today
+          --skip the_gap_commands_hold_when_wrapped
+          --skip a_root_walk_past_the_hard_kill_is_never_an_allow
+          --skip rule_table
+          --skip corpus_conformance
       - name: Plugin self-test
-        if: runner.os == 'Linux'
         run: node adapters/selftest.mjs
-
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
-        with:
-          version: v2.12.2
+      # The fake judge cannot decide the judge bucket, so this only checks that
+      # the pipeline runs the whole set.
+      - name: Eval with the fake judge
+        run: cargo run --release -p callguard-cli -- eval --backend fake --cases evals/cases.jsonl
