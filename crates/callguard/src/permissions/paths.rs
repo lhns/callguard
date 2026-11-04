@@ -37,6 +37,20 @@ impl PathSpec {
         if s.is_empty() {
             return Err("empty path pattern".into());
         }
+        let b = s.as_bytes();
+        let drive = |i: usize| b.len() > i + 1 && b[i].is_ascii_alphabetic() && b[i + 1] == b':';
+        if drive(0) || (s.starts_with("//") && drive(2)) {
+            let (l, rest) = if drive(0) {
+                (b[0], &s[2..])
+            } else {
+                (b[2], &s[4..])
+            };
+            return Err(format!(
+                "a drive path is written //{}{}",
+                (l as char).to_ascii_lowercase(),
+                if rest.starts_with('/') { rest } else { "/…" }
+            ));
+        }
         if s.starts_with('!') {
             return Err("`!` negation is not supported".into());
         }

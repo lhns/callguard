@@ -154,11 +154,16 @@ impl Mcp {
         })
     }
 
-    pub fn matches(&self, tool: &str) -> bool {
+    /// With `strict` (allow), a remainder holding `__` does not match: the
+    /// name could belong to a server whose own name contains `__`.
+    pub fn matches(&self, tool: &str, strict: bool) -> bool {
         let prefix = format!("mcp__{}__", self.server);
         let Some(rest) = tool.strip_prefix(&prefix).filter(|r| !r.is_empty()) else {
             return false;
         };
+        if strict && rest.contains("__") {
+            return false;
+        }
         self.tool.as_ref().is_none_or(|g| glob(g, rest))
     }
 }

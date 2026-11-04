@@ -1418,3 +1418,67 @@ fn deny_sees_git_through_unlisted_options_and_windows_script_names() {
     let n = nah_of(&[&["npm.cmd", "publish"]]);
     assert!(d.check(&bash("x"), Some(&n)).is_some());
 }
+
+// --- follow-up -----------------------------------------------------------------------
+
+#[test]
+fn versioned_and_alias_programs_are_open_ended_too() {
+    for r in [
+        "Bash(python3.12 *)",
+        "Bash(python3 *)",
+        "Bash(node22 *)",
+        "Bash(ruby3.3 *)",
+        "Bash(perl5.36 *)",
+        "Bash(php8.2 *)",
+        "Bash(lua5.4 *)",
+        "Bash(pypy3 *)",
+        "Bash(/usr/bin/Python3.11 -m *)",
+        "Bash(nodejs *)",
+        "Bash(tsx *)",
+        "Bash(ts-node *)",
+        "Bash(uvx *)",
+        "Bash(bunx *)",
+        "Bash(pipx run *)",
+        "Bash(pnpx *)",
+        "Bash(yarnpkg *)",
+    ] {
+        for layer in ["user", "project"] {
+            assert!(vet(r, Some(layer)).is_err(), "{r} in {layer}");
+        }
+    }
+    assert!(vet("Bash(python3.12 tools/check.py)", Some("user")).is_ok());
+}
+
+#[test]
+fn drive_paths_in_specs_are_refused_with_the_posix_form() {
+    for r in ["Read(C:/x/**)", r"Read(c:\x\**)", "Edit(//C:/x/**)"] {
+        let e = parse(r).unwrap_err();
+        assert!(e.contains("//c/x"), "{r}: {e}");
+        assert!(vet(r, Some("user")).is_err(), "{r}");
+    }
+    let p: policy::Policy =
+        serde_json::from_str(r#"{"policy_version":1,"permissions":{"deny":["Read(C:/x/**)"]}}"#)
+            .unwrap();
+    assert!(policy::validate(&p, false)[0].contains("//c/x"));
+    assert!(parse("Read(//c/x/**)").is_ok());
+}
+
+#[test]
+fn a_brace_in_a_read_pattern_gets_no_allow() {
+    let a = allow(&["Read(/ok/**)"]);
+    let c = call("Glob", r#"{"path":"/w/p/ok","pattern":"{/etc,x}/*"}"#);
+    assert_eq!(hit(&a, &c), None);
+}
+
+#[test]
+fn an_mcp_allow_skips_names_that_could_be_another_server() {
+    let tool = |t: &str| call(t, "{}");
+    for rule in ["mcp__a", "mcp__a__*"] {
+        let a = allow(&[rule]);
+        assert_eq!(hit(&a, &tool("mcp__a__b")), Some("allow"), "{rule}");
+        assert_eq!(hit(&a, &tool("mcp__a__b__c")), None, "{rule}");
+        assert_eq!(hit(&a, &tool("mcp__ab__c")), None, "{rule}");
+        let d = deny(&[rule]);
+        assert_eq!(hit(&d, &tool("mcp__a__b__c")), Some("deny"), "{rule}");
+    }
+}

@@ -210,7 +210,22 @@ const OPEN_ENDED: &[&str] = &[
     "direnv",
     "mise",
     "nix",
+    "nodejs",
+    "tsx",
+    "ts-node",
+    "uvx",
+    "bunx",
+    "pipx",
+    "pnpx",
+    "yarnpkg",
 ];
+
+/// A program name without its version: `python3.12` is `python`, `node22` is
+/// `node`.
+fn family(name: &str) -> String {
+    let t = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    if t.is_empty() { name } else { t }.to_owned()
+}
 
 /// Tools whose subcommand decides what they do: the wildcard must come after it.
 const SUBCOMMAND_TOOLS: &[&str] = &[
@@ -220,7 +235,7 @@ const SUBCOMMAND_TOOLS: &[&str] = &[
 /// Programs that run code from the repository.
 const REPO_RUNNERS: &[&str] = &[
     "make", "cmake", "ninja", "just", "rake", "gradle", "gradlew", "mvn", "mvnw", "ant", "npm",
-    "yarn", "pnpm", "cargo", "go", "dotnet", "pytest", "tox", "nox", "pip", "pipx", "uv", "poetry",
+    "yarn", "pnpm", "cargo", "go", "dotnet", "pytest", "tox", "nox", "pip", "uv", "poetry",
     "composer", "bundle", "mix",
 ];
 
@@ -240,7 +255,7 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
             let Tok::Lit(first) = s.first() else {
                 return blocked("the first word is a wildcard");
             };
-            let name = prog_name(first, true);
+            let name = family(&prog_name(first, true));
             if OPEN_ENDED.contains(&name.as_str()) && s.has_wildcard() {
                 return Err(format!("{name} with a wildcard runs whatever it is given"));
             }
@@ -454,7 +469,7 @@ impl Permissions {
                     })
             }
             Rule::Search => WEBSEARCH_TOOLS.contains(&call.tool.as_str()),
-            Rule::Mcp(m) => m.matches(&call.tool),
+            Rule::Mcp(m) => m.matches(&call.tool, false),
             Rule::Tool(n) => call.tool == *n,
         }
     }
@@ -546,6 +561,7 @@ impl Permissions {
                 let b = v.as_bytes();
                 !(v.starts_with(['/', '\\', '~'])
                     || v.contains("..")
+                    || v.contains('{')
                     || (b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()))
             })
         })
@@ -577,7 +593,7 @@ impl Permissions {
                     }
                 }
                 Rule::Search => WEBSEARCH_TOOLS.contains(&call.tool.as_str()),
-                Rule::Mcp(m) => m.matches(&call.tool),
+                Rule::Mcp(m) => m.matches(&call.tool, true),
                 Rule::Tool(n) => call.tool == *n,
                 Rule::Shell { .. } | Rule::Fetch { domain: None } => false,
             })
