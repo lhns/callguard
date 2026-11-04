@@ -630,10 +630,10 @@ const USER_EMPTY: &str = r#"{"policy_version":1}"#;
 #[test]
 fn layers_add_deny_and_ask_and_vet_allow() {
     let sys = r#"{"policy_version":1,"permissions":{"deny":["Bash(rm:*)"],"allow":["Bash(ls *)","Bash(*)","Bash(python *)"]}}"#;
-    let user = r#"{"policy_version":1,"permissions":{"ask":["Bash(git push:*)"],"allow":["Bash(make:*)","WebFetch(domain:docs.rs)"]}}"#;
+    let user = r#"{"policy_version":1,"permissions":{"ask":["Bash(git push:*)"],"allow":["Bash(pytest:*)","WebFetch(domain:docs.rs)"]}}"#;
     let proj_allow = [
         "Bash(*)",
-        "Bash(make:*)",
+        "Bash(pytest:*)",
         "WebFetch(domain:evil.com)",
         "Edit(~/.bashrc)",
         "Bash(git log *)",
@@ -652,7 +652,7 @@ fn layers_add_deny_and_ask_and_vet_allow() {
     assert_eq!(p.ask, ["Bash(git push:*)"]);
     assert_eq!(
         p.allow,
-        ["Bash(ls *)", "Bash(make:*)", "WebFetch(domain:docs.rs)"]
+        ["Bash(ls *)", "Bash(pytest:*)", "WebFetch(domain:docs.rs)"]
     );
     let untrusted: Vec<&String> = l
         .warnings
@@ -668,7 +668,7 @@ fn layers_add_deny_and_ask_and_vet_allow() {
         l.policy.permissions.allow,
         [
             "Bash(ls *)",
-            "Bash(make:*)",
+            "Bash(pytest:*)",
             "WebFetch(domain:docs.rs)",
             "WebFetch(domain:evil.com)",
             "Edit(~/.bashrc)",

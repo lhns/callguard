@@ -2,7 +2,6 @@
 //! POSIX-form paths (`/c/Users/x` on Windows), with symlink resolution.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use crate::rules::{Env, path_clean};
 
@@ -198,36 +197,8 @@ pub(super) fn is_network(env: &Env, raw: &str) -> bool {
     env.windows && (raw.starts_with("\\\\") || raw.starts_with("//"))
 }
 
-/// The real location of the normalized path `p`: symlinks resolved, with the
-/// deepest existing ancestor standing in for a file that does not exist yet.
-/// POSIX form; None if nothing resolves.
+/// The real location of the normalized path `p` in POSIX form (see
+/// [`crate::rules::resolve_real`]).
 pub(super) fn resolve(env: &Env, p: &str) -> Option<String> {
-    let mut existing = Path::new(p).to_path_buf();
-    let mut rest = Vec::new();
-    let real = loop {
-        match std::fs::canonicalize(&existing) {
-            Ok(c) => break c,
-            Err(_) => {
-                // A link whose target is missing is no missing file: refuse.
-                if std::fs::symlink_metadata(&existing).is_ok() {
-                    return None;
-                }
-                rest.push(existing.file_name()?.to_owned());
-                if !existing.pop() {
-                    return None;
-                }
-            }
-        }
-    };
-    let mut out = real;
-    for name in rest.iter().rev() {
-        out.push(name);
-    }
-    let s = out.to_string_lossy().replace('\\', "/");
-    let s = if let Some(unc) = s.strip_prefix("//?/UNC/") {
-        format!("//{unc}") // a network share
-    } else {
-        s.strip_prefix("//?/").unwrap_or(&s).to_owned()
-    };
-    Some(to_posix(env, &s))
+    crate::rules::resolve_real(p).map(|s| to_posix(env, &s))
 }

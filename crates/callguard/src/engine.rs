@@ -513,16 +513,29 @@ impl Inner {
             &self.env,
         );
 
+        // A project that is the home directory or a root says nothing about
+        // what is "inside the project"; the in-project rules stay quiet.
+        let mut warns: Vec<String> = Vec::new();
+        if call.project_ignored && !call.path.is_empty() {
+            warns.push(format!(
+                "project directory {project_dir} is the home directory or a file system root: no path counts as inside the project"
+            ));
+        }
+
         // 0 builtin
         if let Some(hit) = self.builtin.check(&call) {
-            return decided(&hit.decision, LAYER_BUILTIN, &hit.id, &hit.reason);
+            let mut out = decided(&hit.decision, LAYER_BUILTIN, &hit.id, &hit.reason);
+            out.warnings = warns;
+            return out;
         }
 
         // 1 nah. A layer in shadow mode records what it would have decided and
         // the pipeline goes on, so a shadowed nah never hides the layers behind it.
-        let mut warns: Vec<String> = Vec::new();
         let mut shadow: Vec<ShadowVerdict> = Vec::new();
         let mut nah_res: Option<NahResult> = None;
+        // Why nah gave no answer, when the layer is enforced: nah is required,
+        // so the call may be refused or asked about but never allowed.
+        let mut nah_failure: Option<String> = None;
         let nah = self.pol.nah.clone().unwrap_or_default();
         if nah.is_enabled() {
             let shadowed = nah.mode == policy::MODE_SHADOW;
@@ -552,6 +565,9 @@ impl Inner {
                     // call as understood.
                     warns.push(format!("nah skipped: {e}"));
                     nah_res = Some(no_parse(&e.to_string()));
+                    if !shadowed {
+                        nah_failure = Some(e.to_string());
+                    }
                 }
                 Ok(res) if res.verdict == NahVerdict::Block => {
                     let rule = if res.rule.is_empty() {
@@ -606,8 +622,22 @@ impl Inner {
             }
             _ => None,
         };
+        // Without nah's parse an allow cannot stand; a deny or ask can.
+        let verdict = verdict.filter(|(d, _, _)| nah_failure.is_none() || d != "allow");
         if let Some((decision, rule, reason)) = verdict {
             let mut out = decided(&decision, LAYER_RULES, &rule, &reason);
+            out.warnings = warns;
+            out.shadow = shadow;
+            return out;
+        }
+        if let Some(cause) = nah_failure {
+            // The judge is skipped: it would read the call without the parse
+            // that makes its answer safe to trust.
+            let mut out = Outcome::fallback(
+                req,
+                &format!("nah, the command parser, failed ({cause}) and no rule decided the call"),
+            );
+            out.v.rule = "nah".into();
             out.warnings = warns;
             out.shadow = shadow;
             return out;
@@ -623,7 +653,7 @@ impl Inner {
             return out;
         }
         let facts = self.judge_facts(req, nah_res.as_ref());
-        let mut out = self.run_llm(req, &call, &project_dir, facts, deadline);
+        let mut out = self.run_llm(req, &call, &project_dir, facts, nah_res.as_ref(), deadline);
         warns.append(&mut out.warnings);
         out.warnings = warns;
         out.shadow = shadow;
@@ -654,6 +684,7 @@ impl Inner {
         call: &Call,
         project_dir: &str,
         facts: Option<Facts>,
+        nah_res: Option<&NahResult>,
         deadline: Instant,
     ) -> Outcome {
         let llm = self.pol.llm.clone().unwrap_or_default();
@@ -761,6 +792,24 @@ impl Inner {
                 return fail(&rule, &name, &format!("the llm judge failed: {e}"), warns);
             }
         };
+        // The judge saw a cut input and nah did not see all of the call: the part
+        // nobody read may hold the payload (padding pushes it past the cut).
+        // Only an allow is doubted: a deny stands.
+        if res.decision == "allow"
+            && res.input_cut
+            && crate::permissions::parse_has_hole(call, nah_res)
+        {
+            warns.push(
+                "llm allow ignored: the tool input was cut for the judge and the command parse is incomplete"
+                    .into(),
+            );
+            return fail(
+                "input-cut",
+                &b.name(),
+                "the tool input was too long for the llm judge to read in full and the command parse is incomplete",
+                warns,
+            );
+        }
         let Some(d) = Decision::parse(&res.decision) else {
             return fail(
                 "judge",

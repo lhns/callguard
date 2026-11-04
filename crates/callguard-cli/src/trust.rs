@@ -140,7 +140,11 @@ pub fn flow(
         };
     }
     let allow = project_allow(&project).unwrap_or_default();
-    let _ = writeln!(out, "project: {project}");
+    let _ = writeln!(
+        out,
+        "project: {}",
+        permissions::escape_unprintable(&project)
+    );
     if allow.is_empty() {
         let _ = writeln!(
             out,
@@ -156,13 +160,17 @@ pub fn flow(
         return 1;
     }
     let _ = writeln!(out, "allow rules ({}):", allow.len());
+    // Rules print escaped: a control character must not hide a rule (or the
+    // reason one is dropped) from the person approving.
     for r in &allow {
+        let shown = permissions::escape_unprintable(r);
         match permissions::vet_reason(r, Some(policy::LAYER_PROJECT)) {
             Ok(_) => {
-                let _ = writeln!(out, "  {r}");
+                let _ = writeln!(out, "  {shown}");
             }
             Err(why) => {
-                let _ = writeln!(out, "  {r}   (would be dropped: {why})");
+                let why = permissions::escape_unprintable(&why);
+                let _ = writeln!(out, "  {shown}   (would be dropped: {why})");
             }
         }
     }
@@ -290,6 +298,22 @@ mod tests {
         assert!(out.contains("  Bash(git log *)\n"), "{out}");
         assert!(out.contains("Bash(python *)   (would be dropped"), "{out}");
         assert!(out.contains("Edit(.git/**)   (would be dropped"), "{out}");
+    }
+
+    #[test]
+    fn control_characters_are_shown_escaped_not_run() {
+        let hide = "Bash(ls)\u{1b}[1A\u{1b}[2K\u{202e}";
+        let (_d, o) = setup(&["Bash(git log *)", hide]);
+        let (_, out, _) = go(&o, true, "n\n");
+        assert!(
+            !out.contains('\u{1b}') && !out.contains('\u{202e}'),
+            "{out:?}"
+        );
+        assert!(
+            out.contains("\\u{001b}[1A") && out.contains("\\u{202e}"),
+            "{out:?}"
+        );
+        assert!(out.contains("would be dropped"), "{out:?}");
     }
 
     #[test]

@@ -161,6 +161,9 @@ fn a_misbehaving_nah_child_never_fails_open() {
         let (code, v, took) = sb.decide("ls -la", &["--test-engine", engine]);
         assert!(code == 2 || code == 1, "{engine}: exit {code}");
         assert_ne!(decision(&v), "allow", "{engine}: {v}");
+        // nah is required: its failure is the fail-safe verdict, not a call
+        // for the judge.
+        assert_eq!(v["layer"], "fallback", "{engine}: {v}");
         assert!(warnings(&v).contains("nah skipped"), "{engine}: {v}");
         assert!(took < Duration::from_secs(6), "{engine}: {took:?}");
 
@@ -172,6 +175,22 @@ fn a_misbehaving_nah_child_never_fails_open() {
         );
         assert!(took < Duration::from_secs(6), "{engine}: {took:?}");
     }
+}
+
+/// A nah that grows without bound hits the child's memory cap and crashes: the
+/// verdict is the fail-safe one, and the call is not left to run the machine out
+/// of memory. (`${x:-...}` nested 100k deep grows 60-80 MB/s.)
+#[test]
+#[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
+fn a_nah_that_outgrows_its_memory_cap_is_a_failure() {
+    let policy = r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":25000,"budget_ms":24000},"deadline_ms":26000}"#;
+    let sb = Sandbox::new(policy);
+    let n = 100_000;
+    let command = format!("echo {}a{}", "${x:-".repeat(n), "}".repeat(n));
+    let (_, v, _) = sb.decide(&command, &[]);
+    assert_ne!(decision(&v), "allow", "{v}");
+    assert_eq!(v["layer"], "fallback", "{v}");
+    assert!(warnings(&v).contains("nah skipped"), "{v}");
 }
 
 /// A hung nah is killed at `nah.timeout_ms`, not later.

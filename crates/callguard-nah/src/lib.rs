@@ -9,4 +9,4 @@ mod harden;
 mod observe;
 
 pub use engine::RealEngine;
-pub use harden::{harden_process, isolate_std_handles};
+pub use harden::{harden_process, isolate_std_handles, limit_memory, memory_limit_warning};

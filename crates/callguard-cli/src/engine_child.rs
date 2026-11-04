@@ -5,9 +5,15 @@ use std::io::{Read, Write};
 
 use callguard::engine::Options;
 
+/// The most memory the nah child may use (a constant, not a policy setting).
+/// Normal use peaks near 25 MB plus the 64 MB analysis thread; `${x:-...}`
+/// nested 100k deep grows 60-80 MB/s until killed. Git children share the cap.
+const MEMORY_LIMIT_BYTES: usize = 512 << 20;
+
 /// Runs nah for the parent that started this process.
 pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
     callguard_nah::harden_process();
+    callguard_nah::limit_memory(MEMORY_LIMIT_BYTES);
     #[cfg(feature = "test-engines")]
     if let Some(i) = args.iter().position(|a| a == "--test-engine") {
         let name = args.get(i + 1).map_or("", String::as_str);

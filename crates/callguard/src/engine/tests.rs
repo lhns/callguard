@@ -1591,25 +1591,34 @@ fn nah_layer() {
         "delegate continues: {got:?}"
     );
 
-    let (e, _) = nah_engine(NahMode::Fail, |_| {}, Options::default());
+    // nah is required: a failure is the fail-safe verdict, with a warning, and
+    // the judge is not asked.
+    let (e, via) = nah_engine(NahMode::Fail, |_| {}, Options::default());
     let got = e.decide(&bash("go test"));
     assert!(
-        got.layer == LAYER_LLM
+        got.decision == Decision::Ask
+            && got.layer == LAYER_FALLBACK
+            && got.rule == "nah"
+            && got.reason.contains("exit status 3")
             && got.warnings.len() == 1
             && got.warnings[0].contains("nah skipped"),
-        "nah failure continues with a warning: {got:?}"
+        "nah failure: {got:?}"
     );
-
-    // The judge is told there was no parse.
-    let (e, via) = nah_engine(NahMode::Fail, |_| {}, Options::default());
-    e.decide(&bash("go test"));
-    let facts = via.last().facts.expect("facts").get().to_owned();
+    assert_eq!(via.calls(), 0, "the judge is not called on a nah failure");
+    let got = e.decide(&unattended(bash("go test")));
+    assert_eq!(got.decision, Decision::Deny, "{got:?}");
+    // A rule that asks or denies still speaks; an allow does not.
+    let got = e.decide(&bash("git push -f"));
     assert!(
-        facts.contains(r#""source":"nah""#)
-            && facts.contains(r#""coverage":"partial""#)
-            && facts.contains("nah gave no analysis"),
-        "{facts}"
+        got.layer == LAYER_RULES && got.decision == Decision::Ask,
+        "{got:?}"
     );
+    let got = e.decide(&call("Read", r#"{"file_path":"src/a.go"}"#));
+    assert!(got.layer == LAYER_FALLBACK, "no allow without nah: {got:?}");
+    // An ordinary hole (partial coverage) is not a failure.
+    let (e, via) = nah_engine(NahMode::DelegatePartial, |_| {}, Options::default());
+    let got = e.decide(&bash("go test"));
+    assert!(got.layer == LAYER_LLM && via.calls() == 1, "{got:?}");
 
     // A shadowed nah does not decide; the llm layer behind it does.
     let (e, _) = nah_engine(
@@ -2270,8 +2279,7 @@ fn a_permission_allow_skips_the_judge() {
 #[test]
 fn a_permission_allow_needs_a_real_complete_nah_answer() {
     for (mode, mutate) in [
-        (NahMode::Fail, no_mut as fn(&mut Policy)),
-        (NahMode::DelegatePartial, no_mut),
+        (NahMode::DelegatePartial, no_mut as fn(&mut Policy)),
         (NahMode::Block, |p: &mut Policy| {
             p.nah.as_mut().unwrap().mode = policy::MODE_SHADOW.into();
         }),
@@ -2429,4 +2437,113 @@ fn an_unreadable_deny_rule_refuses_the_policy() {
     );
     let err = r.err().expect("an invalid policy");
     assert!(err.0.contains("permissions.deny[0]"), "{err}");
+}
+
+// --- Review fixes -------------------------------------------------------------
+
+/// An engine with the real judge behind `backend`, and `nah` as the parser.
+fn real_judge_engine(nah: Option<Arc<dyn NahEngine>>, backend: Arc<FakeBackend>) -> Engine {
+    let n = Nah {
+        enabled: Some(nah.is_some()),
+        timeout_ms: 5000,
+        ..Default::default()
+    };
+    let mut e = Engine::new(
+        test_policy(|p| p.nah = Some(n)),
+        Options {
+            nah_engine: nah,
+            backend: Some(backend),
+            log_path: "-".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    with_inner(&mut e, |i| i.probe = None);
+    e
+}
+
+/// Longer than the judge reads (16 KiB), with the payload at the end.
+fn padded() -> String {
+    format!("{}rm -rf ~/.ssh", "echo a; ".repeat(3000))
+}
+
+#[test]
+fn padding_cannot_turn_a_judge_allow_into_an_allow_when_nah_saw_nothing() {
+    let cmd = padded();
+    assert!(cmd.len() > 16 << 10);
+    let e = real_judge_engine(
+        Some(Arc::new(FakeNah(NahMode::DelegatePartial))),
+        answer("allow", 0.95),
+    );
+    let got = e.decide(&bash(&cmd));
+    assert!(
+        got.decision == Decision::Ask
+            && got.layer == LAYER_FALLBACK
+            && got.warnings.iter().any(|w| w.contains("llm allow ignored")),
+        "{got:?}"
+    );
+    let got = e.decide(&unattended(bash(&cmd)));
+    assert_eq!(got.decision, Decision::Deny, "{got:?}");
+    // No nah at all is a hole too.
+    let e = real_judge_engine(None, answer("allow", 0.95));
+    assert_eq!(e.decide(&bash(&cmd)).decision, Decision::Ask);
+}
+
+#[test]
+fn a_judge_deny_stands_and_a_complete_parse_or_a_short_command_may_be_allowed() {
+    let cmd = padded();
+    // A deny stays a deny.
+    let e = real_judge_engine(
+        Some(Arc::new(FakeNah(NahMode::DelegatePartial))),
+        answer("deny", 0.95),
+    );
+    assert_eq!(e.decide(&bash(&cmd)).decision, Decision::Deny);
+    // Cut input, but nah parsed all of it.
+    let full = Arc::new(CallsNah {
+        mode: NahMode::Delegate,
+        calls: vec![vec!["echo", "a"]],
+    });
+    let e = real_judge_engine(Some(full), answer("allow", 0.95));
+    let got = e.decide(&bash(&cmd));
+    assert!(
+        got.decision == Decision::Allow && got.layer == LAYER_LLM,
+        "{got:?}"
+    );
+    // A hole, but nothing was cut.
+    let e = real_judge_engine(
+        Some(Arc::new(FakeNah(NahMode::DelegatePartial))),
+        answer("allow", 0.95),
+    );
+    let got = e.decide(&bash("echo hi"));
+    assert!(
+        got.decision == Decision::Allow && got.layer == LAYER_LLM,
+        "{got:?}"
+    );
+}
+
+#[test]
+fn a_project_that_is_a_root_has_no_in_project_rules_and_says_so() {
+    let (e, _) = new_test_engine(
+        test_policy(no_mut),
+        Options::default(),
+        Some(answer("ask", 0.9)),
+    );
+    let mut r = call("Write", r#"{"file_path":"/x/a.txt"}"#);
+    r.cwd = "/".into();
+    r.project_dir = "/".into();
+    let got = e.decide(&r);
+    assert!(
+        got.rule != "write-in-project"
+            && got
+                .warnings
+                .iter()
+                .any(|w| w.contains("home directory or a file system root")),
+        "{got:?}"
+    );
+    // An ordinary project is unchanged and silent.
+    let got = e.decide(&call("Write", r#"{"file_path":"/w/p/a.txt"}"#));
+    assert!(
+        got.rule == "write-in-project" && got.warnings.is_empty(),
+        "{got:?}"
+    );
 }

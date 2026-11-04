@@ -770,8 +770,8 @@ fn a_trusted_project_is_vetted_like_the_user_layer() {
         "mcp__github__get_*",
         "mcp__github",
         "WebSearch",
-        "Bash(make:*)",
-        "Bash(make test *)",
+        "Bash(pytest:*)",
+        "Bash(make test)",
         "Bash(./scripts/check.sh *)",
         "Bash(/usr/bin/true)",
         "Read(//etc/hostname)",
@@ -1505,4 +1505,105 @@ fn an_mcp_allow_skips_names_that_could_be_another_server() {
         let d = deny(&[rule]);
         assert_eq!(hit(&d, &tool("mcp__a__b__c")), Some("deny"), "{rule}");
     }
+}
+
+// --- Review fixes -------------------------------------------------------------
+
+#[test]
+fn more_run_commands_and_open_ended_programs_are_dropped() {
+    for layer in [None, Some("user"), Some("project")] {
+        for r in [
+            "Bash(npm run-script *)",
+            "Bash(npm rum *)",
+            "Bash(npm urn *)",
+            "Bash(npm x *)",
+            "Bash(deno run *)",
+            "Bash(deno task *)",
+            "Bash(git config *)",
+            "Bash(make:*)",
+            "Bash(make *)",
+            "Bash(just *)",
+            "Bash(tar *)",
+            "Bash(zip *)",
+            "Bash(gcc *)",
+            "Bash(cc *)",
+            "Bash(clang *)",
+        ] {
+            assert!(vet(r, layer).is_err(), "{r} in {layer:?} should be dropped");
+        }
+        // An exact rule stays: it names the whole command.
+        for r in [
+            "Bash(make test)",
+            "Bash(just build)",
+            "Bash(tar tf a.tar)",
+            "Bash(deno task build)",
+            "Bash(git config user.name)",
+            "Bash(npm run-script build)",
+        ] {
+            assert!(
+                vet(r, layer).is_ok(),
+                "{r} in {layer:?}: {:?}",
+                vet(r, layer)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_rule_with_a_control_or_bidi_character_is_refused() {
+    let bad = [
+        "Bash(ls\u{1b}[1A\u{1b}[2K)",
+        "Bash(ls)\n",
+        "Bash(ls\tfoo)",
+        "Read(src/\u{202e}txt.rs)",
+        "Bash(git status\u{200f})",
+        "WebFetch(domain:docs.rs\u{2066})",
+        "Bash(ls)\u{2028}",
+    ];
+    for r in bad {
+        assert!(parse(r).is_err(), "{r:?}");
+        for layer in [None, Some("system"), Some("user"), Some("project")] {
+            assert!(vet(r, layer).is_err(), "{r:?} in {layer:?}");
+        }
+        // Deny and ask fail like an unparseable rule.
+        for (d, a) in [(vec![r.to_owned()], vec![]), (vec![], vec![r.to_owned()])] {
+            let p = policy::Permissions {
+                deny: d,
+                ask: a,
+                allow: vec![],
+            };
+            assert!(Permissions::compile(&p, &env()).is_err(), "{r:?}");
+            let mut pol = policy::default();
+            pol.permissions = p;
+            assert!(
+                policy::validate(&pol, true)
+                    .iter()
+                    .any(|e| e.contains("control or bidirectional")),
+                "{r:?}"
+            );
+        }
+        // Allow is dropped with a warning.
+        let (kept, warns) = vet_allow_list(&[r.to_owned()], "user", "f.json");
+        assert!(kept.is_empty() && warns.len() == 1, "{kept:?} {warns:?}");
+        let p = policy::Permissions {
+            allow: vec![r.to_owned()],
+            ..Default::default()
+        };
+        let (perms, warns) = Permissions::compile(&p, &env()).unwrap();
+        assert!(perms.is_empty() && warns.len() == 1, "{warns:?}");
+    }
+    assert!(parse("Bash(ls -l)").is_ok());
+    assert_eq!(
+        escape_unprintable("a\u{1b}[1Ab\u{202e}c\n"),
+        "a\\u{001b}[1Ab\\u{202e}c\\u{000a}"
+    );
+    assert_eq!(escape_unprintable("Bash(ls) é"), "Bash(ls) é");
+}
+
+#[test]
+fn deny_and_ask_read_the_raw_text_both_ways() {
+    // nah is absent, so the raw text is read: a shell joins `r\<NL>m` to `rm`.
+    let d = deny(&["Bash(rm *)"]);
+    assert!(d.check(&bash("r\\\nm x"), None).is_some());
+    assert!(d.check(&bash("ls"), None).is_none());
 }

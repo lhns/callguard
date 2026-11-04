@@ -66,6 +66,16 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
         );
         return 64;
     }
+    // NaN, infinity or a negative cap would silently mean "no cap" or "stop at
+    // once".
+    let max_usd = f.float("max-usd", 1.0);
+    if !max_usd.is_finite() || max_usd < 0.0 {
+        let _ = writeln!(
+            stderr,
+            "callguard eval: --max-usd must be a number of dollars, 0 or more, not {max_usd}"
+        );
+        return 64;
+    }
     let fail = |stderr: &mut dyn Write, msg: String| {
         let _ = writeln!(stderr, "callguard eval: {msg}");
         1
@@ -136,7 +146,6 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
         Ok(rep)
     };
 
-    let max_usd = f.float("max-usd", 1.0);
     let first = match run_once(facts != "off", max_usd) {
         Ok(r) => r,
         Err(e) => return fail(stderr, e),
@@ -279,6 +288,17 @@ mod tests {
         assert_eq!(run_cmd(&["--no-such-flag"]).0, 64);
         assert_eq!(run_cmd(&["--facts", "maybe"]).0, 64);
         assert_eq!(run_cmd(&["--concurrency", "x"]).0, 64);
+    }
+
+    #[test]
+    fn max_usd_must_be_a_finite_non_negative_number() {
+        for v in ["NaN", "inf", "-inf", "-1", "-0.5"] {
+            let (code, _, err) = run_cmd(&[&format!("--max-usd={v}")]);
+            assert!(
+                code == 64 && err.contains("--max-usd"),
+                "{v}: code {code}, stderr {err:?}"
+            );
+        }
     }
 
     #[test]

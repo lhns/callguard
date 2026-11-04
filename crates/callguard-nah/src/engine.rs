@@ -131,6 +131,7 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
         serde_json::from_value(json!({"v": 1, "tool": req.tool, "input": input, "cwd": cwd}))
             .map_err(|e| failed("nah does not accept the call", &e))?;
     let (ctx, mut warnings) = ctx(&home()?, &req.guards)?;
+    warnings.extend(crate::harden::memory_limit_warning());
 
     let observations = RefCell::new(Vec::<Observation>::new());
     let observe_warnings = RefCell::new(Vec::<String>::new());
@@ -166,6 +167,18 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
         other => return Err(NahError::Failed(format!("unknown nah verdict {other:?}"))),
     };
     let coverage = text("coverage");
+    // A delegate from an analysis that ran out of its budget says nothing about
+    // the call: that is a failure, not partial coverage. A block stands.
+    if verdict == NahVerdict::Delegate
+        && result
+            .warnings()
+            .iter()
+            .any(|w| w.ends_with(": deadline-exceeded"))
+    {
+        return Err(NahError::Failed(
+            "nah ran out of its analysis budget (deadline-exceeded)".into(),
+        ));
+    }
     let graph = graph::graph_facts(&result, &observations.borrow());
     let mapped = facts::map(&graph, names.clone(), &coverage);
     let calls = facts::calls(&graph);

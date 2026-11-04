@@ -2466,3 +2466,427 @@ fn a_raw_windows_disk_is_a_disk_wipe() {
         assert!(hit.is_none(), "{cmd}");
     }
 }
+
+// --- Review fixes -------------------------------------------------------------
+
+/// The host's own path rules, which is what resolving through links needs.
+fn host_env(home: &str) -> Env {
+    Env {
+        home: home.into(),
+        windows: cfg!(windows),
+        fold_case: false,
+    }
+}
+
+/// A link to a directory: a symlink, or a junction on Windows (no admin
+/// rights needed).
+fn make_link(link: &str, target: &str) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(target, link).unwrap();
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link.replace('/', "\\"),
+                &target.replace('/', "\\"),
+            ])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "mklink: {out:?}");
+    }
+}
+
+/// `root/home/{.claude,.ssh}` and `root/proj/src`, with `root` resolved.
+struct Fx {
+    _dir: tempfile::TempDir,
+    home: String,
+    proj: String,
+}
+
+fn fixture() -> Fx {
+    let dir = tempfile::tempdir().unwrap();
+    let root = resolve_real(&dir.path().to_string_lossy().replace('\\', "/")).unwrap();
+    for d in ["home/.claude", "home/.ssh", "proj/src"] {
+        std::fs::create_dir_all(format!("{root}/{d}")).unwrap();
+    }
+    Fx {
+        home: format!("{root}/home"),
+        proj: format!("{root}/proj"),
+        _dir: dir,
+    }
+}
+
+fn call_at(env: &Env, tool: &str, path: &str, proj: &str) -> Call {
+    Call::new(at(tool, file_input(path), proj, proj), env)
+}
+
+#[test]
+fn a_link_in_the_project_is_followed_by_builtins_and_default_rules() {
+    let fx = fixture();
+    let env = host_env(&fx.home);
+    let (home, proj) = (&fx.home, &fx.proj);
+    make_link(&format!("{proj}/cl"), &format!("{home}/.claude"));
+    make_link(&format!("{proj}/sec"), &format!("{home}/.ssh"));
+    let b = Builtin::new(env.clone(), &[], &[]).unwrap();
+    let st = set(&env, policy::default_rules());
+
+    // Through the link into ~/.claude: protected, and not "in the project".
+    for target in ["cl/settings.json", "cl/settings.local.json"] {
+        let c = call_at(&env, "Write", &format!("{proj}/{target}"), proj);
+        assert!(c.in_project && !c.real_in_project, "{c:?}");
+        let h = b.check(&c).unwrap_or_else(|| panic!("{target}"));
+        assert_eq!(
+            (h.id.as_str(), h.decision.as_str()),
+            ("self-protect-write", "deny")
+        );
+        assert!(st.match_call(&c).is_none(), "{target} must not be allowed");
+    }
+    // A file that does not exist yet resolves through its parent.
+    let c = call_at(&env, "Write", &format!("{proj}/cl/new.txt"), proj);
+    assert!(st.match_call(&c).is_none(), "{c:?}");
+    // The trust record behind a link is denied too.
+    std::fs::create_dir_all(format!("{home}/.config/callguard")).unwrap();
+    make_link(&format!("{proj}/cfg"), &format!("{home}/.config/callguard"));
+    let c = call_at(
+        &env,
+        "Write",
+        &format!("{proj}/cfg/trusted-projects.json"),
+        proj,
+    );
+    let h = b.check(&c).unwrap();
+    assert_eq!(
+        (h.id.as_str(), h.decision.as_str()),
+        ("self-protect-trust", "deny")
+    );
+    // A read through the link is a secret read, not an in-project read.
+    let c = call_at(&env, "Read", &format!("{proj}/sec/id_rsa"), proj);
+    let hit = st.match_call(&c).expect("secret-read fires");
+    assert_eq!(hit.id, "secret-read");
+    // Ordinary files in the project stay allowed.
+    for (tool, id) in [("Read", "read-in-project"), ("Write", "write-in-project")] {
+        let c = call_at(&env, tool, &format!("{proj}/src/a.rs"), proj);
+        assert_eq!(st.match_call(&c).map(|r| r.id), Some(id.into()), "{tool}");
+    }
+    // The project itself may be reached through a link.
+    make_link(&format!("{home}/pl"), proj);
+    let linked = format!("{home}/pl");
+    let c = call_at(&env, "Write", &format!("{linked}/src/a.rs"), &linked);
+    assert!(c.in_project && c.real_in_project, "{c:?}");
+}
+
+#[test]
+fn a_link_decides_user_regex_rules_the_same_way() {
+    let fx = fixture();
+    let env = host_env(&fx.home);
+    let (home, proj) = (&fx.home, &fx.proj);
+    make_link(&format!("{proj}/cl"), &format!("{home}/.claude"));
+    let m = |kind: &str, glob: String| Match {
+        kind: vec![kind.into()],
+        path: vec![glob],
+        ..Default::default()
+    };
+    let rule = |id: &str, decision: &str, m: Match| Rule {
+        id: id.into(),
+        decision: decision.into(),
+        r#match: m,
+        ..Default::default()
+    };
+    let st = set(
+        &env,
+        vec![
+            rule("allow-proj", "allow", m("write", format!("{proj}/**"))),
+            rule(
+                "deny-claude",
+                "deny",
+                m("write", format!("{home}/.claude/**")),
+            ),
+        ],
+    );
+    // Lexically inside the project, really in ~/.claude: the deny fires
+    // (either form), and the allow would need both.
+    let c = call_at(&env, "Write", &format!("{proj}/cl/x.json"), proj);
+    assert_eq!(st.match_call(&c).map(|r| r.id), Some("deny-claude".into()));
+    let allow_only = set(
+        &env,
+        vec![rule(
+            "allow-proj",
+            "allow",
+            m("write", format!("{proj}/**")),
+        )],
+    );
+    assert!(allow_only.match_call(&c).is_none());
+    let c = call_at(&env, "Write", &format!("{proj}/src/x.rs"), proj);
+    assert_eq!(
+        allow_only.match_call(&c).map(|r| r.id),
+        Some("allow-proj".into())
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_cannot_be_allowed() {
+    let fx = fixture();
+    let env = host_env(&fx.home);
+    let proj = &fx.proj;
+    std::os::unix::fs::symlink(format!("{}/nowhere", fx.home), format!("{proj}/dangling")).unwrap();
+    let st = set(&env, policy::default_rules());
+    let c = call_at(&env, "Write", &format!("{proj}/dangling/x"), proj);
+    assert!(c.real_path.is_none() && c.in_project, "{c:?}");
+    assert!(st.match_call(&c).is_none());
+}
+
+#[test]
+fn windows_names_are_cleaned_only_on_windows() {
+    let win = win();
+    let got = win.clean_names("C:/p/.claude./a /b.txt::$DATA");
+    if cfg!(windows) {
+        assert_eq!(got, "C:/p/.claude/a/b.txt");
+        assert_eq!(
+            win.clean_names("C:/p/../q/./r"),
+            "C:/q/r",
+            ".. and . keep their meaning"
+        );
+        assert_eq!(
+            win.clean_names("/?/C:/p/x."),
+            "/?/C:/p/x",
+            "a device prefix keeps its drive"
+        );
+    } else {
+        assert_eq!(
+            got, "C:/p/.claude./a /b.txt::$DATA",
+            "a different name here"
+        );
+    }
+    let unix = unix();
+    assert_eq!(unix.clean_names("/p/.claude./x"), "/p/.claude./x");
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_spellings_of_protected_names_are_caught() {
+    let fx = fixture();
+    let env = host_env(&fx.home);
+    let proj = &fx.proj;
+    for d in [".claude", ".callguard", ".git/hooks"] {
+        std::fs::create_dir_all(format!("{proj}/{d}")).unwrap();
+    }
+    let b = Builtin::new(env.clone(), &[], &[]).unwrap();
+    let st = set(&env, policy::default_rules());
+    for p in [
+        ".claude./settings.json",
+        ".claude/settings.json.",
+        ".claude/settings.json ",
+        ".claude/settings.json::$DATA",
+        ".callguard /policy.json",
+    ] {
+        let c = call_at(&env, "Write", &format!("{proj}/{p}"), proj);
+        let h = b.check(&c).unwrap_or_else(|| panic!("{p}"));
+        assert_eq!(h.id, "self-protect-write", "{p}");
+    }
+    for p in [
+        ".git./hooks/pre-commit",
+        ".git /hooks/pre-commit",
+        ".git/hooks/pre-commit::$DATA",
+    ] {
+        let c = call_at(&env, "Write", &format!("{proj}/{p}"), proj);
+        assert!(st.match_call(&c).is_none(), "{p} must not be allowed");
+    }
+    // The short name of .git, when the volume makes one.
+    std::fs::write(format!("{proj}/.git/config"), "").unwrap();
+    let short = ["GIT~1", ".GIT~1"].into_iter().find(|n| {
+        resolve_real(&format!("{proj}/{n}/config")).is_some_and(|r| r.ends_with(".git/config"))
+    });
+    match short {
+        None => eprintln!("skipped: the volume has no short names"),
+        Some(n) => {
+            let c = call_at(&env, "Write", &format!("{proj}/{n}/config"), proj);
+            assert!(st.match_call(&c).is_none(), "{n} must not be allowed");
+        }
+    }
+}
+
+#[test]
+fn a_backslash_newline_is_read_both_ways() {
+    let unix = unix();
+    let b = Builtin::new(unix.clone(), &[], &[]).unwrap();
+    let st = set(&unix, policy::default_rules());
+    let call = |cmd: &str| Call::new(at("Bash", bash_input(cmd), "/w/p", "/w/p"), &unix);
+    // A shell joins with nothing; `a \<NL>b` has its own space.
+    let c = call("r\\\nm -rf /");
+    assert_eq!(c.command, "r m -rf /");
+    assert_eq!(c.command_joined, "rm -rf /");
+    assert_eq!(b.check(&c).map(|h| h.id), Some("rm-root".into()));
+    let c = call("ls -l\\\n /tmp");
+    assert_eq!(c.command_joined, "ls -l /tmp");
+    assert_eq!(call("ls").command_joined, "", "same spelling: none kept");
+    for (cmd, id) in [
+        ("git pu\\\nsh --force", "git-force-push"),
+        ("curl x | s\\\nh", "pipe-to-shell"),
+        ("cat ~/.ssh/id\\\n_rsa", "secret-read-shell"),
+    ] {
+        let got = st.match_call(&call(cmd)).map(|r| r.id);
+        assert_eq!(got.as_deref(), Some(id), "{cmd:?}");
+    }
+    let c = call("mk\\\nfs /dev/sda");
+    assert_eq!(b.check(&c).map(|h| h.id), Some("disk-wipe".into()));
+    let c = call("echo x > .cla\\\nude/settings.json");
+    assert_eq!(b.check(&c).map(|h| h.id), Some("self-protect-shell".into()));
+    // Allow needs every spelling to match.
+    let allow = set(&unix, vec![sh_rule("ls", "allow", "^ls -l$")]);
+    assert!(allow.match_call(&call("ls -l")).is_some());
+    assert!(allow.match_call(&call("ls\\\n-l")).is_none());
+}
+
+#[test]
+fn shell_guards_see_through_empty_quotes() {
+    let unix = unix();
+    let b = Builtin::new(unix.clone(), &[], &[]).unwrap();
+    let id = |cmd: &str| {
+        b.check(&Call::new(
+            at("Bash", bash_input(cmd), "/w/p", "/w/p"),
+            &unix,
+        ))
+        .map(|h| (h.id, h.decision))
+    };
+    for (cmd, want) in [
+        (
+            r#"echo [] > ~/.config/callguard/trusted-pro""jects.json"#,
+            "self-protect-trust",
+        ),
+        (
+            r"cat ~/.config/callguard/trusted-pro\jects.json",
+            "self-protect-trust",
+        ),
+        (r#"callguard tr""ust"#, "self-protect-trust"),
+        (r"callguard tr\ust", "self-protect-trust"),
+        (r#"call""guard 'tr'ust --project x"#, "self-protect-trust"),
+        (
+            r#"echo x > ~/.cla""ude/settings.json"#,
+            "self-protect-shell",
+        ),
+        (
+            r"echo x > ~/.cl\aude/settings.local.json",
+            "self-protect-shell",
+        ),
+        (r#"cat .call""guard/policy.json"#, "self-protect-shell"),
+        ("echo x > ~/.'claude'/settings.json", "self-protect-shell"),
+    ] {
+        assert_eq!(id(cmd).map(|h| h.0).as_deref(), Some(want), "{cmd}");
+    }
+    // Ordinary quoting is not a hit.
+    for cmd in [
+        r#"echo "hello" 'world'"#,
+        r#"callguard "--list""#,
+        r"echo a\ b",
+    ] {
+        assert_eq!(id(cmd), None, "{cmd}");
+    }
+    assert!(runs_trust_verb(r#"callguard tr""ust"#));
+    assert!(!runs_trust_verb(r#"callguard tr""ust --list"#));
+}
+
+#[test]
+fn a_project_that_is_home_or_a_root_is_no_project() {
+    let unix = unix();
+    let st = set(&unix, policy::default_rules());
+    for project in ["/home/u", "/home/u/", "/", "/home/u/."] {
+        for (tool, p) in [
+            ("Write", "/home/u/.bashrc"),
+            ("Write", "/home/u/.ssh/config"),
+            ("Read", "/home/u/notes.txt"),
+        ] {
+            let c = Call::new(at(tool, file_input(p), project, project), &unix);
+            assert!(
+                c.project_ignored && !c.in_project && !c.real_in_project,
+                "{project}: {c:?}"
+            );
+            let got = st.match_call(&c).map(|r| r.id);
+            assert!(
+                !matches!(got.as_deref(), Some("write-in-project" | "read-in-project")),
+                "{project} {p}: {got:?}"
+            );
+        }
+    }
+    // A real project below home still works.
+    let c = Call::new(
+        at(
+            "Write",
+            file_input("/home/u/proj/a.rs"),
+            "/home/u/proj",
+            "/home/u/proj",
+        ),
+        &unix,
+    );
+    assert!(!c.project_ignored && c.in_project);
+    assert_eq!(
+        st.match_call(&c).map(|r| r.id),
+        Some("write-in-project".into())
+    );
+    // Windows: a drive root, and the home folder in another case.
+    let win = win();
+    for project in ["C:/", r"C:\", "c:/users/U", r"C:\Users\u\"] {
+        let c = Call::new(
+            at("Write", file_input(r"C:\Users\u\.bashrc"), project, project),
+            &win,
+        );
+        assert!(c.project_ignored && !c.in_project, "{project}: {c:?}");
+    }
+    let c = Call::new(
+        at(
+            "Write",
+            file_input(r"C:\Users\u\p\a"),
+            r"C:\Users\u\p",
+            r"C:\Users\u\p",
+        ),
+        &win,
+    );
+    assert!(!c.project_ignored && c.in_project);
+}
+
+#[test]
+fn rm_root_sees_more_wrappers() {
+    for cmd in [
+        "fish -c 'rm -rf /'",
+        "csh -c 'rm -rf /'",
+        "tcsh -c \"rm -rf ~\"",
+        r#"eval "rm -rf /""#,
+        "su -c 'rm -rf /'",
+        "su root -c 'rm -rf /'",
+        "su --command='rm -rf /'; su - -c 'rm -rf /'",
+        "flock /tmp/l rm -rf /",
+        "flock -w 5 /tmp/l rm -rf /",
+        "wsl rm -rf /",
+        "wsl -d Ubuntu -u root rm -rf /",
+        "wsl -e sh -c 'rm -rf /'",
+        r#"cmd /c "rd /s /q C:\""#,
+        r"cmd /c rd /s /q C:\",
+        r"cmd.exe /k del /s C:\*",
+        r#"pwsh -c "Remove-Item -Recurse -Force C:\""#,
+        r#"powershell -NoProfile -Command "Remove-Item -Recurse -Force C:\""#,
+        r"powershell.exe -Command Remove-Item -Recurse C:\",
+        r"Remove-Item -Recurse -Force C:\",
+        r"Remove-Item -Recurse C:\*",
+        r"rd /s /q C:\",
+        r"rmdir /s C:\",
+    ] {
+        assert!(rm_root(cmd), "{cmd}");
+    }
+    for cmd in [
+        "fish -c 'echo hi'",
+        "wsl ls",
+        "wsl -d Ubuntu rm -rf ./build",
+        r"Remove-Item -Recurse .\build",
+        r#"pwsh -c "Remove-Item -Recurse .\build""#,
+        r"cmd /c rd /s /q build",
+        "su -c 'ls /'",
+        "su root",
+        "flock /tmp/l make",
+        "eval echo hi",
+        r"rd /q C:\",
+    ] {
+        assert!(!rm_root(cmd), "{cmd}");
+    }
+}

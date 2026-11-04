@@ -77,8 +77,39 @@ pub(crate) enum Rule {
     Tool(String),
 }
 
-/// Reads one rule. The error says what is wrong with it.
+/// Whether `c` can hide text from a person reading it: a control character
+/// (an escape sequence that moves the cursor or erases a line), a Unicode line
+/// separator or a bidirectional mark.
+fn is_hiding(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}' | '\u{2029}' | '\u{202a}'
+                ..='\u{202e}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// `s` with every character that can hide text written as `\u{..}`, for
+/// showing a rule to a person.
+pub fn escape_unprintable(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if is_hiding(c) {
+                format!("\\u{{{:04x}}}", c as u32)
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Reads one rule. The error says what is wrong with it. A rule with a
+/// control or bidirectional character is refused in every layer: a deny or ask
+/// rule fails validation, an allow rule is dropped.
 pub(crate) fn parse(text: &str) -> Result<Rule, String> {
+    if text.chars().any(is_hiding) {
+        return Err("contains a control or bidirectional character".into());
+    }
     let text = text.trim();
     let (name, spec) = match text.split_once('(') {
         Some((n, rest)) => match rest.strip_suffix(')') {
@@ -124,7 +155,8 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
 // --- Dropping allow rules that loosen too far ----------------------------------
 
 /// Programs that run what their arguments say: a wildcard allow for one of
-/// these is an allow for everything.
+/// these is an allow for everything. Best effort: a list of known names cannot
+/// be complete, and an exact rule such as `Bash(make test)` is never dropped.
 const OPEN_ENDED: &[&str] = &[
     "bash",
     "sh",
@@ -218,6 +250,13 @@ const OPEN_ENDED: &[&str] = &[
     "pipx",
     "pnpx",
     "yarnpkg",
+    "make",
+    "just",
+    "tar",
+    "zip",
+    "gcc",
+    "cc",
+    "clang",
 ];
 
 /// A program name without its version: `python3.12` is `python`, `node22` is
@@ -232,10 +271,15 @@ const SUBCOMMAND_TOOLS: &[&str] = &[
     "git", "gh", "docker", "podman", "kubectl", "npm", "yarn", "pnpm", "cargo", "go",
 ];
 
-/// Package-manager commands that run repository code; a wildcard allow for
-/// any of them is dropped (Claude's auto mode drops the same).
+/// Commands that run repository code (or, `git config`, set a program git
+/// runs); a wildcard allow for any of them is dropped (Claude's auto mode drops
+/// the same). Best effort, like `OPEN_ENDED`.
 const RUN_COMMANDS: &[(&str, &str)] = &[
     ("npm", "run"),
+    ("npm", "run-script"),
+    ("npm", "rum"),
+    ("npm", "urn"),
+    ("npm", "x"),
     ("npm", "exec"),
     ("yarn", "run"),
     ("yarn", "dlx"),
@@ -246,6 +290,9 @@ const RUN_COMMANDS: &[(&str, &str)] = &[
     ("bun", "x"),
     ("cargo", "run"),
     ("go", "run"),
+    ("deno", "run"),
+    ("deno", "task"),
+    ("git", "config"),
     ("uv", "run"),
     ("poetry", "run"),
     ("pipenv", "run"),
@@ -511,7 +558,10 @@ impl Permissions {
                 }
             }
         }
-        parse_has_hole(call, nah) && spec::matches_raw(spec, &call.command, caseless)
+        parse_has_hole(call, nah)
+            && call
+                .commands()
+                .any(|cmd| spec::matches_raw(spec, cmd, caseless))
     }
 
     fn ctx(&self, call: &Call) -> Ctx {
@@ -684,7 +734,7 @@ impl Permissions {
 
 /// Whether nah's parse of `call` leaves something unseen, so that deny and ask
 /// must also look at the raw text.
-fn parse_has_hole(call: &Call, nah: Option<&NahResult>) -> bool {
+pub(crate) fn parse_has_hole(call: &Call, nah: Option<&NahResult>) -> bool {
     let Some(n) = nah else {
         return true;
     };

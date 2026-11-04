@@ -121,7 +121,8 @@ pub struct Config {
 }
 
 /// A validated judge answer. `decision` is "allow", "ask" or "deny". `demoted`
-/// is true if `min_confidence` demoted an allow to ask.
+/// is true if `min_confidence` demoted an allow to ask. `input_cut` is true if
+/// the judge saw the tool input cut short (see [`cap_input`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct JudgeResult {
     pub decision: String,
@@ -129,6 +130,7 @@ pub struct JudgeResult {
     pub rule: String,
     pub reason: String,
     pub demoted: bool,
+    pub input_cut: bool,
     pub input_tokens: i64,
     pub output_tokens: i64,
 }
@@ -144,7 +146,8 @@ pub fn judge(
 ) -> Result<JudgeResult, JudgeError> {
     // Before the input is capped.
     input.transcript = drop_pending(std::mem::take(&mut input.transcript), &input);
-    input.tool_input = cap_input(input.tool_input.take());
+    let (tool_input, input_cut) = cap_input(input.tool_input.take());
+    input.tool_input = tool_input;
     input.facts = cap_facts(input.facts.take());
     input.git_status = input.git_status.take().map(cap_git_status);
     let structured = gojson::to_string(&input)
@@ -177,6 +180,7 @@ pub fn judge(
         rule: clip_runes(&res.rule, MAX_RULE_RUNES),
         reason: clip_runes(&res.reason, MAX_REASON_RUNES),
         demoted: false,
+        input_cut,
         input_tokens: res.input_tokens,
         output_tokens: res.output_tokens,
     };
@@ -217,13 +221,14 @@ fn cap_facts(raw: Option<Box<RawValue>>) -> Option<Box<RawValue>> {
     if !non_empty_object(raw.get()) {
         return None;
     }
-    cap_json(Some(raw), MAX_FACT_STRING, MAX_FACTS_BYTES)
+    cap_json(Some(raw), MAX_FACT_STRING, MAX_FACTS_BYTES).0
 }
 
 /// Limits each string in `raw` to 8 KiB and the whole document to 16 KiB,
 /// marking cuts with a "…[truncated]" suffix. If shrinking the strings is not
-/// enough, the document becomes one truncated string.
-fn cap_input(raw: Option<Box<RawValue>>) -> Option<Box<RawValue>> {
+/// enough, the document becomes one truncated string. The flag says whether
+/// anything was cut.
+fn cap_input(raw: Option<Box<RawValue>>) -> (Option<Box<RawValue>>, bool) {
     cap_json(raw, MAX_STRING_BYTES, MAX_INPUT_BYTES)
 }
 
@@ -231,15 +236,19 @@ fn cap_json(
     raw: Option<Box<RawValue>>,
     max_string: usize,
     max_total: usize,
-) -> Option<Box<RawValue>> {
-    let raw = raw?;
+) -> (Option<Box<RawValue>>, bool) {
+    let Some(raw) = raw else {
+        return (None, false);
+    };
     let text = raw.get();
+    let mut cut = true;
     let out = match serde_json::from_str::<Value>(text) {
         Err(_) => cap_raw(text, max_total),
         Ok(v) => {
             // Keep the original key order when nothing needs shrinking.
             let compact = gojson::compact(text);
             if compact.len() <= max_total && !has_long_string(&v, max_string) {
+                cut = false;
                 compact
             } else {
                 let mut limit = max_string;
@@ -257,7 +266,7 @@ fn cap_json(
             }
         }
     };
-    RawValue::from_string(out).ok()
+    (RawValue::from_string(out).ok(), cut)
 }
 
 fn has_long_string(v: &Value, limit: usize) -> bool {
@@ -818,7 +827,7 @@ mod tests {
     }
 
     fn cap(raw_text: &str) -> String {
-        cap_input(raw(raw_text)).unwrap().get().to_owned()
+        cap_input(raw(raw_text)).0.unwrap().get().to_owned()
     }
 
     #[test]

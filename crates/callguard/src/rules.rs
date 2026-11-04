@@ -380,8 +380,8 @@ pub fn input_string_field(input: &str, name: &str) -> String {
 
 // --- Paths ------------------------------------------------------------------
 
-/// What path handling needs from the host. Symlinks are never resolved: a
-/// link inside the project that points outside it counts as inside.
+/// What path handling needs from the host. A call's path is also resolved
+/// through symlinks and junctions ([`Env::real`]); see [`Call::real_path`].
 #[derive(Debug, Clone, Default)]
 pub struct Env {
     /// User home directory, "" if unknown.
@@ -390,6 +390,40 @@ pub struct Env {
     pub windows: bool,
     /// Case-insensitive paths on other hosts (macOS default file systems).
     pub fold_case: bool,
+}
+
+/// The real location of the normalized path `p`: links and junctions
+/// resolved, with the deepest existing ancestor standing in for a file that
+/// does not exist yet. Slash form without the Windows `//?/` prefix; None if
+/// nothing resolves.
+pub(crate) fn resolve_real(p: &str) -> Option<String> {
+    let mut existing = std::path::Path::new(p).to_path_buf();
+    let mut rest = Vec::new();
+    let real = loop {
+        match std::fs::canonicalize(&existing) {
+            Ok(c) => break c,
+            Err(_) => {
+                // A link whose target is missing is no missing file: refuse.
+                if std::fs::symlink_metadata(&existing).is_ok() {
+                    return None;
+                }
+                rest.push(existing.file_name()?.to_owned());
+                if !existing.pop() {
+                    return None;
+                }
+            }
+        }
+    };
+    let mut out = real;
+    for name in rest.iter().rev() {
+        out.push(name);
+    }
+    let s = out.to_string_lossy().replace('\\', "/");
+    Some(if let Some(unc) = s.strip_prefix("//?/UNC/") {
+        format!("//{unc}") // a network share
+    } else {
+        s.strip_prefix("//?/").unwrap_or(&s).to_owned()
+    })
 }
 
 /// Go's `regexp.QuoteMeta`.
@@ -470,6 +504,79 @@ impl Env {
         let p = self.fold(p);
         let dir = self.fold(dir.strip_suffix('/').unwrap_or(dir));
         p == dir || p.starts_with(&format!("{dir}/"))
+    }
+
+    /// The real location of the normalized path `p`, slash-normalized: links
+    /// and junctions resolved, a not-yet-existing tail kept under its longest
+    /// existing parent. None if it cannot be resolved (a dangling link, no
+    /// existing ancestor). When `self` does not describe the running host (unit
+    /// tests with a foreign `Env`) the file system says nothing, and `p` is
+    /// its own real location.
+    pub fn real(&self, p: &str) -> Option<String> {
+        if self.windows != cfg!(windows) {
+            return Some(p.to_owned());
+        }
+        resolve_real(p)
+    }
+
+    /// Windows reads `a./b`, `a /b` and `b::$DATA` as `a/b` and `b`: drops
+    /// trailing dots and spaces and a `:stream` suffix from each component of
+    /// the normalized path `p`. Only on a Windows host; elsewhere those are
+    /// different names.
+    pub(crate) fn clean_names(&self, p: &str) -> String {
+        if !(cfg!(windows) && self.windows) {
+            return p.to_owned();
+        }
+        let segs: Vec<&str> = p.split('/').collect();
+        let out: Vec<String> = segs
+            .iter()
+            .enumerate()
+            .map(|(i, seg)| {
+                let b = seg.as_bytes();
+                let drive = b.len() == 2
+                    && b[0].is_ascii_alphabetic()
+                    && b[1] == b':'
+                    && (i == 0 || (i > 0 && matches!(segs[i - 1], "?" | ".")));
+                if drive || matches!(*seg, "" | "." | "..") {
+                    return (*seg).to_owned();
+                }
+                let name = seg.split(':').next().unwrap_or_default();
+                name.trim_end_matches(['.', ' ']).to_owned()
+            })
+            .collect();
+        let rooted = p.starts_with('/');
+        let cleaned = path_clean(&out.join("/"));
+        if rooted && !cleaned.starts_with('/') {
+            return format!("/{cleaned}");
+        }
+        cleaned
+    }
+
+    /// Whether the normalized directory `dir` (and its real location) is the
+    /// user's home or a file system root, so that "inside it" says nothing.
+    fn is_broad_dir(&self, dir: &str, real: Option<&str>) -> bool {
+        let trim = |p: &str| {
+            if p.len() > 1 {
+                p.trim_end_matches('/').to_owned()
+            } else {
+                p.to_owned()
+            }
+        };
+        let root = |p: &str| {
+            let b = p.as_bytes();
+            p == "/" || (self.windows && b.len() == 3 && b[1] == b':' && b[2] == b'/')
+        };
+        let home = (!self.home.is_empty()).then(|| self.normalize(&self.home, ""));
+        let real_home = home.as_deref().and_then(|h| self.real(h));
+        let homes: Vec<String> = [home, real_home]
+            .into_iter()
+            .flatten()
+            .map(|h| self.fold(&trim(&h)))
+            .collect();
+        [Some(dir), real]
+            .into_iter()
+            .flatten()
+            .any(|d| root(d) || root(&trim(d)) || homes.contains(&self.fold(&trim(d))))
     }
 
     /// Compiles a path glob. `*` and `?` stay inside one path segment, `**`
@@ -553,8 +660,13 @@ pub struct Call {
     pub harness: String,
     pub tool: String,
     pub kind: String,
-    /// Shell command text, "" if none.
+    /// Shell command text, "" if none. Line continuations are joined with a
+    /// space.
     pub command: String,
+    /// The command with line continuations joined with nothing, as a POSIX
+    /// shell reads `r\<NL>m`; "" if it equals `command`. Deny and ask look at
+    /// both spellings, allow needs both to match (see [`Call::commands`]).
+    pub command_joined: String,
     /// The distinct values of the command field as the host sent them, before
     /// line continuations are joined. Allow rules need exactly one.
     pub raw_commands: Vec<String>,
@@ -562,6 +674,16 @@ pub struct Call {
     /// Normalized absolute path, "" if none.
     pub path: String,
     pub in_project: bool,
+    /// `path` with links and junctions resolved; None if it cannot be
+    /// resolved, and then no allow rule may match on the path. Deny and ask
+    /// match the lexical or the resolved path, allow needs both.
+    pub real_path: Option<String>,
+    /// Whether `real_path` is inside the resolved project directory.
+    pub real_in_project: bool,
+    /// The project directory is the home directory or a file system root, so
+    /// it does not count as a project: `in_project` and `real_in_project` stay
+    /// false.
+    pub project_ignored: bool,
     /// Top-level input fields; non-strings JSON-encoded.
     pub fields: BTreeMap<String, String>,
     /// Compact input JSON plus every string leaf, for the "*" field.
@@ -574,16 +696,17 @@ pub struct Call {
 
 pub(crate) const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "filePath"];
 
-/// Joins shell (backslash) and PowerShell (backtick) line continuations, so a
-/// command split over lines is matched as one line.
-fn join_continuations(s: &str) -> String {
+/// Joins shell (backslash) and PowerShell (backtick) line continuations with
+/// `sep`, so a command split over lines is matched as one line. A space reads
+/// `a \<NL>b` right; nothing reads `r\<NL>m` as a shell does.
+fn join_continuations(s: &str, sep: &str) -> String {
     const PAIRS: [&str; 4] = ["\\\r\n", "\\\n", "`\r\n", "`\n"];
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     'outer: while !rest.is_empty() {
         for p in PAIRS {
             if let Some(tail) = rest.strip_prefix(p) {
-                out.push(' ');
+                out.push_str(sep);
                 rest = tail;
                 continue 'outer;
             }
@@ -613,6 +736,21 @@ pub(crate) fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<
 }
 
 impl Call {
+    /// The spellings of the command a shell may read: line continuations
+    /// joined with a space, and with nothing if that differs.
+    pub fn commands(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.command.as_str())
+            .chain(Some(self.command_joined.as_str()).filter(|j| !j.is_empty()))
+    }
+
+    /// The path as written and as resolved, for deny and ask checks.
+    fn paths(&self) -> impl Iterator<Item = &str> {
+        Some(self.path.as_str())
+            .filter(|p| !p.is_empty())
+            .into_iter()
+            .chain(self.real_path.as_deref())
+    }
+
     /// Extracts command, URL and path from the tool input.
     pub fn new(input: CallInput, env: &Env) -> Call {
         let kind = kind_of(&input.tool);
@@ -656,8 +794,12 @@ impl Call {
             if c.raw_commands.is_empty() && input.tool == "execute_code" {
                 c.raw_commands = field_values(&c.fields, "code");
             }
-            c.command = c.raw_commands.join("\n");
-            c.command = join_continuations(&c.command);
+            let all = c.raw_commands.join("\n");
+            c.command = join_continuations(&all, " ");
+            let joined = join_continuations(&all, "");
+            if joined != c.command {
+                c.command_joined = joined;
+            }
         }
         c.url = field_values(&c.fields, "url")
             .into_iter()
@@ -670,10 +812,24 @@ impl Call {
         if raw_path.is_empty() && kind == KIND_READ {
             raw_path = input.cwd.clone(); // Glob, Grep and LS default to the working directory
         }
+        let project = (!input.project_dir.is_empty())
+            .then(|| env.normalize(&input.project_dir, &input.cwd))
+            .map(|p| {
+                let real = env.real(&p);
+                (p, real)
+            });
+        if let Some((p, real)) = &project {
+            c.project_ignored = env.is_broad_dir(p, real.as_deref());
+        }
         if !raw_path.is_empty() {
-            c.path = env.normalize(&raw_path, &input.cwd);
-            if !input.project_dir.is_empty() {
-                c.in_project = env.in_dir(&c.path, &env.normalize(&input.project_dir, &input.cwd));
+            c.path = env.clean_names(&env.normalize(&raw_path, &input.cwd));
+            c.real_path = env.real(&c.path);
+            if let Some((dir, real_dir)) = project.as_ref().filter(|_| !c.project_ignored) {
+                c.in_project = env.in_dir(&c.path, dir);
+                c.real_in_project = match (&c.real_path, real_dir) {
+                    (Some(p), Some(d)) => env.in_dir(p, d),
+                    _ => false,
+                };
             }
         }
         c
@@ -793,8 +949,29 @@ fn wrapper(name: &str) -> Option<&'static [&'static str]> {
         "xargs" => &["-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s"],
         "exec" => &["-a"],
         "time" => &["-f", "-o"],
-        "command" | "nohup" | "setsid" | "busybox" | "sh" | "bash" | "zsh" | "dash" | "{" | "!"
-        | "if" | "then" | "else" | "do" => &[],
+        "flock" => &[
+            "-w",
+            "-E",
+            "--timeout",
+            "--wait",
+            "--conflict-exit-code",
+            "#1",
+        ],
+        "wsl" => &["-d", "--distribution", "-u", "--user", "--cd"],
+        "command" | "nohup" | "setsid" | "busybox" | "sh" | "bash" | "zsh" | "dash" | "fish"
+        | "csh" | "tcsh" | "eval" | "{" | "!" | "if" | "then" | "else" | "do" => &[],
+        _ => return None,
+    })
+}
+
+/// Programs that run the text after a command flag: `su -c`, `cmd /c`,
+/// `powershell -Command` (any prefix of it, `-c` too). Returns whether a
+/// lower-case token is that flag.
+fn command_flag(name: &str) -> Option<fn(&str) -> bool> {
+    Some(match name {
+        "su" => |t| t == "-c" || t == "--command",
+        "cmd" => |t| matches!(t, "/c" | "/k" | "/r"),
+        "powershell" | "pwsh" => |t| t.len() > 1 && "-command".starts_with(t),
         _ => return None,
     })
 }
@@ -843,7 +1020,17 @@ pub fn rm_root(command: &str) -> bool {
         let toks: Vec<&str> = unquoted.split_whitespace().collect();
         let mut i = 0;
         while i < toks.len() {
-            if let Some(valued) = wrapper(&command_name(toks[i])) {
+            let name = command_name(toks[i]);
+            if let Some(is_flag) = command_flag(&name) {
+                // The command is the text after the flag; without one, nothing
+                // runs that we can read.
+                let at = toks[i + 1..]
+                    .iter()
+                    .position(|t| is_flag(&t.to_lowercase()));
+                i = at.map_or(toks.len(), |k| i + k + 2);
+                continue;
+            }
+            if let Some(valued) = wrapper(&name) {
                 i = skip_wrapper(&toks, i + 1, valued);
                 continue;
             }
@@ -896,9 +1083,10 @@ pub fn rm_root(command: &str) -> bool {
 /// the command at run time; the terminal requirement of the verb is the second
 /// lock.
 pub fn runs_trust_verb(command: &str) -> bool {
-    command
-        .split([';', '&', '|', '\n', '(', ')', '`'])
-        .any(|seg| {
+    // The text as written, and with quotes and backslashes removed, where
+    // `tr""ust` is `trust`.
+    [command.to_owned(), unquoted(command)].iter().any(|text| {
+        text.split([';', '&', '|', '\n', '(', ')', '`']).any(|seg| {
             let words: Vec<String> = seg
                 .replace(['\'', '"'], " ")
                 .split_whitespace()
@@ -910,13 +1098,23 @@ pub fn runs_trust_verb(command: &str) -> bool {
                     && !words[i + 2..].iter().any(|a| a == "--list" || a == "-list")
             })
         })
+    })
+}
+
+/// `s` without quotes and backslashes: how a shell reads a word split by empty
+/// quotes (`.cla""ude`) or escapes (`.cl\aude`). Shell guards read both this
+/// and the raw text. Globs and variables stay a known limit.
+fn unquoted(s: &str) -> String {
+    s.replace(['"', '\'', '\\'], "")
 }
 
 /// Tool writes to the trust record are denied; shell commands that name it or
 /// run the trust verb ask. Always on.
 fn trust_guard(c: &Call) -> Option<Hit> {
     let file = crate::trust::FILE;
-    let named = |s: &str| s.to_ascii_lowercase().contains(file);
+    let named = |s: &str| {
+        s.to_ascii_lowercase().contains(file) || unquoted(s).to_ascii_lowercase().contains(file)
+    };
     let hit = |decision: &str, reason: &str| {
         Some(Hit {
             id: "self-protect-trust".into(),
@@ -925,7 +1123,9 @@ fn trust_guard(c: &Call) -> Option<Hit> {
         })
     };
     if c.kind == KIND_WRITE {
-        if c.path.to_ascii_lowercase().ends_with(&format!("/{file}")) {
+        if c.paths()
+            .any(|p| p.to_ascii_lowercase().ends_with(&format!("/{file}")))
+        {
             return hit(
                 "deny",
                 "callguard denies edits to its project trust record; the user runs `callguard trust`",
@@ -939,13 +1139,13 @@ fn trust_guard(c: &Call) -> Option<Hit> {
         }
     }
     if c.kind == KIND_SHELL && !c.command.is_empty() {
-        if named(&c.command) {
+        if c.commands().any(named) {
             return hit(
                 "ask",
                 "command names the project trust record; a human should confirm",
             );
         }
-        if runs_trust_verb(&c.command) {
+        if c.commands().any(runs_trust_verb) {
             return hit(
                 "ask",
                 "command runs `callguard trust`, which grants project rules; a human should confirm",
@@ -1012,12 +1212,14 @@ impl Builtin {
     /// Whether `text` (a command line or a tool input) names a hook or policy
     /// file.
     fn names_protected(&self, text: &str) -> bool {
-        let text = self.env.slash(text);
-        if PROTECTED_SHELL.is_match(&text) {
-            return true;
-        }
-        let folded = self.env.fold(&text);
-        self.extra.iter().any(|p| folded.contains(p.as_str()))
+        [text.to_owned(), unquoted(text)].iter().any(|text| {
+            let text = self.env.slash(text);
+            if PROTECTED_SHELL.is_match(&text) {
+                return true;
+            }
+            let folded = self.env.fold(&text);
+            self.extra.iter().any(|p| folded.contains(p.as_str()))
+        })
     }
 
     /// The first built-in rule that fires for `c`. Hard denies are checked
@@ -1036,7 +1238,9 @@ impl Builtin {
             })
         };
         if c.kind == KIND_WRITE && on("self-protect-write") {
-            if !c.path.is_empty() && self.protected.iter().any(|re| re.is_match(&c.path)) {
+            if c.paths()
+                .any(|p| self.protected.iter().any(|re| re.is_match(p)))
+            {
                 return hit(
                     "self-protect-write",
                     "deny",
@@ -1056,25 +1260,27 @@ impl Builtin {
             }
         }
         if c.kind == KIND_SHELL && !c.command.is_empty() {
-            let cmd = &c.command;
-            if on("rm-root") && rm_root(cmd) {
+            if on("rm-root") && c.commands().any(rm_root) {
                 return hit(
                     "rm-root",
                     "deny",
                     "recursive deletion of a root, home or .git directory".into(),
                 );
             }
-            if on("disk-wipe") && DISK_WIPE.iter().any(|re| re.is_match(cmd)) {
+            if on("disk-wipe")
+                && c.commands()
+                    .any(|cmd| DISK_WIPE.iter().any(|re| re.is_match(cmd)))
+            {
                 return hit(
                     "disk-wipe",
                     "deny",
                     "command formats or overwrites a disk".into(),
                 );
             }
-            if on("fork-bomb") && FORK_BOMB.is_match(cmd) {
+            if on("fork-bomb") && c.commands().any(|cmd| FORK_BOMB.is_match(cmd)) {
                 return hit("fork-bomb", "deny", "fork bomb".into());
             }
-            if on("self-protect-shell") && self.names_protected(cmd) {
+            if on("self-protect-shell") && c.commands().any(|cmd| self.names_protected(cmd)) {
                 return hit(
                     "self-protect-shell",
                     "ask",
@@ -1117,10 +1323,20 @@ impl Compiled {
                 return false;
             }
         }
-        if let Some(re) = &self.command
-            && (call.command.is_empty() || !re.is_match(&call.command))
-        {
-            return false;
+        // A regex rule reads every spelling of the command (see
+        // `Call::command_joined`): deny and ask fire on any, allow needs all.
+        let allow = self.rule.decision == "allow";
+        if let Some(re) = &self.command {
+            let hit = |c: &str| !c.is_empty() && re.is_match(c);
+            if call.command.is_empty()
+                || if allow {
+                    !call.commands().all(hit)
+                } else {
+                    !call.commands().any(hit)
+                }
+            {
+                return false;
+            }
         }
         if let Some(re) = &self.url
             && (call.url.is_empty() || !re.is_match(&call.url))
@@ -1136,20 +1352,36 @@ impl Compiled {
                 return false;
             }
         }
-        if m.in_project
-            .is_some_and(|ip| call.path.is_empty() || ip != call.in_project)
-        {
-            return false;
+        if call.path.is_empty() {
+            return m.in_project.is_none() && self.path.is_empty();
         }
-        if !self.path.is_empty()
-            && (call.path.is_empty() || !self.path.iter().any(|re| re.is_match(&call.path)))
-        {
-            return false;
+        if m.in_project.is_none() && self.path.is_empty() && self.not_path.is_empty() {
+            return true;
         }
-        if !call.path.is_empty() && self.not_path.iter().any(|re| re.is_match(&call.path)) {
-            return false;
+        // The path conditions hold for the path as written, and for where it
+        // really is. Deny and ask need one of them (a link into a protected
+        // place fires), allow needs both, and a path that does not resolve
+        // cannot be allowed.
+        let lexical = self.path_ok(&call.path, call.in_project);
+        let real = call
+            .real_path
+            .as_deref()
+            .is_some_and(|p| self.path_ok(p, call.real_in_project));
+        if allow {
+            lexical && real
+        } else {
+            lexical || real
         }
-        true
+    }
+
+    /// The path conditions for one form of a non-empty path.
+    fn path_ok(&self, path: &str, in_project: bool) -> bool {
+        self.rule
+            .r#match
+            .in_project
+            .is_none_or(|ip| ip == in_project)
+            && (self.path.is_empty() || self.path.iter().any(|re| re.is_match(path)))
+            && !self.not_path.iter().any(|re| re.is_match(path))
     }
 }
 
