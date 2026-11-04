@@ -138,9 +138,21 @@ impl Plan {
 
 fn plan(dir: &str) -> Result<Plan, String> {
     let deadline = Instant::now() + GIT_TIMEOUT;
+    // Two git calls that do not depend on each other: run them together, as
+    // git is slow to start on Windows.
+    let (overrides, gitlinks) = std::thread::scope(|s| {
+        let links = s.spawn(|| gitfilter::has_gitlinks(&run, dir, deadline));
+        let overrides = gitfilter::overrides(&run, dir, deadline);
+        (
+            overrides,
+            links
+                .join()
+                .unwrap_or_else(|_| Err("git thread panicked".into())),
+        )
+    });
     Ok(Plan {
-        overrides: gitfilter::overrides(&run, dir, deadline)?,
-        gitlinks: gitfilter::has_gitlinks(&run, dir, deadline)?,
+        overrides: overrides?,
+        gitlinks: gitlinks?,
     })
 }
 
