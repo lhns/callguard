@@ -2148,10 +2148,10 @@ fn a_protected_path_with_dot_dot_still_matches_the_cleaned_call_path() {
 
 #[test]
 fn octal_escapes_compile_like_in_re2() {
-    let re = compile_regex(r"^AB$").expect(r"A is an RE2 octal escape");
+    let re = compile_regex(r"^\101\x42$").expect("an RE2 octal escape");
     assert!(re.is_match("AB"));
-    let re = compile_regex(r"a b").unwrap();
-    assert!(re.is_match("a b"));
+    let re = compile_regex(r"a\0b").unwrap();
+    assert!(re.is_match("a\0b"));
     // The size limit is the default one: this stays refused.
     assert!(compile_regex(r"\pL{1000}").is_err());
 }
