@@ -9,8 +9,8 @@
 //!
 //! The test fails when agreement drops below the known baseline of the OS.
 //! Run it with `cargo test -p callguard-nah --test corpus_conformance -- --ignored`;
-//! Linux takes about ten minutes. No official-binary comparison: the spike
-//! (`29a22b7`) showed the official binary agrees wherever it answers in time.
+//! Linux takes about ten minutes. No official-binary comparison: it agrees
+//! wherever it answers in time (its deadline is fixed at 100 ms).
 
 // std::env::set_var is unsafe since edition 2024. This is the only test in the
 // binary, it runs one row at a time, and the engine's threads end before the
@@ -28,7 +28,7 @@ use callguard_nah::RealEngine;
 use serde_json::{Value, json};
 
 /// (OS, rows that agree, rows compared) on a full run.
-/// Linux: 8,598 of 8,858 (Phase 0, 60 s budget). Windows: 217 of 238 in a
+/// Linux: 8,598 of 8,858 (60 s budget). Windows: 217 of 238 in a
 /// release run, 215 in a debug one; the two root walks that may or may not
 /// answer within the 90 s row limit decide the difference, so 215 is the floor.
 /// macOS has none yet.
@@ -170,7 +170,7 @@ impl Materializer<'_> {
         #[cfg(unix)]
         let _ = std::os::unix::fs::symlink(target, at);
         // Windows may refuse without the privilege; the few rows that need a link
-        // then simply disagree, as they did in the spike.
+        // then simply disagree, as they always have.
         #[cfg(windows)]
         let _ = std::os::windows::fs::symlink_file(target, at);
     }

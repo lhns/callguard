@@ -344,8 +344,8 @@ fn pct_str(p: Option<f64>) -> String {
 }
 
 impl Report {
-    /// Writes the report as indented JSON, as Go's `json.Encoder` with
-    /// `SetIndent("", "  ")` does.
+    /// Writes the report as indented JSON, with a two-space indent, a trailing
+    /// newline and `<`, `>`, `&` escaped.
     pub fn write_json(&self, w: &mut dyn Write) -> io::Result<()> {
         let json = crate::gojson::to_string_indent(self).map_err(io::Error::other)?;
         w.write_all(json.as_bytes())?;

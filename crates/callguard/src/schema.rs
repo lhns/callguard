@@ -14,9 +14,8 @@ use crate::serde_util::{go_float, is_false, is_zero, nullable, raw_some};
 pub const REQUEST_SCHEMA: &str = "callguard/request/v1";
 pub const VERDICT_SCHEMA: &str = "callguard/verdict/v1";
 
-/// The outcome for one tool call. Go's `Decision` is a free string with a
-/// `Valid()` check; here an unknown decision cannot be built, so there is no
-/// `valid()`. Parse an untrusted string with [`Decision::parse`].
+/// The outcome for one tool call. An unknown decision cannot be built,
+/// so there is no validity check. Parse an untrusted string with [`Decision::parse`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Decision {
@@ -133,7 +132,7 @@ pub struct ToolCall {
 }
 
 impl ToolCall {
-    /// The raw input text, "" if the request had none (Go's empty RawMessage).
+    /// The raw input text, "" if the request had none.
     pub fn input_str(&self) -> &str {
         self.input.as_deref().map_or("", RawValue::get)
     }
@@ -283,7 +282,7 @@ pub struct Facts {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FactCommand {
-    /// Always written, even when empty (Go has no omitempty here).
+    /// Always written, even when empty (no omitempty here).
     #[serde(deserialize_with = "nullable")]
     pub argv: Vec<String>,
     #[serde(
@@ -402,7 +401,7 @@ mod tests {
         std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}"))
     }
 
-    /// Go's omitempty zero value.
+    /// The zero value that omitempty leaves out.
     fn is_empty_value(v: &Value) -> bool {
         match v {
             Value::Null => true,
@@ -498,14 +497,14 @@ mod tests {
     }
 
     #[test]
-    fn request_accepts_nulls_and_missing_fields_like_go() {
+    fn request_accepts_nulls_and_missing_fields() {
         let req: Request = serde_json::from_str(
             r#"{"cwd":null,"context":null,"unattended":null,"tool":{"name":"Read","input":null},"transcript":null,"unknown":1}"#,
         )
         .unwrap();
         assert_eq!(req.cwd, "");
         assert!(req.context.is_empty());
-        assert_eq!(req.tool.input_str(), "null"); // Go keeps the literal null
+        assert_eq!(req.tool.input_str(), "null"); // the literal null is kept
         assert!(req.transcript.is_none());
         let req: Request = serde_json::from_str("{}").unwrap();
         assert_eq!(req.tool.name, "");

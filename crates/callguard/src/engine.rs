@@ -69,14 +69,14 @@ pub struct LoadOptions {
     pub options: Options,
 }
 
-/// The judge call; tests replace it (Go: `judgeFunc`).
+/// The judge call; tests replace it.
 type JudgeFn = Box<
     dyn Fn(&dyn Backend, &judge::Config, judge::Input, Instant) -> Result<JudgeResult, JudgeError>
         + Send
         + Sync,
 >;
 
-/// The host probe with its runner bound; tests replace it (Go: `probeFunc`).
+/// The host probe with its runner bound; tests replace it.
 type ProbeFn = Box<dyn Fn(&str, &str, Option<&Meta>, Instant) -> Option<Meta> + Send + Sync>;
 
 struct Inner {
@@ -174,7 +174,7 @@ fn panic_message(p: &(dyn Any + Send)) -> String {
     }
 }
 
-/// Go's `time.Duration.String` for whole milliseconds.
+/// A duration in the form `250ms`, `1.5s`, `2m3s`, for whole milliseconds.
 fn go_duration(ms: u64) -> String {
     if ms < 1000 {
         return format!("{ms}ms");
@@ -195,7 +195,7 @@ fn go_duration(ms: u64) -> String {
     }
 }
 
-/// Go's `time.RFC3339Nano` in UTC.
+/// RFC 3339 with nanoseconds, in UTC.
 fn rfc3339_nano(t: SystemTime) -> String {
     let nanos = t
         .duration_since(UNIX_EPOCH)
@@ -962,7 +962,7 @@ pub fn resolve_project_dir(req: &Request) -> String {
         if std::fs::metadata(dir.join(".git")).is_ok() {
             return dir.to_string_lossy().into_owned();
         }
-        // Go's filepath.Dir: the parent, "." for a bare name, itself at the root.
+        // The parent, "." for a bare name, itself at the root.
         let parent: PathBuf = match dir.parent() {
             Some(p) if p.as_os_str().is_empty() => PathBuf::from("."),
             Some(p) => p.to_path_buf(),

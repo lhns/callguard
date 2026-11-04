@@ -1,7 +1,6 @@
 //! Engine, judge and fail-safe tests.
 //!
-//! The Go tests fake nah with a re-executed test binary; here a `NahEngine`
-//! fake plays that part.
+//! A `NahEngine` fake plays nah.
 
 #![allow(clippy::type_complexity)]
 
@@ -1845,7 +1844,7 @@ fn host_meta_probe() {
 }
 
 #[test]
-fn the_probe_reads_the_command_like_go_does() {
+fn the_probe_reads_the_command_whatever_the_key_case() {
     // The host runs the command whatever the letter case of the key.
     let (mut e, _) = new_test_engine(
         test_policy(no_mut),
@@ -2138,7 +2137,7 @@ fn input_hash_covers_the_raw_bytes() {
         input_sha256(&req),
         hex::encode(Sha256::digest(text.as_bytes()))
     );
-    // No input hashes the empty string, as Go's sha256 of a nil slice does.
+    // No input hashes the empty string, like an empty input.
     assert_eq!(
         input_sha256(&Request::default()),
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

@@ -1,10 +1,6 @@
 //! callguard decides whether a pending coding-agent tool call may run without
 //! a human prompt. See docs/design.md for the contract.
 //!
-//! Every module is declared here, so porting workers never edit this file.
-//! Modules marked "stub" hold the Go package's exported types and function
-//! signatures with `todo!()` bodies; remove the module's `#![allow]` line when
-//! you port it.
 
 pub mod backend;
 pub mod declog;

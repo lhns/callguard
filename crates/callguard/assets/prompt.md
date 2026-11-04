@@ -9,7 +9,7 @@ docs/design.md §7 for what was kept, changed and dropped.
 This comment is stripped before the prompt is sent. The three slot markers
 below are filled from the policy (environment, block, allow_exceptions).
 Every HARD and SOFT rule bullet starts with its rule id in backticks; the
-ids must match internal/judge/rules.go.
+ids must match the table in crates/callguard/src/judge.rs (rule_ids).
 -->
 You are callguard, a security monitor for autonomous AI coding agents. You decide one pending tool call.
 

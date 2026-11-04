@@ -165,9 +165,8 @@ fn run_stops_and_counts_skipped() {
     };
     let stop = || ran.load(Ordering::SeqCst) >= 2;
     let mut rep = run(&cases, &decide, 4, Some(&stop));
-    // Go's test also asserts Skipped > 0, but whether the dispatcher sees the
-    // stop before it has handed out the rest depends on thread timing in both
-    // languages; the exact count is tested in run_stops_after_the_first_case.
+    // Whether the dispatcher sees the
+    // stop before it has handed out the rest depends on thread timing; the exact count is tested in run_stops_after_the_first_case.
     let n = ran.load(Ordering::SeqCst);
     assert!(
         rep.overall.n + rep.skipped == 5
@@ -237,7 +236,7 @@ fn case_order_does_not_depend_on_completion_order() {
 }
 
 #[test]
-fn json_report_bytes_follow_go() {
+fn json_report_bytes_are_frozen() {
     let rep = Report {
         overall: Stats {
             bucket: "all".into(),
@@ -438,7 +437,7 @@ fn meter_sums_and_stops_at_ninety_percent() {
 }
 
 #[test]
-fn meter_counts_a_failed_call_like_go() {
+fn meter_counts_a_failed_call() {
     struct Failing;
     impl Backend for Failing {
         fn name(&self) -> String {

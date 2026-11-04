@@ -60,7 +60,7 @@ fn read_input(input: &mut dyn Read) -> Result<Vec<u8>, String> {
 }
 
 /// Parses a hook payload: a JSON object, or an error. (A derived `Deserialize`
-/// would also take a JSON array as a field list; Go refuses it.)
+/// would also take a JSON array as a field list; it is refused.)
 fn parse_object<T: for<'de> Deserialize<'de>>(body: &[u8]) -> Result<T, String> {
     if body.iter().find(|b| !b.is_ascii_whitespace()) != Some(&b'{') {
         return Err("payload is not a JSON object".into());

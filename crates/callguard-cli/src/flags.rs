@@ -1,5 +1,5 @@
-//! A command-line parser with Go's `flag` package semantics, so every spelling
-//! the Go binary accepted still works: `-name`, `--name`, `-name=value`,
+//! A command-line parser where `-name` and `--name` are the same flag, kept so
+//! every spelling in existing scripts and policies keeps working: `-name`, `--name`, `-name=value`,
 //! `-name value`, `--` to end the flags, and parsing stops at the first
 //! argument that is not a flag.
 

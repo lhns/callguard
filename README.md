@@ -132,7 +132,7 @@ Never `allow` on error. Bad input, a policy load error, a backend failure, a tim
 - **A pty can satisfy the terminal check of `callguard trust`.** An agent that can allocate a pseudo-terminal and type "yes" could trust its own project rules. The guard keeps the agent from writing the trust file and from running the verb directly (self-protection), but this is not a hard boundary. `callguard trust` cannot run under mintty on Windows.
 - **Deep nesting**: nah follows `bash -c` three layers deep and gives up with partial coverage at four, and reads input nested past a limit not at all. The raw-text fallback still applies to deny and ask rules, an allow never matches, and unreadable input gets the fail-safe verdict.
 - **Windows under heavy load** (a median call about 50 times slower) lost two `fs-project-root` blocks (PowerShell rows) in the load test; a walk of `C:\` or `/` can take up to 9 s idle and longer under load, then the 10 s kill gives the fail-safe verdict.
-- **macOS has no memory cap**: `setrlimit` refuses it. A runaway analysis is stopped by the 10 s kill only, by which time it can reach about 800 MB.
+- **macOS caps memory by a watchdog**: `setrlimit` refuses it, so a thread in the nah child aborts it once it is past 512 MiB resident. The cap does not cover the processes the child starts, such as git.
 - **Permission paths cover tool calls**, not what a shell command reads or writes (the same as Claude Code).
 
 ## Build and test
@@ -144,7 +144,7 @@ cargo test --release --workspace --features callguard-cli/test-engines -- --incl
 node adapters/selftest.mjs
 ```
 
-The ignored tests run the real nah; they need a release build to be fast. Four tests that walk the file system root are skipped by CI and run weekly (`slow.yml`): add `--skip` for them, as `ci.yml` does. `cargo test -p callguard-nah --test corpus_conformance -- --ignored` runs nah's own corpus through callguard's engine (about ten minutes). The Go implementation is at tag `go-final`.
+The ignored tests run the real nah; they need a release build to be fast. Four tests that walk the file system root are skipped by CI and run weekly (`slow.yml`): add `--skip` for them, as `ci.yml` does. `cargo test -p callguard-nah --test corpus_conformance -- --ignored` runs nah's own corpus through callguard's engine (about ten minutes). The first implementation of callguard is at tag `go-final`.
 
 ## License
 

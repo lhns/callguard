@@ -13,7 +13,6 @@ callguard = { path = "../callguard" }
 nah-cli.workspace = true
 nah-proto.workspace = true
 nah-observe.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

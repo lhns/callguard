@@ -188,17 +188,12 @@ fn a_misbehaving_nah_child_never_fails_open() {
 /// verdict is the fail-safe one, and the call is not left to run the machine out
 /// of memory. (`${x:-...}` nested 100k deep grows 60-80 MB/s.)
 ///
-/// macOS has no cap (see `limit_memory`). The test then runs with a 5 s timeout
-/// (about 400 MB of growth at most) and the child ends at the hard kill instead.
-/// The verdict is the same fail-safe one; only the cause differs.
+/// The long timeout leaves the cap room to fire first: the warnings must not
+/// say the child was killed for not answering, so the cap, not the kill, ended it.
 #[test]
 #[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
 fn a_nah_that_outgrows_its_memory_cap_is_a_failure() {
-    let policy = if cfg!(target_os = "macos") {
-        r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":5000,"budget_ms":4000},"deadline_ms":6000}"#
-    } else {
-        r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":25000,"budget_ms":24000},"deadline_ms":26000}"#
-    };
+    let policy = r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":25000,"budget_ms":24000},"deadline_ms":26000}"#;
     let sb = Sandbox::new(policy);
     let n = 100_000;
     let command = format!("echo {}a{}", "${x:-".repeat(n), "}".repeat(n));
@@ -206,6 +201,7 @@ fn a_nah_that_outgrows_its_memory_cap_is_a_failure() {
     assert_ne!(decision(&v), "allow", "{v}");
     assert_eq!(v["layer"], "fallback", "{v}");
     assert!(warnings(&v).contains("nah skipped"), "{v}");
+    assert!(!warnings(&v).contains("did not answer within"), "{v}");
 }
 
 /// A hung nah is killed at `nah.timeout_ms`, not later.
@@ -371,7 +367,7 @@ fn rust_nest(depth: usize) -> String {
     )
 }
 
-/// Phase 0's killers, through the real nah: whatever happens inside the child,
+/// Inputs that crash or stall nah, through the real nah: whatever happens inside the child,
 /// the hook answers 0 or 2, never allows, and within the deadline.
 #[test]
 #[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
@@ -395,15 +391,15 @@ fn crafted_input_never_fails_open() {
     }
 }
 
-/// The five gap commands, with their real verdicts today. Phase 4 adds rules
-/// for the ones nah misses; this records what the product does now. nah's
+/// The five gap commands, with their real verdicts today: the default rules
+/// cover the ones nah misses; this records what the product does. nah's
 /// 100 ms budget (unpatched) and the host's load can change a row.
 #[test]
 #[ignore = "needs nah: cargo test --release -p callguard-cli -- --ignored"]
 fn the_five_gap_commands_today() {
     let policy = r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":10000},"deadline_ms":11000}"#;
     let sb = Sandbox::new(policy);
-    // (command, decision, layer) as observed; see docs/rust-phase2.md.
+    // (command, decision, layer) as observed.
     let rows = gap_rows();
     for (command, want_decision, want_layer) in rows {
         let (_, v, took) = sb.decide(command, &[]);
@@ -459,7 +455,7 @@ fn gap_rows() -> Vec<(&'static str, &'static str, &'static str)> {
 }
 
 /// Linux blocks `scp -r ~/.aws host:`; on Windows nah reads `C:` as a host and
-/// delegates (docs/rust-phase0.md section 3), and the default rule
+/// delegates, and the default rule
 /// scp-home-secret denies.
 #[cfg(windows)]
 const GAP_SCP: (&str, &str) = ("deny", "rules");
@@ -627,8 +623,8 @@ fn a_broken_nah_leaves_the_backstops_and_the_text_rules_working() {
 fn nah_config_in_the_repo_and_home_has_no_effect() {
     let policy = r#"{"policy_version":1,"llm":{"enabled":false},"nah":{"timeout_ms":10000},"deadline_ms":11000}"#;
     let sb = Sandbox::new(policy);
-    // `npm publish` is delegated with the default guards; Phase 0 showed a
-    // project could turn it into a block.
+    // `npm publish` is delegated with the default guards; a project
+    // could turn it into a block.
     let (_, base, _) = sb.decide("npm publish", &[]);
     std::fs::create_dir_all(sb.proj.join(".nah")).unwrap();
     std::fs::write(
@@ -871,7 +867,7 @@ fn real_facts_reach_the_judge() {
     assert!(!recorded.contains("\"coverage\":\"none\""), "{recorded}");
 }
 
-// --- permission rules in Claude's syntax (Phase 3) ------------------------------------
+// --- permission rules in Claude's syntax ------------------------------------
 
 fn perm_policy(perms: Value) -> String {
     serde_json::json!({
@@ -1155,7 +1151,7 @@ fn an_untrusted_project_policy_allows_nothing() {
     assert!(!allowed_by_rule(&v), "{v}");
 }
 
-// --- project trust (Phase 3 follow-up) --------------------------------------------------
+// --- project trust --------------------------------------------------
 
 impl Sandbox {
     /// The user config directory the sandbox's environment points at.

@@ -2,7 +2,7 @@
 //! status, remote visibility). `Meta`, `GitStatus`
 //! and `RepoVisibility` are the wire types `schema` re-exports.
 //!
-//! Go's `context.Context` becomes an explicit `deadline`; probing runs a few
+//! The `deadline` is explicit; probing runs a few
 //! short processes under one deadline and never fails the call.
 
 use std::io::{self, Read};
@@ -535,8 +535,7 @@ pub fn normalize_remote(raw: &str) -> String {
 }
 
 /// The host (without port or brackets) and decoded path of a `scheme://` URL,
-/// as Go's `url.Parse` followed by `Hostname()` and `Path` gives them; `None`
-/// where Go reports an error.
+/// as the usual URL parsers give them; `None` where the URL is malformed.
 fn parse_url(raw: &str) -> Option<(String, String)> {
     if raw.bytes().any(|b| b < 0x20 || b == 0x7f) {
         return None;
@@ -694,7 +693,7 @@ mod tests {
             "git reset --soft HEAD~1",
             "git stash",
             "rm file.txt",
-            "echo rm -rf", // quoted text is best effort in Go; this one matches
+            "echo rm -rf", // quoted text is best effort; this one matches
             "ls",
         ];
         for c in yes {

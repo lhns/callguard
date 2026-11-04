@@ -1,8 +1,8 @@
 //! The LLM judge backend interface and its built-in implementations:
 //! anthropic, openai (OpenAI-compatible), exec and fake.
 //!
-//! The trait is synchronous (no async runtime); Go's `context.Context`
-//! deadline is an explicit `Instant`. The anthropic implementation keeps
+//! The trait is synchronous (no async runtime); the deadline is an explicit
+//! `Instant`. The anthropic implementation keeps
 //! `cache_control` on the system prompt; without it every call pays for the
 //! whole prompt.
 
@@ -70,7 +70,7 @@ pub struct ClassifyResult {
     pub cache_write_tokens: i64,
 }
 
-/// Why a backend gave no answer. Go returns plain errors; the variants let
+/// Why a backend gave no answer. The variants let
 /// callers tell a deadline from a transport fault without parsing text.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BackendError {
@@ -850,7 +850,7 @@ impl Backend for Fake {
     }
 }
 
-/// Go's RE2 reads `\s`, `\S` and `\b` as ASCII; the regex crate reads them as
+/// RE2 reads `\s`, `\S` and `\b` as ASCII; the regex crate reads them as
 /// Unicode. This spells them out so the patterns match the same text.
 fn re2(pattern: &str) -> regex::Regex {
     let p = pattern

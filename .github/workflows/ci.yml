@@ -40,7 +40,7 @@ jobs:
         include:
           # 10 minutes on macOS, 12 s on Linux; the same regexes run on the others.
           - os: macos-latest
-            skip: --skip matches_equal_the_go_binary_over_a_corpus
+            skip: --skip matches_equal_the_recorded_matches_over_a_corpus
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:

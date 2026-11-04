@@ -1,11 +1,10 @@
 //! callguard's policy file format (policy_version 1) and its layered,
 //! tighten-only merge (docs/design.md section 5, ADR 0003).
 //!
-//! Go's unset-vs-zero distinction (pointers, nil slices) is kept with
-//! `Option`. Go `int` fields are `i64`, so `Validate` can still report
-//! negative values. Paths stay `String`, with "" meaning "default", as in Go.
-//! Policy regexes are Go RE2; `rules::compile_regex` makes the `regex` crate
-//! read them the way Go does.
+//! Unset is told from zero with `Option`. Integer fields are `i64`, so
+//! `validate` can still report negative values. Paths stay `String`, with ""
+//! meaning "default". Policy regexes are RE2; `rules::compile_regex` makes the
+//! `regex` crate read them that way.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -197,7 +196,7 @@ impl Match {
 }
 
 /// Configures the nah layer. nah is linked into callguard and on by default.
-/// `path`, `require` and `engine` belong to the Go era: they still parse so
+/// `path`, `require` and `engine` belong to an earlier design: they still parse so
 /// that [`validate`] can refuse them by name.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -286,7 +285,7 @@ pub struct Llm {
     pub allow_exceptions: Vec<String>,
 }
 
-/// Limits for the judge's view of the conversation (Go: `policy.Transcript`).
+/// Limits for the judge's view of the conversation.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TranscriptLimits {
@@ -412,13 +411,13 @@ impl Loaded {
 #[error("{0}")]
 pub struct PolicyError(pub String);
 
-/// The user's home directory (Go's `os.UserHomeDir`), None if unknown.
+/// The user's home directory (`USERPROFILE` on Windows, `HOME` elsewhere), None if unknown.
 pub(crate) fn home_dir() -> Option<String> {
     let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     std::env::var(key).ok().filter(|h| !h.is_empty())
 }
 
-/// Go's `os.UserConfigDir`, None if unknown.
+/// The per-user config directory, None if unknown.
 fn user_config_dir() -> Option<String> {
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
     if cfg!(windows) {
@@ -468,7 +467,7 @@ pub fn user_path(config_dir: &str) -> String {
     path_string(Path::new(&dir).join("callguard").join("policy.json"))
 }
 
-/// A read failure; `not_found` is Go's `errors.Is(err, fs.ErrNotExist)`.
+/// A read failure; `not_found` is a missing file.
 struct ReadFail {
     not_found: bool,
     err: PolicyError,
@@ -490,7 +489,7 @@ fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
     }
     let parse = |d: &[u8]| serde_json::from_slice::<Policy>(d);
     let mut policy = parse(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
-    // Go's encoding/json matches struct keys case-insensitively, so "Rules"
+    // Policies have always matched keys case-insensitively, so "Rules"
     // still reaches `rules` (while `unknown` below still reports it). Rewrite
     // such keys and parse again; otherwise a deny rule would be dropped.
     if let Ok(mut raw) = serde_json::from_slice::<Value>(&data)
@@ -716,8 +715,8 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
     }
 }
 
-/// Renames keys that match a struct field only case-insensitively (Go's
-/// decoding rule; an exact key wins). Returns whether anything changed.
+/// Renames keys that match a struct field only case-insensitively (an exact
+/// key wins). Returns whether anything changed.
 fn fold_keys(raw: &mut Value, ty: Ty) -> bool {
     let mut changed = false;
     match (ty, raw) {
@@ -766,7 +765,7 @@ fn walk_unknown(raw: &Value, ty: Ty, path: &str, out: &mut Vec<String>) {
             let Some(m) = raw.as_object() else { return };
             let known = schema_fields(o);
             let mut keys: Vec<&String> = m.keys().collect();
-            keys.sort(); // serde_json's map is sorted already; Go sorted explicitly
+            keys.sort(); // serde_json's map is sorted already
             for k in keys {
                 let p = if path.is_empty() {
                     k.clone()
@@ -805,7 +804,7 @@ pub fn unknown_keys(data: &[u8]) -> Vec<String> {
     out
 }
 
-/// Go's `%q` for a string.
+/// A string in double quotes, escaped as the messages have always shown it.
 pub(crate) fn go_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -967,7 +966,7 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
     out
 }
 
-/// Go's float formatting in `encoding/json` ('f' form, 'e' form below 1e-6 or
+/// A float as JSON writes it in policy_rev ('f' form, 'e' form below 1e-6 or
 /// from 1e21, no fraction for whole numbers, "e-7" not "e-07").
 pub(crate) fn go_f64(v: f64) -> String {
     let abs = v.abs();
@@ -987,7 +986,7 @@ pub(crate) fn go_f64(v: f64) -> String {
     format!("{v}")
 }
 
-/// Serializes `v` as Go would write a float64.
+/// Serializes `v` as `go_f64` writes it.
 pub(crate) fn go_float_raw<S: Serializer>(v: f64, s: S) -> Result<S::Ok, S::Error> {
     match RawValue::from_string(go_f64(v)) {
         Ok(raw) => raw.serialize(s),
@@ -1002,14 +1001,14 @@ fn opt_go_float<S: Serializer>(v: &Option<f64>, s: S) -> Result<S::Ok, S::Error>
     }
 }
 
-/// The bytes Go's `json.Marshal` writes for `p`: fields in declaration order,
-/// maps sorted, HTML-escaped as Go does (see `gojson`).
+/// The canonical bytes of `p`: fields in declaration order, maps sorted,
+/// HTML-escaped (see `gojson`).
 fn canonical_json(p: &Policy) -> String {
     crate::gojson::to_string(p).unwrap_or_default()
 }
 
-/// "sha256:<hex>" of the canonical JSON of `p`. It must equal the Go binary's
-/// value, which crosses into Switchboard's logs.
+/// "sha256:<hex>" of the canonical JSON of `p`. Its form is frozen: it
+/// goes into Switchboard's logs, and `testdata/rev` pins it.
 pub fn rev(p: &Policy) -> String {
     format!(
         "sha256:{}",
@@ -1127,7 +1126,7 @@ fn merge_llm(mut b: Llm, s: &Llm) -> Llm {
         }
         b.transcript = Some(t);
     }
-    // Go tells `null`/absent (nil) from `[]` here; both mean "not set" after
+    // `null`/absent and `[]` differ here; both mean "not set" after
     // omitempty round trips, and an explicit empty list never loosened anything.
     if !s.environment.is_empty() {
         b.environment = s.environment.clone();
@@ -1469,7 +1468,7 @@ pub fn default_rules() -> Vec<Rule> {
     ]
 }
 
-// Command patterns of the default rules (Go RE2 syntax, compiled with
+// Command patterns of the default rules (RE2 syntax, compiled with
 // `rules::compile_regex`). Best effort, not a parser; they are public so tests
 // and docs can name them.
 

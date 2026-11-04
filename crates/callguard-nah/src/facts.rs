@@ -1,5 +1,5 @@
 //! Maps what nah established (`graph.rs`'s neutral value) onto callguard's
-//! `Facts`, from nah's effect graph (the mapping the WebAssembly spike used).
+//! `Facts`, from nah's effect graph.
 
 use std::collections::BTreeMap;
 

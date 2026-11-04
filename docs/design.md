@@ -88,7 +88,7 @@ Deterministic layers come first, so the model only loosens calls the rules sent 
 - 100 ms, nah's own limit, is unusable under load: with 16 busy threads on 4 cores 501 of 8,858 corpus rows (5.7 %) lost their block on Linux. At 500 ms three were lost, at 2 s none.
 - On Windows the same load slows the median call about 50 times. Two blocks were lost at 2 s (pwsh `fs-project-root` rows that no deadline hit explains), and 13 root walks (`rm -rf /`, `C:\`) never answered in 90 s because nah's walk of `/` does not check the budget. Idle, those walks take 2 to 9 s, so the kill has to be at least 10 s; under load the kill and the parent's backstops carry the guarantee, and the verdict is the fail-safe one, never an allow.
 
-**Memory.** The nah child limits itself to 512 MiB at start (`RLIMIT_AS`; a job object on Windows), so a runaway analysis (`${x:-` nested 100,000 deep grows 60 to 80 MB/s) ends as a crash, which is the fail-safe verdict, and not as an out-of-memory host. macOS refuses `RLIMIT_AS`; there only the 10 s kill stops it.
+**Memory.** The nah child limits itself to 512 MiB at start (`RLIMIT_AS`; a job object on Windows), so a runaway analysis (`${x:-` nested 100,000 deep grows 60 to 80 MB/s) ends as a crash, which is the fail-safe verdict, and not as an out-of-memory host. macOS refuses `RLIMIT_AS`; there a watchdog thread in the child aborts it once it is past 512 MiB resident (checked every 50 ms). That does not cover the processes the child starts, such as git.
 
 **Allow needs two parsers.** A permission allow rule matches only if nah's parse and callguard's own lexer agree that every command of the call is one the rules name, with no assignment, redirect or expansion around them that argv would hide, and the coverage is full. Anything else goes on to the judge.
 
@@ -102,7 +102,7 @@ Deterministic layers come first, so the model only loosens calls the rules sent 
 - deny pipe-to-shell (`curl … | sh`) and secret-exfil (a network tool and a common secret location in one command); ask for force push, discarding uncommitted work (`git reset --hard`, `git clean -f`, `git checkout .`, `git restore .`), `terraform|tofu|pulumi|cdk|terragrunt destroy`, `kubectl delete`, `gh repo delete`, package publish, `sudo`/`doas`;
 - ask for tool input that addresses the classifier (the injection marker); ask for `ssh host <destructive command>` (`ssh-remote-destructive`); deny `scp`/`rsync`/`sftp` of a whole `.ssh`, `.aws` or `.gnupg` directory to a remote (`scp-home-secret`).
 
-The default rules stay regex rules with ids. None was removed for overlapping nah: Phase 4 found no rule whose every case nah blocks on both systems (docs/rust-phase4.md has the table, case by case), and a regex rule still reads the text when nah has no parse. Where nah also blocks, nah's deny comes first, so a former ask can become a deny.
+The default rules stay regex rules with ids. None was removed for overlapping nah: a case-by-case check found no rule whose every case nah blocks on both systems (the table is in `git show 145fe3e:docs/rust-phase4.md`), and a regex rule still reads the text when nah has no parse. Where nah also blocks, nah's deny comes first, so a former ask can become a deny.
 
 "Project" is the request's `project_dir` if given, else the git root above `cwd`, else `cwd`.
 
@@ -180,7 +180,7 @@ Two exceptions to "only tighten" follow Claude Code, which also lets a user and 
 - `permissions.allow` is accepted from the user layer, after the vetting of §4.
 - A project's `permissions.allow` applies only after `callguard trust` (ADR 0008). The command shows the rules and asks in a real terminal: stdin and stdout must be terminals, with no `--yes` and no environment override. Trust is stored per user (`<user config dir>/callguard/trusted-projects.json`, protected like the policy files) as a hash of the project path and the allow rules in order, so a changed rule or a moved file must be approved again (stricter than Claude's per-workspace trust). After trust the rules get the user layer's vetting.
 
-`llm.block` from a project layer is ignored with a warning: it is repo-written text that goes into the judge's prompt as a HARD rule, so a cloned repo could use it to steer the judge. User and system `llm.block` entries stay. (The Go version appended project entries.)
+`llm.block` from a project layer is ignored with a warning: it is repo-written text that goes into the judge's prompt as a HARD rule, so a cloned repo could use it to steer the judge. User and system `llm.block` entries stay. (Earlier versions appended project entries.)
 
 This is deliberately stricter than Claude Code's additive `autoMode` merge (§1): in a shared or managed setup the agent's uid usually owns `~` and the repo, so those layers must not loosen. A single developer who wants to configure backends without root passes their own file with `--policy` in the hook command; that file sits in harness config the agent should not edit (and self-protection guards it).
 
@@ -321,7 +321,7 @@ Verdict `callguard/verdict/v1`:
 - Never `allow` on error. Every error path yields a `fallback` verdict: `ask` interactive, `deny` unattended (with a reason telling the agent to ask a human). This matches Claude Code, which denies when the classifier is unavailable or unparseable.
 - `unattended_ask: "deny"` (default, confirmed by the owner) turns any enforced `ask` into `deny` when unattended, since nobody can answer a prompt; the reason says approval is needed. Only the system layer can set it to `"ask"`, which passes the `ask` to the harness instead.
 - Overall deadline `deadline_ms` (default 11000), well under the harness timeouts (Claude 600 s default, Hermes 60 s) and under the 12 s of the opencode and pi plugins. nah's budget (2000) and hard kill (`nah.timeout_ms`, 10000) are in §4; the LLM timeout (`llm.timeout_ms`, default 3000) is cut to what is left of the deadline. On deadline the engine returns the fallback verdict.
-- Budget targets: layers 0 and 2 take milliseconds. nah's analysis over its corpus took p50 78 ms and p95 471 ms on Linux, p50 58 ms and p95 3.8 s on Windows (docs/rust-phase0.md), plus the start of the child process; a walk of `/` can take 2 to 9 s. The LLM call typically takes under 2 s with Haiku-class models `[U]`.
+- Budget targets: layers 0 and 2 take milliseconds. nah's analysis over its corpus took p50 78 ms and p95 471 ms on Linux, p50 58 ms and p95 3.8 s on Windows (`git show 145fe3e:docs/rust-phase0.md`), plus the start of the child process; a walk of `/` can take 2 to 9 s. The LLM call typically takes under 2 s with Haiku-class models `[U]`.
 - **Deny streak** (auto mode's 3/20): when `deny_streak` is set and the session's enforced LLM denies reach `consecutive` in a row or `total`, further LLM denies become `ask` for interactive sessions, so a human sees them. Unattended sessions keep `deny`. The counts come from the decision log tail for that session; no other state is kept. Rule and builtin denies are not affected.
 
 ## 10. Harness adapters
@@ -372,7 +372,7 @@ A Rust workspace, one binary. There is no library API: nothing imports callguard
 
 Dependencies are few: `serde`, `serde_json`, `regex` (RE2-style, so policy regexes keep their meaning), `sha2`, `ureq` with rustls and the platform verifier (system CAs and proxies work), `time`, `thiserror`, and nah. No async runtime. The toolchain is pinned in `rust-toolchain.toml`. The prompt (`crates/callguard/assets/prompt.md`) and the rule ids in it are embedded; `evals/cases.jsonl` is embedded as the default eval set. Release builds use the `dist` profile (fat LTO, one codegen unit, unwinding kept: `panic = "abort"` would break the crash design of §6).
 
-The previous Go implementation is at tag `go-final`.
+The first implementation of callguard is at tag `go-final`.
 
 ## 13. Switchboard integration (contract only)
 

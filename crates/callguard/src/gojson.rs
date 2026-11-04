@@ -1,10 +1,10 @@
-//! JSON text the way Go's `json.Marshal` writes it: no whitespace outside
-//! strings (a `json.RawMessage` is compacted) and `<`, `>`, `&`, U+2028 and
+//! JSON text with no whitespace outside strings, as the policy hash and the logs
+//! have always had it: (raw values are compacted) and `<`, `>`, `&`, U+2028 and
 //! U+2029 escaped inside strings.
 //!
 //! The escaping is a safety property of the judge prompt: no value can contain
 //! a literal `</transcript>` or start a line with markup. serde_json writes
-//! those characters raw, so everything that must match Go goes through here.
+//! those characters raw, so everything that must keep this form goes through here.
 
 use serde::Serialize;
 
@@ -72,7 +72,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn escapes_like_go() {
+    fn escapes_markup_and_line_separators() {
         let want = "\"a\\u003cb\\u003e\\u0026c\\u2028\\u2029\\\"\\\\\"";
         assert_eq!(to_string("a<b>&c\u{2028}\u{2029}\"\\").unwrap(), want);
     }

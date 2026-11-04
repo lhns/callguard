@@ -1,6 +1,1 @@
-/callguard
-/callguard.exe
-/dist/
-*.test
-coverage.out
 /target

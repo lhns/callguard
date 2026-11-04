@@ -1,4 +1,4 @@
-//! The rule table (Phase 4): every positive case of every default rule and
+//! The rule table: every positive case of every default rule and
 //! built-in goes through the real nah (the `__engine` child, so no callguard
 //! layer is involved) with a generous budget, and the table records what nah
 //! did with it: block and guard, or delegate with coverage and whether the
@@ -7,7 +7,8 @@
 //!   cargo test --release -p callguard-cli -- --ignored rule_table
 //!
 //! `CALLGUARD_TABLE_OUT=file` writes one JSON line per case (os, rule,
-//! case, nah, guard, coverage, hole) for `docs/rust-phase4.md`.
+//! case, nah, guard, coverage, hole), for building a table
+//! of the rules by hand.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

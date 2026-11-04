@@ -208,7 +208,6 @@ dependencies = [
  "nah-cli",
  "nah-observe",
  "nah-proto",
- "serde",
  "serde_json",
  "tempfile",
 ]

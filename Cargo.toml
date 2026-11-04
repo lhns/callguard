@@ -15,7 +15,7 @@ publish = false
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 # No preserve_order: without it a serde_json Value keeps object keys sorted, as
-# Go's map[string]any marshals them, and the judge prompt renders from such values.
+# the judge prompt renders from such values, and its text is pinned by testdata/judge.
 serde_json = { version = "1", features = ["raw_value"] }
 regex = "1"
 sha2 = "0.10"
@@ -26,7 +26,7 @@ time = { version = "0.3", features = ["formatting"] }
 getrandom = "0.3"
 tempfile = "3"
 # nah is publish = false, so a git pin: our fork, which is nah v1.7.0 plus
-# decide_with_budget (the patch is `git show 29a22b7:spike/nah-native/nah-budget.patch`). Only callguard-nah depends on it.
+# decide_with_budget (the fork carries the patch). Only callguard-nah depends on it.
 nah-cli = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
 nah-proto = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
 nah-observe = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }

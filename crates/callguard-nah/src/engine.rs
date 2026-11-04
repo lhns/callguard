@@ -17,8 +17,8 @@ use serde_json::{Value, json};
 use crate::observe::{host_platform, observe};
 use crate::{facts, graph};
 
-/// nah recurses deeply on nested input; its worst inputs overflow any stack
-/// (Phase 0), so this only makes an overflow rare. The process boundary is the
+/// nah recurses deeply on nested input; its worst inputs overflow any stack,
+/// so this only makes an overflow rare. The process boundary is the
 /// guard.
 const STACK_BYTES: usize = 64 << 20;
 
@@ -106,8 +106,8 @@ fn ctx(
 }
 
 /// nah's analysis under the policy's budget (the fork's `decide_with_budget`;
-/// nah's own `decide_with` is fixed at 100 ms). The 2 s default is the one the
-/// load run kept (docs/rust-phase0.md).
+/// nah's own `decide_with` is fixed at 100 ms). The 2 s default is the one that
+/// held up on a loaded machine.
 fn run<F>(input: &ToolCallInput, ctx: &Ctx, budget_ms: u64, observe: F) -> DecisionResult
 where
     F: FnMut(&ObservationRequest) -> Result<Observation, String>,

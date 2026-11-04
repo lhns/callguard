@@ -123,7 +123,7 @@ fn default_path_with(env: &dyn Fn(&str) -> Option<String>, os: &str) -> String {
     if let Some(x) = get("XDG_STATE_HOME") {
         return file(PathBuf::from(x));
     }
-    // Go's os.UserHomeDir: USERPROFILE on Windows, HOME elsewhere.
+    // USERPROFILE on Windows, HOME elsewhere.
     let home = PathBuf::from(
         get(if os == "windows" {
             "USERPROFILE"
@@ -185,7 +185,7 @@ impl Logger {
     }
 }
 
-/// Longest line the reader accepts, as Go's bufio.Scanner was set up.
+/// Longest line the reader accepts, (4 MiB).
 const MAX_LINE: usize = 4 << 20;
 
 /// The entries of `session_id` within the last [`TAIL_BYTES`] of the file,
@@ -315,7 +315,7 @@ mod tests {
             2,
             "one line per entry: {data:?}"
         );
-        // Go's escaping keeps `<` out of the file.
+        // `<` is escaped, so the file never holds markup.
         assert!(!data.contains('<'), "{data}");
         #[cfg(unix)]
         {
@@ -332,7 +332,7 @@ mod tests {
     }
 
     #[test]
-    fn confidence_is_written_like_go() {
+    fn confidence_is_written_without_a_fraction_when_whole() {
         let e = Entry {
             confidence: 1.0,
             ..Default::default()

@@ -1,9 +1,9 @@
 //! Maps tool calls to kinds, extracts paths and commands from their input, and
 //! evaluates the built-in and policy rules.
 //!
-//! Every regex here and in a policy is Go RE2. [`compile_regex`] makes the
-//! `regex` crate read it the way Go does, because the two differ where it
-//! matters for a guard: Go's `\b`, `\s`, `\w` and `\d` are ASCII-only, the
+//! Every regex here and in a policy is RE2. [`compile_regex`] makes the
+//! `regex` crate read it that way, because the two differ where it
+//! matters for a guard: RE2's `\b`, `\s`, `\w` and `\d` are ASCII-only, the
 //! `regex` crate's are Unicode.
 
 use std::collections::BTreeMap;
@@ -59,7 +59,7 @@ pub fn kind_of(tool: &str) -> &'static str {
     }
 }
 
-// --- Go regex semantics ---------------------------------------------------
+// --- RE2 semantics ---------------------------------------------------
 
 /// `\s` in RE2: `[\t\n\f\r ]`.
 const GO_SPACE: &str = r"\t\n\f\r ";
@@ -85,7 +85,7 @@ fn repeat_len(chars: &[char], i: usize) -> Option<usize> {
     (chars.get(j) == Some(&'}')).then(|| j + 1 - i)
 }
 
-/// Rewrites a Go RE2 pattern into the `regex` crate's syntax with the same
+/// Rewrites an RE2 pattern into the `regex` crate's syntax with the same
 /// meaning: ASCII `\b \B \s \S \w \W \d \D`, `\Q..\E`, literal `\<` `\>`,
 /// literal `{` and `&&` `~~` inside classes.
 fn translate_regex(pat: &str) -> String {
@@ -193,7 +193,7 @@ fn translate_regex(pat: &str) -> String {
     out
 }
 
-/// Compiles a Go RE2 pattern with Go's meaning (see the module comment).
+/// Compiles an RE2 pattern with its RE2 meaning (see the module comment).
 pub fn compile_regex(pat: &str) -> Result<Regex, RulesError> {
     Regex::new(&translate_regex(pat)).map_err(|e| RulesError(e.to_string()))
 }
@@ -203,9 +203,9 @@ fn builtin_regex(pat: &str) -> Regex {
     compile_regex(pat).unwrap_or_else(|e| panic!("built-in regex {pat:?}: {e}"))
 }
 
-// --- Go path and JSON semantics ---------------------------------------------
+// --- Path and JSON semantics ---------------------------------------------
 
-/// Go's `path.Clean`.
+/// Lexical path cleaning: `.` and `..` resolved, slashes collapsed.
 pub(crate) fn path_clean(p: &str) -> String {
     if p.is_empty() {
         return ".".into();
@@ -233,7 +233,7 @@ pub(crate) fn path_clean(p: &str) -> String {
     }
 }
 
-/// Go's `path.Base`.
+/// The last element of a slash path.
 fn path_base(p: &str) -> &str {
     if p.is_empty() {
         return ".";
@@ -246,7 +246,7 @@ fn path_base(p: &str) -> &str {
 }
 
 /// Replaces a lone UTF-16 surrogate escape in a JSON string with `\ufffd`, as
-/// Go's decoder does. `serde_json` accepts such an escape in a raw value but
+/// the decoder of earlier versions did. `serde_json` accepts such an escape in a raw value but
 /// fails when it decodes the string, and the call would then be matched on its
 /// escaped text (where `\n` is not a line break) instead of its content.
 pub(crate) fn sanitize_surrogates(json: &str) -> std::borrow::Cow<'_, str> {
@@ -299,7 +299,7 @@ pub(crate) fn sanitize_surrogates(json: &str) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
-/// Go's `json.Compact` for valid JSON: drops whitespace outside strings.
+/// Compacts valid JSON: drops whitespace outside strings.
 fn compact_json(json: &str) -> String {
     let mut out = String::with_capacity(json.len());
     let (mut in_string, mut escaped) = (false, false);
@@ -328,13 +328,13 @@ fn collect_strings(v: &Value, out: &mut Vec<String>) {
     match v {
         Value::String(s) => out.push(s.clone()),
         Value::Array(a) => a.iter().for_each(|e| collect_strings(e, out)),
-        // serde_json's map is sorted by key, like Go's sort.Strings.
+        // serde_json's map is sorted by key.
         Value::Object(m) => m.values().for_each(|e| collect_strings(e, out)),
         _ => {}
     }
 }
 
-/// The string value of the top-level key `name` of a tool input, with Go's
+/// The string value of the top-level key `name` of a tool input, with
 /// struct-decoding rules: the key matches in any letter case, the last
 /// string-valued match wins, other types and null are skipped. A shell
 /// command read this way is the one the host runs, so a differently cased key
@@ -432,7 +432,7 @@ pub(crate) fn resolve_real(p: &str) -> Option<String> {
     })
 }
 
-/// Go's `regexp.QuoteMeta`.
+/// Escapes regex metacharacters.
 fn quote_meta(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -725,7 +725,7 @@ fn join_continuations(s: &str, sep: &str) -> String {
 }
 
 /// The distinct non-empty values of `key` in any letter case: the exact
-/// spelling first, then the others in sorted key order (Go: `fieldValues`).
+/// spelling first, then the others in sorted key order.
 pub(crate) fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<String> {
     let others = fields
         .keys()
@@ -1475,7 +1475,7 @@ impl Set {
     }
 
     /// The matching rule that wins: deny over ask over allow, then list order.
-    /// (Go: `Set.Match`; `match` is a keyword.)
+    /// (Named `match_call` because `match` is a keyword.)
     pub fn match_call(&self, call: &Call) -> Option<policy::Rule> {
         let mut best: Option<&Compiled> = None;
         for c in &self.rules {

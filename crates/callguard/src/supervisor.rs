@@ -1,5 +1,5 @@
 //! Runs nah in a child process of callguard, so nothing nah does can take the
-//! hook down (docs/rust-phase0.md section 4): a stack overflow aborts the whole
+//! hook down: a stack overflow aborts the whole
 //! process and `catch_unwind` cannot see it, so the parent never touches nah.
 //!
 //! The parent starts `current_exe() __engine`, writes the [`NahRequest`] as

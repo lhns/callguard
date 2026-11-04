@@ -25,7 +25,7 @@ pub fn harden_process() {}
 
 /// Makes this process's own stdin, stdout and stderr non-inheritable, so no
 /// process it starts can hold the harness's pipes (a hanging `git` kept them
-/// open for 20 s after exit, Phase 0): `CreateProcess` inherits every
+/// open for 20 s after exit): `CreateProcess` inherits every
 /// inheritable handle of the parent, not only those passed as the child's
 /// standard handles. Children get their own pipes or null explicitly. Nothing
 /// on Unix, where only the standard descriptors are inherited and the child's
@@ -63,14 +63,15 @@ pub fn memory_limit_warning() -> Option<String> {
 
 /// Caps this process's memory at `bytes` before nah runs, so an input that
 /// makes nah grow without bound ends as a crash (the parent then takes the
-/// fail-safe verdict) instead of exhausting the machine. The cap covers the
+/// fail-safe verdict) instead of exhausting the machine. Except on macOS the cap covers the
 /// processes this one starts, such as git. If it cannot be set the child
 /// carries on without it and `memory_limit_warning` says why.
 ///
 /// Unix: `RLIMIT_AS`, the address space. Windows: a job object with a per-process
-/// memory limit, which this process joins. macOS: none. setrlimit refuses it with
-/// EINVAL (seen on GitHub's macos-latest), so the hard kill is the only bound, and
-/// warning about that on every call would say nothing new.
+/// memory limit, which this process joins. macOS: setrlimit refuses it with
+/// EINVAL (seen on GitHub's macos-latest), so a watchdog thread aborts the
+/// process once its peak resident size passes `bytes`; that covers this process
+/// only, not the processes it starts, such as git.
 pub fn limit_memory(bytes: usize) {
     if let Err(e) = set_memory_limit(bytes) {
         let _ = LIMIT_FAILURE.set(format!("nah child runs without a memory limit: {e}"));
@@ -78,8 +79,40 @@ pub fn limit_memory(bytes: usize) {
 }
 
 #[cfg(target_os = "macos")]
-fn set_memory_limit(_bytes: usize) -> Result<(), String> {
-    Ok(())
+#[allow(unsafe_code)]
+fn set_memory_limit(bytes: usize) -> Result<(), String> {
+    // `struct rusage` is 144 bytes: two timevals (16 bytes each), then
+    // `ru_maxrss`, which macOS reports in bytes, then 13 more longs.
+    #[repr(C)]
+    struct Rusage {
+        times: [i64; 4],
+        maxrss: i64,
+        rest: [i64; 13],
+    }
+    unsafe extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+    const RUSAGE_SELF: i32 = 0;
+    std::thread::Builder::new()
+        .name("memory-watchdog".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                let mut usage = Rusage {
+                    times: [0; 4],
+                    maxrss: 0,
+                    rest: [0; 13],
+                };
+                // SAFETY: `usage` is a valid, writable struct of the size the
+                // kernel fills in, and lives through the call.
+                let ok = unsafe { getrusage(RUSAGE_SELF, &mut usage) } == 0;
+                if ok && usage.maxrss as u64 > bytes as u64 {
+                    std::process::abort();
+                }
+            }
+        })
+        .map(|_| ())
+        .map_err(|e| format!("memory watchdog did not start: {e}"))
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
