@@ -2499,6 +2499,33 @@ fn a_raw_windows_disk_is_a_disk_wipe() {
     }
 }
 
+/// A path too long to exist is not walked: no system call per component.
+#[test]
+fn a_path_longer_than_the_platform_allows_is_not_resolved() {
+    let long = format!("/{}", "a/".repeat(512 << 10));
+    assert!(long.len() > (1 << 20));
+    let start = std::time::Instant::now();
+    assert_eq!(resolve_real(&long), None);
+    assert_eq!(Env::host().real(&long), None);
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+}
+
+/// A made-up `Env` never touches the disk: a dangling link, which the host
+/// refuses to resolve, is its own real location.
+#[cfg(unix)]
+#[test]
+fn a_made_up_env_does_not_resolve_on_disk() {
+    let dir = tempfile::tempdir().unwrap();
+    let link = dir.path().join("dangling").to_string_lossy().into_owned();
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), &link).unwrap();
+    assert_eq!(host_env("/h").real(&link), None, "the host resolves");
+    let made_up = Env {
+        home: "/h".into(),
+        ..Default::default()
+    };
+    assert_eq!(made_up.real(&link).as_deref(), Some(link.as_str()));
+}
+
 // --- Review fixes -------------------------------------------------------------
 
 /// The host's own path rules, which is what resolving through links needs.
@@ -2507,6 +2534,7 @@ fn host_env(home: &str) -> Env {
         home: home.into(),
         windows: cfg!(windows),
         fold_case: false,
+        host: true,
     }
 }
 

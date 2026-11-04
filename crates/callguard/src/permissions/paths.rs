@@ -200,5 +200,5 @@ pub(super) fn is_network(env: &Env, raw: &str) -> bool {
 /// The real location of the normalized path `p` in POSIX form (see
 /// [`crate::rules::resolve_real`]).
 pub(super) fn resolve(env: &Env, p: &str) -> Option<String> {
-    crate::rules::resolve_real(p).map(|s| to_posix(env, &s))
+    env.real(p).map(|s| to_posix(env, &s))
 }

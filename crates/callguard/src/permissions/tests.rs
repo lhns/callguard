@@ -17,6 +17,7 @@ fn env() -> Env {
         home: "/home/u".into(),
         windows: false,
         fold_case: false,
+        host: false,
     }
 }
 
@@ -1082,6 +1083,7 @@ fn a_real_symlink_is_resolved() {
         home: root.to_string_lossy().into_owned(),
         windows: false,
         fold_case: false,
+        host: true,
     };
     let p = policy::Permissions {
         deny: vec![format!(
@@ -1130,6 +1132,7 @@ fn windows_paths_match_in_posix_form() {
         home: "C:\\Users\\u".into(),
         windows: true,
         fold_case: false,
+        host: false,
     };
     let to = |p: &str| paths::to_posix(&e, &e.normalize(p, ""));
     assert_eq!(to("C:\\Users\\u\\.ssh"), "/c/Users/u/.ssh");
@@ -1160,6 +1163,7 @@ fn a_network_path_is_never_allowed() {
         home: "C:\\Users\\u".into(),
         windows: true,
         fold_case: false,
+        host: false,
     };
     let p = policy::Permissions {
         allow: vec![

@@ -403,13 +403,25 @@ pub struct Env {
     pub windows: bool,
     /// Case-insensitive paths on other hosts (macOS default file systems).
     pub fold_case: bool,
+    /// Whether this describes the running host. Only [`Env::host`] sets it;
+    /// the file system says nothing about any other `Env` (unit tests with a
+    /// made-up host), so [`Env::real`] does not touch the disk for one.
+    pub host: bool,
 }
+
+/// The longest path the platform accepts; a longer one cannot exist.
+const MAX_PATH_BYTES: usize = if cfg!(windows) { 32767 } else { 4096 };
 
 /// The real location of the normalized path `p`: links and junctions
 /// resolved, with the deepest existing ancestor standing in for a file that
 /// does not exist yet. Slash form without the Windows `//?/` prefix; None if
 /// nothing resolves.
 pub(crate) fn resolve_real(p: &str) -> Option<String> {
+    // Too long to exist: no system call per component. Deny and ask rules
+    // still match the lexical path, and an allow cannot match None.
+    if p.len() > MAX_PATH_BYTES {
+        return None;
+    }
     let mut existing = std::path::Path::new(p).to_path_buf();
     let mut rest = Vec::new();
     let real = loop {
@@ -464,6 +476,7 @@ impl Env {
             home: policy::home_dir().unwrap_or_default(),
             windows: cfg!(windows),
             fold_case: cfg!(target_os = "macos"),
+            host: true,
         }
     }
 
@@ -529,10 +542,10 @@ impl Env {
     /// and junctions resolved, a not-yet-existing tail kept under its longest
     /// existing parent. None if it cannot be resolved (a dangling link, no
     /// existing ancestor). When `self` does not describe the running host (unit
-    /// tests with a foreign `Env`) the file system says nothing, and `p` is
+    /// tests with a made-up `Env`) the file system says nothing, and `p` is
     /// its own real location.
     pub fn real(&self, p: &str) -> Option<String> {
-        if self.windows != cfg!(windows) {
+        if !self.host {
             return Some(p.to_owned());
         }
         resolve_real(p)

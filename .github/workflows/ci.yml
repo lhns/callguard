@@ -37,10 +37,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        include:
-          # 10 minutes on macOS, 12 s on Linux; the same regexes run on the others.
-          - os: macos-latest
-            skip: --skip matches_equal_the_recorded_matches_over_a_corpus
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     steps:
@@ -61,7 +57,6 @@ jobs:
           --skip a_root_walk_past_the_hard_kill_is_never_an_allow
           --skip rule_table
           --skip corpus_conformance
-          ${{ matrix.skip }}
       - name: Plugin self-test
         run: node adapters/selftest.mjs
       # The fake judge cannot decide the judge bucket, so this only checks that
