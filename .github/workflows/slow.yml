@@ -35,7 +35,6 @@ jobs:
           the_gap_commands_hold_when_wrapped
           a_root_walk_past_the_hard_kill_is_never_an_allow
           rule_table
-      # Fails below the OS's baseline in tests/corpus_conformance.rs; Windows has
-      # none yet, so there it only prints its numbers.
+      # Fails below the OS's baseline in tests/corpus_conformance.rs.
       - name: nah corpus
         run: cargo test --release -p callguard-nah --test corpus_conformance -- --ignored --nocapture
