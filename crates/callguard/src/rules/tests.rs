@@ -2126,6 +2126,27 @@ fn builtin_windows_paths() {
 }
 
 #[test]
+fn a_protected_path_with_dot_dot_still_matches_the_cleaned_call_path() {
+    let unix = unix();
+    let b = Builtin::new(
+        unix.clone(),
+        &[],
+        &["/opt/cg/sub/../my-policy.json".to_owned()],
+    )
+    .unwrap();
+    let hit = b.check(&Call::new(
+        at(
+            "Write",
+            file_input("/opt/cg/my-policy.json"),
+            "/w/p",
+            "/w/p",
+        ),
+        &unix,
+    ));
+    assert_eq!(hit.map(|h| h.id), Some("self-protect-write".into()));
+}
+
+#[test]
 fn builtin_protects_extra_paths() {
     let unix = unix();
     let b = Builtin::new(unix.clone(), &[], &["/opt/cg/my-policy.json".to_owned()]).unwrap();

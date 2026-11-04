@@ -1189,7 +1189,8 @@ impl Builtin {
         }
         let mut folded_extra = Vec::new();
         for p in extra {
-            let p = env.slash(p);
+            // Cleaned like the paths of a call, so a `..` in the setting still matches.
+            let p = env.normalize(p, "");
             let mut pat = format!("^{}$", quote_meta(&p));
             if env.caseless() {
                 pat.insert_str(0, "(?i)");
