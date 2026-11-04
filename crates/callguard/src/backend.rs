@@ -381,6 +381,8 @@ fn parse_verdict_json(text: &str) -> Result<ClassifyResult, BackendError> {
         #[serde(deserialize_with = "nullable")]
         reason: String,
     }
+    crate::serde_util::require_object(text.as_bytes())
+        .map_err(|e| other(format!("model output is not the expected JSON: {e}")))?;
     let v: Answer = serde_json::from_str(text)
         .map_err(|e| other(format!("model output is not the expected JSON: {e}")))?;
     Ok(ClassifyResult {
@@ -836,7 +838,7 @@ impl Backend for ExecBackend {
         })
         .map_err(|e| other(e.to_string()))?;
         remaining(deadline)?;
-        let mut child = Command::new(&self.command[0])
+        let mut child = Command::new(crate::which::program(&self.command[0]))
             .args(&self.command[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -882,7 +884,9 @@ impl Backend for ExecBackend {
         if overflow {
             return Err(other("exec: output exceeds 64 KiB"));
         }
-        serde_json::from_slice(&stdout).map_err(|e| other(format!("exec: bad output: {e}")))
+        crate::serde_util::require_object(&stdout)
+            .and_then(|()| serde_json::from_slice(&stdout).map_err(|e| e.to_string()))
+            .map_err(|e| other(format!("exec: bad output: {e}")))
     }
 }
 
@@ -1438,6 +1442,20 @@ mod tests {
     }
 
     #[test]
+    fn a_model_answer_that_is_not_an_object_is_refused() {
+        assert!(parse_verdict_json(r#"["allow",1,"",""]"#).is_err());
+        assert!(
+            parse_verdict_json(
+                "```json
+[\"allow\",1,\"\",\"\"]
+```"
+            )
+            .is_err()
+        );
+        assert!(parse_verdict_json(r#"{"decision":"allow"}"#).is_ok());
+    }
+
+    #[test]
     fn the_proxy_is_chosen_per_target() {
         const P: &str = "http://proxy:3128";
         type Case<'a> = (&'a str, &'a [(&'a str, &'a str)], Option<&'a str>);
@@ -1849,6 +1867,39 @@ mod tests {
         .unwrap()
     }
 
+    /// A `.cmd` judge runs, and an argument with `&` and `"` stays one argument:
+    /// the shell does not get to run the rest.
+    #[cfg(windows)]
+    #[test]
+    fn a_cmd_judge_runs_and_its_arguments_are_not_a_command_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("judge.cmd");
+        std::fs::write(
+            &script,
+            "@echo off
+echo {\"label\":\"allow\",\"confidence\":1,\"rule\":\"r\",\"reason\":\"ok\"}
+",
+        )
+        .unwrap();
+        let planted = dir.path().join("pwned.txt");
+        let arg = format!("a&echo x>{}&\"b", planted.display());
+        let b = from_config(&policy::Backend {
+            command: vec![script.to_string_lossy().into_owned(), arg],
+            ..cfg("exec")
+        })
+        .unwrap();
+        // Either the call works or it is refused; the injected command never runs.
+        let res = b.classify(&test_req(), soon());
+        eprintln!("cmd judge with a hostile argument: {res:?}");
+        assert!(!planted.exists(), "the argument ran as a command");
+        let b = from_config(&policy::Backend {
+            command: vec![script.to_string_lossy().into_owned()],
+            ..cfg("exec")
+        })
+        .unwrap();
+        assert_eq!(b.classify(&test_req(), soon()).unwrap().label, "allow");
+    }
+
     #[test]
     fn exec() {
         let b = exec_for("ok");
@@ -1862,6 +1913,7 @@ mod tests {
         for (mode, want) in [
             ("fail", "plugin exploded"),
             ("garbage", "bad output"),
+            ("array", "bad output"),
             ("big", "64 KiB"),
         ] {
             let err = exec_for(mode).classify(&test_req(), soon()).unwrap_err();

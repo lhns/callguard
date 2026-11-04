@@ -124,7 +124,7 @@ fn run_process(
     args: &[&str],
     deadline: Instant,
 ) -> io::Result<Vec<u8>> {
-    let mut cmd = Command::new(name);
+    let mut cmd = Command::new(crate::which::program(name));
     if strip_git_env {
         for (k, _) in std::env::vars_os() {
             if k.to_string_lossy().starts_with("GIT_") {
