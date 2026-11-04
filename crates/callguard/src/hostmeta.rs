@@ -80,6 +80,15 @@ impl std::fmt::Display for ExitFailure {
 impl std::error::Error for ExitFailure {}
 
 impl ExitFailure {
+    /// A failed run of `name` with exit code `code` (None: no code, a signal).
+    pub fn new(name: &str, code: Option<i32>) -> ExitFailure {
+        ExitFailure {
+            name: name.to_owned(),
+            code,
+            status: code.map_or_else(|| "no exit code".to_owned(), |c| format!("exit code: {c}")),
+        }
+    }
+
     /// The exit code of a failed run, if `e` is one.
     pub fn code_of(e: &io::Error) -> Option<i32> {
         e.get_ref()?.downcast_ref::<ExitFailure>()?.code

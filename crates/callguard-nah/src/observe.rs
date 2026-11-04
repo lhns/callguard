@@ -162,7 +162,7 @@ fn plan(dir: &str) -> Result<Plan, String> {
             // such as a corrupt index inside a work tree, still is. (A corrupt
             // index and a missing repository both exit 128, so the exit code
             // cannot tell them apart.)
-            if inside_work_tree(dir, deadline) {
+            if !outside_work_tree(&probe_work_tree(dir, deadline)) {
                 Err(o.err().or(g.err()).unwrap_or_default())
             } else {
                 Ok(Plan {
@@ -174,15 +174,25 @@ fn plan(dir: &str) -> Result<Plan, String> {
     }
 }
 
-/// Whether git finds a work tree around `dir`.
-fn inside_work_tree(dir: &str, deadline: Instant) -> bool {
+/// Whether `dir` is outside any work tree, from the answer of `git rev-parse
+/// --is-inside-work-tree`. Only an answer counts: git ran and said no (output
+/// other than `true`, or a real nonzero exit), or there is no git at all (not
+/// found), so nothing can run a filter. Any other failure, a timeout above all,
+/// is no answer, and the observation stays refused.
+fn outside_work_tree(answer: &std::io::Result<Vec<u8>>) -> bool {
+    match answer {
+        Ok(out) => String::from_utf8_lossy(out).trim() != "true",
+        Err(e) => ExitFailure::code_of(e).is_some() || e.kind() == std::io::ErrorKind::NotFound,
+    }
+}
+
+fn probe_work_tree(dir: &str, deadline: Instant) -> std::io::Result<Vec<u8>> {
     run(
         &[],
         "git",
         &["-C", dir, "rev-parse", "--is-inside-work-tree"],
         deadline.max(Instant::now() + GIT_TIMEOUT),
     )
-    .is_ok_and(|out| String::from_utf8_lossy(&out).trim() == "true")
 }
 
 fn unavailable<T>() -> Observed<T> {
@@ -416,6 +426,40 @@ mod tests {
         std::fs::write(repo.join(".git/index"), b"not an index").unwrap();
         let err = plan(repo.to_str().unwrap()).err().expect("refused");
         assert!(err.contains("git"), "{err}");
+    }
+
+    #[test]
+    fn only_an_answer_from_git_means_outside_a_work_tree() {
+        use std::io::{Error, ErrorKind};
+        let ok = |s: &str| Ok(s.as_bytes().to_vec());
+        // Git ran and said so.
+        assert!(!outside_work_tree(&ok("true
+")));
+        assert!(outside_work_tree(&ok("false
+")));
+        assert!(outside_work_tree(&ok("")));
+        // A real nonzero exit: git ran and found no work tree.
+        let exit = |code| Err(Error::other(ExitFailure::new("git", code)));
+        assert!(outside_work_tree(&exit(Some(128))));
+        assert!(outside_work_tree(&exit(Some(1))));
+        // No git to run, and nah-observe finds none either.
+        assert!(outside_work_tree(&Err(Error::new(
+            ErrorKind::NotFound,
+            "no git"
+        ))));
+        // No answer: a timeout, a signal, anything else is a refusal.
+        assert!(!outside_work_tree(&Err(Error::new(
+            ErrorKind::TimedOut,
+            "deadline exceeded"
+        ))));
+        assert!(!outside_work_tree(&exit(None)));
+        assert!(!outside_work_tree(&Err(Error::other(
+            "output pipe stayed open"
+        ))));
+        assert!(!outside_work_tree(&Err(Error::new(
+            ErrorKind::PermissionDenied,
+            "x"
+        ))));
     }
 
     #[test]
