@@ -6,6 +6,7 @@ use std::io::{Read, Write};
 
 use callguard::engine::Engine;
 use callguard::fallback::fallback_verdict;
+use callguard::handback::{Review, SubagentReport};
 use callguard::hook::{self, Options};
 use callguard::schema::{Request, Verdict};
 
@@ -23,6 +24,8 @@ Flags:
   --context-file PATH   JSON object of strings merged into the context;
                         must be root-owned, the agent must not be able to write it
   --allow-in-auto       claude only: also emit allow in permission_mode auto
+  --review-in-auto      claude only: also review sub-agent reports in
+                        permission_mode auto (Claude reviews them itself there)
   --add-dir PATH        a directory besides the project that counts as inside
                         it (repeatable; not the home directory or a root)
 
@@ -64,6 +67,7 @@ pub fn run(
             spec("context", Kind::Pair),
             spec("context-file", Kind::Str),
             spec("allow-in-auto", Kind::Bool),
+            spec("review-in-auto", Kind::Bool),
             spec("add-dir", Kind::List),
         ],
         &args[1..],
@@ -86,12 +90,14 @@ pub fn run(
         );
         return 2;
     }
-    if f.bool("allow-in-auto") && name != "claude" {
-        let _ = writeln!(
-            stderr,
-            "callguard hook: --allow-in-auto applies to claude only; blocking the call"
-        );
-        return 2;
+    for flag in ["allow-in-auto", "review-in-auto"] {
+        if f.bool(flag) && name != "claude" {
+            let _ = writeln!(
+                stderr,
+                "callguard hook: --{flag} applies to claude only; blocking the call"
+            );
+            return 2;
+        }
     }
 
     let opt = Options {
@@ -99,6 +105,7 @@ pub fn run(
         context: f.pairs("context").into_iter().collect(),
         context_file: f.str("context-file"),
         allow_in_auto: f.bool("allow-in-auto"),
+        review_in_auto: f.bool("review-in-auto"),
         additional_dirs: engine_child::add_dirs(f.list("add-dir")),
         // Beside the default decision log, whatever --log says.
         instructions_dir: (name == "claude")
@@ -111,16 +118,31 @@ pub fn run(
     let log_path = f.str("log");
     // The engine is built per request, because the project policy layer
     // depends on the request's project directory.
-    let d = move |req: &Request| -> Verdict {
+    let load = move |req: &Request| {
         let lo =
             engine_child::load_options(req, policy_path.clone(), no_user, &log_path, &test_engine);
-        match Engine::load(lo) {
+        Engine::load(lo)
+    };
+    let d = |req: &Request| -> Verdict {
+        match load(req) {
             Ok(eng) => eng.decide(req),
             Err(e) => fallback_verdict(Some(req), &format!("policy: {e}")),
         }
     };
+    // Sub-agent report reviews (claude PostToolUse): same policy, backend and log.
+    let review = |r: &SubagentReport| -> Review {
+        let req = Request {
+            cwd: r.cwd.clone(),
+            session_id: r.session_id.clone(),
+            ..Default::default()
+        };
+        match load(&req) {
+            Ok(eng) => eng.review_handback(r),
+            Err(e) => Review::Failed(format!("policy: {e}")),
+        }
+    };
     match name.as_str() {
-        "claude" => hook::claude(stdin, stdout, stderr, &opt, &d),
+        "claude" => hook::claude_reviewing(stdin, stdout, stderr, &opt, &d, &review),
         "hermes" => hook::hermes(stdin, stdout, stderr, &opt, &d),
         _ => hook::generic(stdin, stdout, stderr, &opt, &d),
     }
@@ -157,6 +179,57 @@ mod tests {
             "hermes --allow-in-auto"
         );
         assert_eq!(run_hook(&["generic", "--allow-in-auto"]), 2);
+        for h in ["hermes", "generic"] {
+            assert_eq!(
+                run_hook(&[h, "--review-in-auto"]),
+                2,
+                "{h} --review-in-auto"
+            );
+        }
+    }
+
+    /// A subagent report goes to the configured backend; an answer callguard
+    /// cannot use is a failed review: a warning for the parent, exit 0.
+    #[test]
+    fn a_subagent_report_is_reviewed_through_the_policy_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let policy = dir.path().join("policy.json");
+        let backend = |mode: &str| {
+            format!(
+                r#"{{"policy_version":1,"llm":{{"enabled":true,"mode":"enforce","backend":"f","timeout_ms":2000}},"backends":{{"f":{{"type":"fake","fake_mode":"{mode}"}}}}}}"#
+            )
+        };
+        let payload = r#"{"session_id":"s","cwd":"/x","hook_event_name":"PostToolUse","tool_name":"Agent","tool_input":{"prompt":"p"},"tool_response":{"content":[{"type":"text","text":"done"}]}}"#;
+        let run_with = |mode: &str| {
+            std::fs::write(&policy, backend(mode)).unwrap();
+            let args: Vec<String> = [
+                "claude",
+                "--policy",
+                policy.to_str().unwrap(),
+                "--no-user-policy",
+                "--log",
+                "-",
+            ]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = run(&args, &mut payload.as_bytes(), &mut out, &mut err);
+            (
+                code,
+                String::from_utf8(out).unwrap(),
+                String::from_utf8(err).unwrap(),
+            )
+        };
+        // "allow" is not one of the review's labels: invalid output.
+        let (code, out, err) = run_with("allow");
+        assert!(
+            code == 0
+                && err.is_empty()
+                && out.contains(r#""hookEventName":"PostToolUse""#)
+                && out.contains("could not be reviewed"),
+            "code={code} out={out:?} err={err:?}"
+        );
     }
 
     #[test]

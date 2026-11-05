@@ -283,7 +283,7 @@ fn cap_input(raw: Option<Box<RawValue>>) -> (Option<Box<RawValue>>, bool) {
     cap_json(raw, MAX_STRING_BYTES, MAX_INPUT_BYTES)
 }
 
-fn cap_json(
+pub(crate) fn cap_json(
     raw: Option<Box<RawValue>>,
     max_string: usize,
     max_total: usize,
@@ -468,7 +468,7 @@ struct ActionLine<'a> {
 }
 
 /// `{key: value}` as one escaped JSON line. Raw values keep their key order.
-fn line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
+pub(crate) fn line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
     let mut s = String::from("{");
     s.push_str(&serde_json::to_string(key).unwrap_or_else(|_| "\"\"".into()));
     s.push(':');
@@ -487,16 +487,11 @@ fn meta_line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
     format!("{{\"meta\":{}}}", line(key, v))
 }
 
-/// The rendered user message: session info, transcript, the pending call.
-/// Every line is one escaped JSON object, so `<`, `>` and `&` are escaped and
-/// newlines inside strings stay inside their string: no value can start a
-/// line or close the tag.
-pub(crate) fn user_prompt(input: &Input) -> String {
-    let mut b = String::from("<transcript>\n");
-    let mut push = |l: String| {
-        b.push_str(&l);
-        b.push('\n');
-    };
+/// The lines every prompt starts with: session info, host instructions, the
+/// transcript with its notes.
+pub(crate) fn history_lines(input: &Input) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |l: String| out.push(l);
 
     let session = SessionInfo {
         harness: &input.harness,
@@ -561,6 +556,22 @@ pub(crate) fn user_prompt(input: &Input) -> String {
             }
             _ => {}
         }
+    }
+    out
+}
+
+/// The rendered user message: session info, transcript, the pending call.
+/// Every line is one escaped JSON object, so `<`, `>` and `&` are escaped and
+/// newlines inside strings stay inside their string: no value can start a
+/// line or close the tag.
+pub(crate) fn user_prompt(input: &Input) -> String {
+    let mut b = String::from("<transcript>\n");
+    let mut push = |l: String| {
+        b.push_str(&l);
+        b.push('\n');
+    };
+    for l in history_lines(input) {
+        push(l);
     }
     if let Some(g) = &input.git_status {
         push(meta_line("gitStatus", g));

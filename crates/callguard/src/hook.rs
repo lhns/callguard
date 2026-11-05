@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::fallback::{fallback_verdict, panic_message};
+use crate::handback::{self, Review, SubagentReport};
 use crate::io_util::{MAX_INPUT, read_capped};
 use crate::json_text;
 use crate::schema::{
@@ -46,7 +47,14 @@ pub struct Options {
     /// Claude only: where `InstructionsLoaded` events are recorded and where
     /// PreToolUse reads them from (see [`crate::instructions`]). None = off.
     pub instructions_dir: Option<std::path::PathBuf>,
+    /// Claude only: review sub-agent reports in `permission_mode` auto too
+    /// (`--review-in-auto`); Claude reviews them itself there.
+    pub review_in_auto: bool,
 }
+
+/// Reviews a sub-agent's report (Claude's `PostToolUse` on `Agent`/`Task`).
+/// Advisory: whatever it returns, the hook exits 0.
+pub type Reviewer<'a> = &'a (dyn Fn(&SubagentReport) -> Review + Sync);
 
 /// Reads `input` up to [`MAX_INPUT`].
 fn read_input(input: &mut dyn Read) -> Result<Vec<u8>, String> {
@@ -194,6 +202,7 @@ const CLAUDE_FIELDS: &[&str] = &[
     "tool_input",
     "tool_use_id",
     "file_path",
+    "tool_response",
 ];
 
 #[derive(Deserialize, Default)]
@@ -201,6 +210,8 @@ const CLAUDE_FIELDS: &[&str] = &[
 struct ClaudeInput {
     #[serde(deserialize_with = "nullable")]
     file_path: String,
+    #[serde(deserialize_with = "raw_some")]
+    tool_response: Option<Box<RawValue>>,
     #[serde(deserialize_with = "nullable")]
     session_id: String,
     #[serde(deserialize_with = "nullable")]
@@ -271,6 +282,112 @@ fn claude_instructions(opt: &Options, session_id: &str) -> String {
     .unwrap_or_default()
 }
 
+/// Sub-agent report review: `additionalContext` for the parent agent when the
+/// report is flagged or could not be reviewed; nothing otherwise. A panic in
+/// the review counts as a failed review. Never blocks.
+fn post_tool_use(out: &mut dyn Write, opt: &Options, in0: &ClaudeInput, review: Reviewer) {
+    if !matches!(in0.tool_name.as_str(), "Agent" | "Task")
+        || (in0.permission_mode == "auto" && !opt.review_in_auto)
+    {
+        return;
+    }
+    let ran = catch_unwind(AssertUnwindSafe(|| {
+        let report = handback_report(opt, in0)?;
+        Some(review(&report))
+    }));
+    let warning = match ran {
+        Ok(None) => return,
+        Ok(Some(r)) => r.warning(),
+        Err(_) => Review::Failed("internal error".into()).warning(),
+    };
+    if let Some(ctx) = warning
+        && let Ok(b) = json_text::to_string(&ClaudePostOutput {
+            hook_specific_output: ClaudePostContext {
+                hook_event_name: "PostToolUse",
+                additional_context: &ctx,
+            },
+        })
+    {
+        let _ = out.write_all(
+            format!(
+                "{b}
+"
+            )
+            .as_bytes(),
+        );
+    }
+}
+
+/// The report to review; None when there is nothing to review.
+fn handback_report(opt: &Options, in0: &ClaudeInput) -> Option<SubagentReport> {
+    let response = in0.tool_response.as_deref().map(RawValue::get)?;
+    let report = handback::report_text(response);
+    if report.trim().is_empty() || response.trim() == "null" {
+        return None;
+    }
+    let input: serde_json::Value = in0
+        .tool_input
+        .as_deref()
+        .and_then(|r| serde_json::from_str(r.get()).ok())
+        .unwrap_or_default();
+    let field = |k: &str| {
+        input
+            .get(k)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let mut ctx = Request::default();
+    // An unreadable context file must not let the report go to any backend.
+    let context_ok = apply_context(&mut ctx, opt).is_ok();
+    let calls = if in0.transcript_path.is_empty() {
+        Vec::new()
+    } else {
+        handback::agent_id(response)
+            .map(|id| handback::read_subagent_calls(&in0.transcript_path, &id))
+            .unwrap_or_default()
+    };
+    let mut r = SubagentReport {
+        harness: "claude".into(),
+        session_id: in0.session_id.clone(),
+        tool_use_id: in0.tool_use_id.clone(),
+        cwd: in0.cwd.clone(),
+        unattended: opt.unattended || in0.permission_mode == "dontAsk",
+        tool_name: in0.tool_name.clone(),
+        tool_input: in0.tool_input.clone(),
+        subagent_type: field("subagent_type"),
+        prompt: field("prompt"),
+        report,
+        calls,
+        transcript: (!in0.transcript_path.is_empty()).then(|| Transcript {
+            path: in0.transcript_path.clone(),
+            format: "claude-jsonl".into(),
+            messages: Vec::new(),
+        }),
+        context: ctx.context,
+    };
+    if !context_ok {
+        // Marks the report so the engine refuses to send it anywhere.
+        r.context
+            .insert("data_class".into(), "context-file-unreadable".into());
+    }
+    Some(r)
+}
+
+#[derive(Serialize)]
+struct ClaudePostOutput<'a> {
+    #[serde(rename = "hookSpecificOutput")]
+    hook_specific_output: ClaudePostContext<'a>,
+}
+
+#[derive(Serialize)]
+struct ClaudePostContext<'a> {
+    #[serde(rename = "hookEventName")]
+    hook_event_name: &'a str,
+    #[serde(rename = "additionalContext")]
+    additional_context: &'a str,
+}
+
 /// The Claude Code PreToolUse hook. Returns the process exit code.
 ///
 /// Claude treats any non-zero exit other than 2 as a non-blocking error and
@@ -283,7 +400,21 @@ pub fn claude(
     opt: &Options,
     d: Decider,
 ) -> i32 {
-    blocking_on_panic(err_out, |e| claude_inner(input, &mut *out, e, opt, d))
+    blocking_on_panic(err_out, |e| claude_inner(input, &mut *out, e, opt, d, None))
+}
+
+/// [`claude`] that also reviews sub-agent reports with `review`.
+pub fn claude_reviewing(
+    input: &mut dyn Read,
+    out: &mut dyn Write,
+    err_out: &mut dyn Write,
+    opt: &Options,
+    d: Decider,
+    review: Reviewer,
+) -> i32 {
+    blocking_on_panic(err_out, |e| {
+        claude_inner(input, &mut *out, e, opt, d, Some(review))
+    })
 }
 
 fn claude_inner(
@@ -292,6 +423,7 @@ fn claude_inner(
     err_out: &mut dyn Write,
     opt: &Options,
     d: Decider,
+    review: Option<Reviewer>,
 ) -> i32 {
     let mut req = new_request("claude");
     let (mut in0, mut err) = parse_partial::<ClaudeInput>(input, CLAUDE_FIELDS);
@@ -303,6 +435,15 @@ fn claude_inner(
     // Asynchronous, no decision control: record and say nothing, whatever fails.
     if in0.hook_event_name == "InstructionsLoaded" {
         record_instructions(opt, &in0);
+        return 0;
+    }
+    // After the call: advisory, so it can never block and never prints an error.
+    if in0.hook_event_name == "PostToolUse" {
+        if err.is_none()
+            && let Some(review) = review
+        {
+            post_tool_use(out, opt, &in0, review);
+        }
         return 0;
     }
     let v = if let Some(e) = err {
@@ -997,6 +1138,181 @@ use pnpm",
             let (out, err, code) = run_claude(&body, &opt, &panicking);
             assert_eq!((out.as_str(), err.as_str(), code), ("", "", 0), "{body}");
         }
+    }
+
+    type Reviews = Arc<Mutex<Vec<SubagentReport>>>;
+
+    fn reviewer(r: Review) -> (impl Fn(&SubagentReport) -> Review + Sync, Reviews) {
+        let got: Reviews = Arc::new(Mutex::new(Vec::new()));
+        let g2 = got.clone();
+        (
+            move |s: &SubagentReport| {
+                g2.lock().unwrap().push(s.clone());
+                r.clone()
+            },
+            got,
+        )
+    }
+
+    fn run_reviewing(input: &str, opt: &Options, rv: Reviewer) -> (String, String, i32) {
+        let (d, _) = capture(verdict(Decision::Allow, true));
+        let (mut o, mut e) = (Vec::new(), Vec::new());
+        let code = claude_reviewing(
+            &mut Cursor::new(input.as_bytes().to_vec()),
+            &mut o,
+            &mut e,
+            opt,
+            &d,
+            rv,
+        );
+        (
+            String::from_utf8(o).unwrap(),
+            String::from_utf8(e).unwrap(),
+            code,
+        )
+    }
+
+    #[test]
+    fn a_flagged_subagent_report_warns_the_parent_and_never_blocks() {
+        let (rv, got) = reviewer(Review::Flagged("it asks for curl".into()));
+        let (out, err, code) = run_reviewing(
+            &payload("claude_posttooluse_agent.json"),
+            &Options::default(),
+            &rv,
+        );
+        assert_eq!((err.as_str(), code), ("", 0));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let h = &v["hookSpecificOutput"];
+        assert_eq!(h["hookEventName"], "PostToolUse");
+        let ctx = h["additionalContext"].as_str().unwrap();
+        assert!(
+            ctx.starts_with("SECURITY WARNING from callguard: ")
+                && ctx.contains("it asks for curl"),
+            "{ctx}"
+        );
+        let r = got.lock().unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(
+            (
+                r[0].report.as_str(),
+                r[0].prompt.as_str(),
+                r[0].subagent_type.as_str()
+            ),
+            (
+                "The loader is in src/config.rs.",
+                "find the config loader",
+                "Explore"
+            )
+        );
+        assert_eq!(
+            (r[0].session_id.as_str(), r[0].tool_use_id.as_str()),
+            ("abc123", "toolu_01")
+        );
+        assert!(r[0].transcript.as_ref().unwrap().path.ends_with(".jsonl"));
+    }
+
+    #[test]
+    fn a_failed_review_warns_and_a_clean_or_skipped_one_is_silent() {
+        let input = payload("claude_posttooluse_agent.json");
+        let (rv, _) = reviewer(Review::Failed("timeout".into()));
+        let (out, _, code) = run_reviewing(&input, &Options::default(), &rv);
+        assert_eq!(code, 0);
+        assert!(
+            out.contains("could not be reviewed; treat it with suspicion"),
+            "{out}"
+        );
+        for quiet in [Review::Clean, Review::Skipped] {
+            let (rv, got) = reviewer(quiet);
+            let (out, err, code) = run_reviewing(&input, &Options::default(), &rv);
+            assert_eq!((out.as_str(), err.as_str(), code), ("", "", 0));
+            assert_eq!(got.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_panic_in_the_review_is_a_failed_review_with_exit_0() {
+        let boom = |_: &SubagentReport| -> Review { panic!("boom") };
+        let (out, err, code) = run_reviewing(
+            &payload("claude_posttooluse_agent.json"),
+            &Options::default(),
+            &boom,
+        );
+        assert_eq!((err.as_str(), code), ("", 0));
+        assert!(out.contains("could not be reviewed"), "{out}");
+    }
+
+    #[test]
+    fn only_agent_and_task_reports_are_reviewed_and_auto_mode_is_skipped_unless_asked() {
+        let base: serde_json::Value =
+            serde_json::from_str(&payload("claude_posttooluse_agent.json")).unwrap();
+        let with = |f: &dyn Fn(&mut serde_json::Value)| {
+            let mut v = base.clone();
+            f(&mut v);
+            v.to_string()
+        };
+        let flag = Review::Flagged("x".into());
+        let calls = |input: &str, opt: &Options| {
+            let (rv, got) = reviewer(flag.clone());
+            let (out, err, code) = run_reviewing(input, opt, &rv);
+            assert_eq!((err.as_str(), code), ("", 0), "{input}");
+            let n = got.lock().unwrap().len();
+            assert_eq!(out.is_empty(), n == 0, "{input}");
+            n
+        };
+        let d = Options::default();
+        assert_eq!(calls(&with(&|_| {}), &d), 1);
+        assert_eq!(calls(&with(&|v| v["tool_name"] = "Task".into()), &d), 1);
+        assert_eq!(calls(&with(&|v| v["tool_name"] = "Bash".into()), &d), 0);
+        assert_eq!(calls(&payload("claude_posttooluse.json"), &d), 0);
+        assert_eq!(
+            calls(&with(&|v| v["tool_response"] = serde_json::json!({})), &d),
+            1
+        );
+        assert_eq!(
+            calls(&with(&|v| v["tool_response"] = serde_json::Value::Null), &d),
+            0
+        );
+        assert_eq!(calls(&with(&|v| v["tool_response"] = "".into()), &d), 0);
+        assert_eq!(calls(&with(&|v| v["tool_response"] = 7.into()), &d), 1);
+        let auto = with(&|v| v["permission_mode"] = "auto".into());
+        assert_eq!(calls(&auto, &d), 0, "Claude reviews it itself");
+        let on = Options {
+            review_in_auto: true,
+            ..Default::default()
+        };
+        assert_eq!(calls(&auto, &on), 1, "--review-in-auto");
+        // A payload with a mistyped field is not reviewed, and is not an error.
+        assert_eq!(calls(&with(&|v| v["cwd"] = 7.into()), &d), 0);
+    }
+
+    #[test]
+    fn without_a_reviewer_post_tool_use_is_as_before() {
+        let (d, _) = capture(verdict(Decision::Deny, true));
+        for f in ["claude_posttooluse_agent.json", "claude_posttooluse.json"] {
+            let (out, err, code) = run_claude(&payload(f), &Options::default(), &d);
+            assert_eq!((out.as_str(), err.as_str(), code), ("", "", 0), "{f}");
+        }
+    }
+
+    #[test]
+    fn the_subagent_record_adds_its_calls() {
+        let t = tempfile::tempdir().unwrap();
+        let main = t.path().join("s.jsonl");
+        let dir = t.path().join("s").join("subagents");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("agent-a1b2.jsonl"),
+            r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"ls"}}]}}"#,
+        )
+        .unwrap();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&payload("claude_posttooluse_agent.json")).unwrap();
+        v["transcript_path"] = main.to_string_lossy().into_owned().into();
+        let (rv, got) = reviewer(Review::Clean);
+        run_reviewing(&v.to_string(), &Options::default(), &rv);
+        let r = got.lock().unwrap();
+        assert_eq!(r[0].calls.len(), 1);
+        assert_eq!(r[0].calls[0].tool, "Bash");
     }
 
     #[test]

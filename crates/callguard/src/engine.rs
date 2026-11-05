@@ -1090,5 +1090,7 @@ pub(crate) fn log_path(pol: &Policy, opts: &Options) -> Result<Option<String>, S
     })
 }
 
+mod handback;
+
 #[cfg(test)]
 mod tests;

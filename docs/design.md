@@ -251,7 +251,7 @@ Changed: outcome and meta lines match what callguard can actually produce (no `u
 
 Dropped, and why:
 - Chrome / browser rules and evaluation rules (navigate, form input, JS exfil, file upload, shortcuts, unverifiable gestures, side-door actions, agent narration, navigation meta lines): Claude-in-Chrome only; no harness callguard supports has these tools. Agent narration also contradicts excluding the agent's narration of the pending call.
-- Workflow tool scripts and subagent hand-back review: Claude Code features with no equivalent here (sub-agent prompts are still covered).
+- Workflow tool scripts: a Claude Code feature with no equivalent here (sub-agent prompts are still covered). The source has no separate hand-back prompt, only one rule for it; `assets/handback.md` is callguard's own prompt built from that rule, used by the Claude `PostToolUse` report review.
 - Live-shared Artifact rule, `SandboxNetworkAccess` callbacks, `allowed_domains` network lists: Claude Code product surfaces.
 - `host_context` lines, scheduled-task fires, `CronCreate`/`RemoteTrigger` exception, `<pasted_content>` and `[User answered AskUserQuestion]` conventions: Claude Code transcript conventions callguard does not render (pasted content is kept generically under principle 9).
 - Restricted destinations and copies-carry-sharing: connected-drive rules for one product's file tools; their substance survives in Outbound Submissions, Destination Novelty and Permission Grant.

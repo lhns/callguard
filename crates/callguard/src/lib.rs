@@ -11,6 +11,7 @@ pub mod evals;
 pub mod fallback;
 pub mod gitfilter;
 mod glob;
+pub mod handback;
 pub mod hook;
 pub mod hostmeta;
 pub mod instructions;

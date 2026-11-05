@@ -174,23 +174,35 @@ pub(crate) fn read_claude_jsonl(
 /// The messages in the tail of a Claude Code JSONL transcript, oldest first,
 /// before [`referents`] and [`limit`].
 pub(crate) fn read_claude_messages(path: &str) -> io::Result<Vec<Message>> {
+    read_messages(path, false)
+}
+
+/// The tool calls in a subagent's own transcript (`subagents/agent-<id>.jsonl`),
+/// whose entries are all sidechain turns. Results stay stripped.
+pub(crate) fn read_subagent_calls(path: &str) -> io::Result<Vec<Message>> {
+    let mut m = read_messages(path, true)?;
+    m.retain(|m| m.role == ROLE_TOOL_CALL);
+    Ok(m)
+}
+
+fn read_messages(path: &str, sidechain: bool) -> io::Result<Vec<Message>> {
     let data = crate::io_util::read_tail(File::open(path)?, TAIL_BYTES)?;
     let mut msgs = Vec::new();
     for line in data.split(|&b| b == b'\n') {
         let line = String::from_utf8_lossy(line);
         let line = line.trim();
         if !line.is_empty() {
-            msgs.extend(parse_line(line));
+            msgs.extend(parse_line(line, sidechain));
         }
     }
     Ok(msgs)
 }
 
-fn parse_line(line: &str) -> Vec<Message> {
+fn parse_line(line: &str, keep_sidechain: bool) -> Vec<Message> {
     let Ok(e) = serde_json::from_str::<Entry>(line) else {
         return Vec::new();
     };
-    if e.is_meta || e.is_sidechain || e.is_compact_summary {
+    if e.is_meta || (e.is_sidechain && !keep_sidechain) || e.is_compact_summary {
         return Vec::new();
     }
     if e.kind != "user" && e.kind != "assistant" {
