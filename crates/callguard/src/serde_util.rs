@@ -1,6 +1,6 @@
 //! serde helpers for the wire types: `null` stands for the zero value, raw
-//! values keep their text, whole floats are written without a fraction. Kept
-//! so existing logs and callers keep working.
+//! values keep their text, whole floats are written without a fraction. Logs
+//! and callers depend on these forms.
 
 use serde::{Deserialize, Deserializer, Serializer};
 use serde_json::value::RawValue;
@@ -23,18 +23,18 @@ where
     Box::<RawValue>::deserialize(d).map(Some)
 }
 
-/// `omitempty` for integers.
+/// For `skip_serializing_if`: a zero value is left out.
 pub fn is_zero<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
 }
 
-/// `omitempty` for bools.
+/// For `skip_serializing_if`: `false` is left out.
 pub fn is_false(v: &bool) -> bool {
     !*v
 }
 
-/// A whole float is written without a fraction (`1`, not `1.0`), as confidences
-/// always have been in the logs; serde_json does not.
+/// A whole float is written without a fraction (`1`, not `1.0`), as the
+/// confidences in existing logs are; serde_json would write `1.0`.
 pub fn whole_float<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
     if v.is_finite() && v.fract() == 0.0 && v.abs() < 1e15 {
         s.serialize_i64(*v as i64)

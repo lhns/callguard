@@ -1,6 +1,6 @@
 //! The wire types: `callguard/request/v1` and `callguard/verdict/v1`
-//! (ADR 0002). Same JSON names and
-//! omit-when-empty rules. `Tool.input` stays raw JSON.
+//! (ADR 0002). The JSON names and the omit-when-empty rules are part of the
+//! contract. `Tool.input` stays raw JSON.
 
 use std::collections::BTreeMap;
 
@@ -272,7 +272,7 @@ pub struct Verdict {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Facts {
-    /// "nah-decide", "nah-wasm", or a host name.
+    /// "nah", or a host name.
     #[serde(
         skip_serializing_if = "String::is_empty",
         deserialize_with = "nullable"
@@ -309,7 +309,7 @@ pub struct Facts {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FactCommand {
-    /// Always written, even when empty (no omitempty here).
+    /// Always written, even when empty.
     #[serde(deserialize_with = "nullable")]
     pub argv: Vec<String>,
     #[serde(

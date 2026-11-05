@@ -400,8 +400,6 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
     Ok(rule)
 }
 
-/// The allow rules of one policy layer that survive [`vet_allow`], and a
-/// warning for each that does not.
 /// [`vet_allow`] for callers outside the crate: why the rule would be dropped.
 pub fn vet_reason(text: &str, layer: Option<&str>) -> Result<(), String> {
     vet_allow(text, layer).map(|_| ())

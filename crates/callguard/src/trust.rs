@@ -37,7 +37,7 @@ pub enum Record {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
     Trusted,
-    /// Trusted before, but the rules (or the place) changed since.
+    /// Trusted before, but the rules changed since.
     Changed,
     Untrusted,
 }

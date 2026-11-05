@@ -247,9 +247,8 @@ pub(crate) fn path_clean(p: &str) -> String {
     }
 }
 
-/// Replaces a lone UTF-16 surrogate escape in a JSON string with `\ufffd`, as
-/// the decoder of earlier versions did. `serde_json` accepts such an escape in a raw value but
-/// fails when it decodes the string, and the call would then be matched on its
+/// Replaces a lone UTF-16 surrogate escape in a JSON string with `\ufffd`.
+/// `serde_json` accepts such an escape in a raw value but fails when it decodes the string, and the call would then be matched on its
 /// escaped text (where `\n` is not a line break) instead of its content.
 pub(crate) fn sanitize_surrogates(json: &str) -> std::borrow::Cow<'_, str> {
     if !json.contains("\\u") {
@@ -512,7 +511,7 @@ impl Env {
         }
         let mut p = path_clean(&p);
         if self.windows && p.len() == 2 && p.as_bytes()[1] == b':' {
-            p.push('/'); // path.Clean("C:/") drops the slash
+            p.push('/'); // `path_clean("C:/")` drops the slash
         }
         p
     }

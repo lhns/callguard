@@ -20,7 +20,7 @@ pub struct NahRequest {
     pub cwd: String,
     pub project_dir: String,
     pub guards: BTreeMap<String, bool>,
-    /// The analysis budget. The engine built on unpatched nah ignores it.
+    /// nah's analysis budget.
     pub budget_ms: u64,
     /// The hard deadline of the whole call: the parent kills the child then.
     #[serde(default)]

@@ -1,5 +1,6 @@
-//! The facts nah established for a decision, projected for the LLM judge: nah's
-//! effect graph as a neutral JSON value, which `facts.rs` maps onto `Facts`.
+//! The facts nah established for a decision: nah's effect graph as a neutral
+//! JSON value, which `facts.rs` maps onto `Facts` for the judge and the
+//! permission rules.
 //!
 //! nah's guard evidence is a typed effect graph (calls, resources, facts,
 //! dataflow). The judge needs what it says, not its plumbing: the commands

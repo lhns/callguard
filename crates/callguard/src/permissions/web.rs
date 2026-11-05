@@ -1,7 +1,7 @@
 //! `WebFetch(domain:...)` and `mcp__server__tool` rules.
 //!
-//! There is no `url` crate in the lock file without nah, so hosts are read by
-//! two small functions instead: [`strict_host`] for allow accepts only the
+//! A URL parser may read a host differently from the client that fetches, so
+//! hosts are read by two small functions instead: [`strict_host`] for allow accepts only the
 //! plain `scheme://host[:port]/...` shape and refuses everything odd, and
 //! [`candidate_hosts`] for deny and ask returns every host the text could
 //! mean, so a trick (`https://evil.com\@example.com`) cannot hide the real one.

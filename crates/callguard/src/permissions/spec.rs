@@ -394,7 +394,8 @@ pub(super) fn strip_git_globals(argv: &[String], caseless: bool) -> Option<Vec<S
     })
 }
 
-/// Steps one deny or ask match may take before it counts as a match.
+/// Steps one match may take. A deny or ask match that runs out counts as a
+/// match, an allow match as none.
 pub(super) const WORK_LIMIT: usize = 200_000;
 
 /// Deny and ask on one nah call with known argv: the rule matches the

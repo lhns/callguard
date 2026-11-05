@@ -10,8 +10,7 @@ license = "Apache-2.0"
 repository = "https://github.com/lhns/callguard"
 publish = false
 
-# Every dependency any phase-1 module needs is pinned here, so porting workers
-# never edit a Cargo.toml or Cargo.lock.
+# Dependencies are pinned once here; the crates take them with `workspace = true`.
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 # No preserve_order: without it a serde_json Value keeps object keys sorted, as
@@ -26,7 +25,8 @@ time = { version = "0.3", features = ["formatting"] }
 getrandom = "0.3"
 tempfile = "3"
 # nah is publish = false, so a git pin: our fork, which is nah v1.7.0 plus
-# decide_with_budget (the fork carries the patch). Only callguard-nah depends on it.
+# decide_with_budget and num-bigint in place of the LGPL malachite crates.
+# Only callguard-nah depends on it.
 nah-cli = { git = "https://github.com/lhns/nah", rev = "d9b6963a148912b655c533890ad34a5a5e85bbe3" }
 nah-proto = { git = "https://github.com/lhns/nah", rev = "d9b6963a148912b655c533890ad34a5a5e85bbe3" }
 nah-observe = { git = "https://github.com/lhns/nah", rev = "d9b6963a148912b655c533890ad34a5a5e85bbe3" }

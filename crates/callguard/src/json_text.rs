@@ -1,6 +1,6 @@
-//! JSON text with no whitespace outside strings, as the policy hash and the logs
-//! have always had it: (raw values are compacted) and `<`, `>`, `&`, U+2028 and
-//! U+2029 escaped inside strings.
+//! JSON text with no whitespace outside strings and `<`, `>`, `&`, U+2028 and
+//! U+2029 escaped inside them. The policy hash and the logs are pinned to this
+//! form, and raw values are compacted to it too.
 //!
 //! The escaping is a safety property of the judge prompt: no value can contain
 //! a literal `</transcript>` or start a line with markup. serde_json writes
@@ -8,23 +8,23 @@
 
 use serde::Serialize;
 
-/// `json.Compact`: drops whitespace outside strings. `s` must be valid JSON.
+/// Drops whitespace outside strings. `s` must be valid JSON.
 pub fn compact(s: &str) -> String {
     rewrite(s, true, false)
 }
 
-/// Compacts and HTML-escapes valid JSON text, as `json.Marshal` does for its
-/// output (raw messages included).
+/// Compacts valid JSON text and escapes its strings (the form of [`to_string`],
+/// raw values included).
 pub fn escape(s: &str) -> String {
     rewrite(s, true, true)
 }
 
-/// `json.Marshal(v)`.
+/// `v` as compact, escaped JSON.
 pub fn to_string<T: Serialize + ?Sized>(v: &T) -> Result<String, serde_json::Error> {
     serde_json::to_string(v).map(|s| escape(&s))
 }
 
-/// `json.MarshalIndent(v, "", "  ")`.
+/// `v` as JSON indented by two spaces, escaped.
 pub fn to_string_indent<T: Serialize + ?Sized>(v: &T) -> Result<String, serde_json::Error> {
     serde_json::to_string_pretty(v).map(|s| rewrite(&s, false, true))
 }

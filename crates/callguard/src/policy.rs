@@ -229,7 +229,8 @@ pub struct Nah {
     )]
     pub mode: String,
     /// nah's own analysis budget. Default 2000, kept by the load run
-    /// (docs/rust-phase0.md); it must not exceed `timeout_ms`, the hard kill.
+    /// (`git show 145fe3e:docs/rust-phase0.md`); it must not exceed
+    /// `timeout_ms`, the hard kill.
     #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
     pub budget_ms: i64,
     /// Shipped nah guards by name: `true` turns a default-off guard on. Every
@@ -808,7 +809,8 @@ pub fn unknown_keys(data: &[u8]) -> Vec<String> {
     out
 }
 
-/// A string in double quotes, escaped as the messages have always shown it.
+/// A string in double quotes with C-style escapes, for messages: one stable
+/// spelling that shows control characters.
 pub(crate) fn quote_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -1264,7 +1266,7 @@ pub const DEFAULT_DEADLINE_MS: i64 = 11_000;
 /// The hard deadline for the nah process (see [`Nah::timeout_ms`]).
 pub const DEFAULT_NAH_TIMEOUT_MS: i64 = 10_000;
 
-/// nah's analysis budget (kept by the load run, docs/rust-phase0.md).
+/// nah's analysis budget (kept by the load run, `git show 145fe3e:docs/rust-phase0.md`).
 pub const DEFAULT_NAH_BUDGET_MS: i64 = 2_000;
 
 /// The confidence the judge needs for an allow to stand.

@@ -215,14 +215,11 @@ mod tests {
         assert_eq!(run_cmd(&req, &["--policy"]).0, 64);
     }
 
-    // The cases below load the policy and run the pipeline, which the other
-    // chunk (policy, rules, engine) ports.
-
     #[test]
     fn decide_exit_codes() {
         let dir = tempfile::tempdir().unwrap();
         // LLM off so that nothing needs a backend; nah off because the test binary
-        // is no nah child, and a failing nah now allows nothing.
+        // is no nah child (a failing nah allows nothing).
         let pol = write_file(
             dir.path(),
             "sys.json",

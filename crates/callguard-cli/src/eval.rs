@@ -200,7 +200,7 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
 /// Resolves --backend: fake / fake:<mode> and anthropic / anthropic:<model>
 /// need no policy entry, any other name is looked up in the policy's backends.
 /// With no --backend it is the policy's llm backend, if that can be built
-/// (otherwise the engine reports the problem per case, as before). The second
+/// (otherwise the engine reports the problem per case). The second
 /// value is the API key variable an anthropic backend needs, "" otherwise.
 fn choose_backend(
     name: &str,

@@ -46,8 +46,9 @@ jobs:
         with:
           shared-key: test
       # Release mode: the nah tests need nah's analysis to run at release speed.
-      # The four skipped tests walk the file system root or run nah's wall-clock
-      # budget to its limit; slow.yml runs them (see nah_child.rs).
+      # The five skipped tests walk the file system root, run nah's wall-clock
+      # budget to its limit, or replay the rule table and nah's corpus; slow.yml
+      # runs them (see nah_child.rs).
       - name: Test
         run: >
           cargo test --release --workspace --features callguard-cli/test-engines
