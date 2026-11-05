@@ -853,8 +853,16 @@ impl Backend for ExecBackend {
         std::thread::spawn(move || {
             let _ = stdin.write_all(stdin_json.as_bytes());
         });
-        let out = std::thread::spawn(move || read_limited(stdout, MAX_EXEC_OUTPUT));
-        let err = std::thread::spawn(move || read_limited(stderr, 2048));
+        // Read on threads that report by channel: a grandchild holding a pipe
+        // open must not hold us past the deadline.
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+        let (err_tx, err_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = out_tx.send(read_limited(stdout, MAX_EXEC_OUTPUT));
+        });
+        std::thread::spawn(move || {
+            let _ = err_tx.send(read_limited(stderr, 2048));
+        });
         let status = loop {
             match child.try_wait() {
                 Ok(Some(st)) => break st,
@@ -870,8 +878,13 @@ impl Backend for ExecBackend {
             }
             std::thread::sleep(Duration::from_millis(2));
         };
-        let (stdout, overflow) = out.join().unwrap_or_default();
-        let (stderr, _) = err.join().unwrap_or_default();
+        let wait = deadline.saturating_duration_since(Instant::now());
+        let (stdout, overflow) = out_rx
+            .recv_timeout(wait)
+            .map_err(|_| BackendError::Timeout)?;
+        let (stderr, _) = err_rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or_default();
         if !status.success() {
             let code = status
                 .code()
@@ -1942,6 +1955,17 @@ mod tests {
                 "{mode}: err = {err}, want {want:?}"
             );
         }
+        // A grandchild that keeps the pipes open does not outlast the deadline.
+        let start = Instant::now();
+        let err = exec_for("leak")
+            .classify(&test_req(), Instant::now() + Duration::from_millis(500))
+            .unwrap_err();
+        assert_eq!(err, BackendError::Timeout);
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            start.elapsed()
+        );
         let start = Instant::now();
         let err = exec_for("hang")
             .classify(&test_req(), Instant::now() + Duration::from_millis(300))

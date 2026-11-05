@@ -35,6 +35,12 @@ fn main() {
         "array" => print!(r#"["ask",0.8,"x","y"]"#),
         "big" => print!("{}", "a".repeat(70 << 10)),
         "hang" => std::thread::sleep(Duration::from_secs(60)),
+        // Exits at once, leaving a child that holds the output pipes for 4 s.
+        "leak" => {
+            let me = std::env::current_exe().expect("own path");
+            let _ = std::process::Command::new(me).arg("linger").spawn();
+        }
+        "linger" => std::thread::sleep(Duration::from_secs(4)),
         _ => {}
     }
     let _ = std::io::stdout().flush();
