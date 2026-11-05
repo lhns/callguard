@@ -195,31 +195,18 @@ fn format_duration(ms: u64) -> String {
     }
 }
 
-/// RFC 3339 with nanoseconds, in UTC.
+/// RFC 3339 in UTC, with the fraction only when it is not zero.
 fn rfc3339_nano(t: SystemTime) -> String {
     let nanos = t
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos() as i128);
-    let Ok(dt) = time::OffsetDateTime::from_unix_timestamp_nanos(nanos) else {
-        return String::new();
-    };
-    let mut s = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        dt.year(),
-        dt.month() as u8,
-        dt.day(),
-        dt.hour(),
-        dt.minute(),
-        dt.second()
-    );
-    let frac = format!("{:09}", dt.nanosecond());
-    let frac = frac.trim_end_matches('0');
-    if !frac.is_empty() {
-        s.push('.');
-        s.push_str(frac);
-    }
-    s.push('Z');
-    s
+    time::OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .ok()
+        .and_then(|dt| {
+            dt.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
+        .unwrap_or_default()
 }
 
 impl Engine {
