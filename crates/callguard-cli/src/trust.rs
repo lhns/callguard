@@ -5,7 +5,7 @@
 //! nothing and run anywhere.
 
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use callguard::engine;
 use callguard::permissions;
@@ -95,9 +95,13 @@ fn project_dir(given: &str) -> String {
     trust::canonical(&resolved)
 }
 
-/// The project layer's allow rules, or None if it has no readable policy file.
+fn project_policy(project: &str) -> PathBuf {
+    Path::new(project).join(".callguard").join("policy.json")
+}
+
+/// The project layer's allow rules, or why its policy file cannot be read.
 fn project_allow(project: &str) -> Result<Vec<String>, String> {
-    let path = Path::new(project).join(".callguard").join("policy.json");
+    let path = project_policy(project);
     match policy::read_file(&path.to_string_lossy(), policy::LAYER_PROJECT) {
         Ok(f) => Ok(f.policy.permissions.allow),
         Err(e) => Err(e.to_string()),
@@ -139,7 +143,15 @@ pub fn flow(
             }
         };
     }
-    let allow = project_allow(&project).unwrap_or_default();
+    let allow = match project_allow(&project) {
+        Ok(allow) => allow,
+        // No policy file, no rules.
+        Err(_) if !project_policy(&project).exists() => Vec::new(),
+        Err(e) => {
+            let _ = writeln!(err, "callguard trust: the project's policy: {e}");
+            return 1;
+        }
+    };
     let _ = writeln!(
         out,
         "project: {}",
@@ -323,6 +335,24 @@ mod tests {
         assert_eq!(code, 0);
         assert!(out.contains("nothing to trust"), "{out}");
         assert!(!record(&o).exists());
+    }
+
+    #[test]
+    fn an_unreadable_project_policy_is_an_error_not_nothing_to_trust() {
+        let (_d, o) = setup(&["Bash(git log *)"]);
+        std::fs::write(project_policy(&o.project), "{ not json").unwrap();
+        let (code, out, err) = go(
+            &o, true, "y
+",
+        );
+        assert_eq!(code, 1);
+        assert!(!out.contains("nothing to trust"), "{out}");
+        assert!(err.contains("policy"), "{err}");
+        assert!(!record(&o).exists());
+        // No file at all is still nothing to trust.
+        std::fs::remove_file(project_policy(&o.project)).unwrap();
+        let (code, out, _) = go(&o, false, "");
+        assert!(code == 0 && out.contains("nothing to trust"), "{out}");
     }
 
     #[test]
