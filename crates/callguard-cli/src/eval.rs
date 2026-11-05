@@ -246,7 +246,7 @@ fn choose_backend(
         Err(e) if explicit => return Err(e.to_string()),
         Err(_) => return Ok((None, String::new())),
     };
-    let key_env = if cfg.r#type == "anthropic" {
+    let key_env = if cfg.r#type == "anthropic" && cfg.api_key.is_empty() {
         if cfg.api_key_env.is_empty() {
             "ANTHROPIC_API_KEY".to_owned()
         } else {

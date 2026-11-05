@@ -315,6 +315,10 @@ pub struct Backend {
         deserialize_with = "nullable"
     )]
     pub api_key_env: String,
+    /// The key itself, used before `api_key_env`. Shown as `(set)` wherever the
+    /// policy is printed or hashed.
+    #[serde(skip_serializing_if = "Secret::is_empty")]
+    pub api_key: Secret,
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
     pub command: Vec<String>,
     #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
@@ -329,6 +333,52 @@ pub struct Backend {
         deserialize_with = "nullable"
     )]
     pub fake_mode: String,
+}
+
+/// A credential. Debug and Serialize show `(set)`, never the value, so the
+/// policy can be printed, hashed and logged; only [`Secret::expose`] reads it.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Secret {
+        Secret(value.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "(unset)"
+        } else {
+            "(set)"
+        })
+    }
+}
+
+impl Serialize for Secret {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str("(set)")
+    }
+}
+
+impl<'de> Deserialize<'de> for Secret {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Secret, D::Error> {
+        // The default message for a wrong type would quote the value.
+        match Option::<Value>::deserialize(d)? {
+            None | Some(Value::Null) => Ok(Secret::default()),
+            Some(Value::String(s)) => Ok(Secret(s)),
+            Some(_) => Err(serde::de::Error::custom("api_key must be a string")),
+        }
+    }
 }
 
 /// Mirrors auto mode's 3-in-a-row / 20-total fallback.

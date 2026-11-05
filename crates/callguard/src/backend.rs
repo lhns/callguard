@@ -128,6 +128,18 @@ fn max_tokens(cfg: &policy::Backend) -> i64 {
     }
 }
 
+/// The API key: `api_key` if set, else the value of the variable `key_env`
+/// names; empty when neither gives one.
+fn api_key(key: &policy::Secret, key_env: &str) -> String {
+    if !key.is_empty() {
+        return key.expose().to_owned();
+    }
+    if key_env.is_empty() {
+        return String::new();
+    }
+    std::env::var(key_env).unwrap_or_default()
+}
+
 /// The first `n` bytes of `s`, cut on a character boundary.
 fn clip(s: &str, n: usize) -> &str {
     &s[..s.floor_char_boundary(n)]

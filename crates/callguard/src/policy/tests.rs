@@ -1124,3 +1124,69 @@ fn a_project_pair_leaves_the_system_rule_whole() {
         ["Read(.env)", "Read(.env) except Read(!.env)"]
     );
 }
+
+// --- api_key ------------------------------------------------------------------------
+
+const KEY: &str = "sk-ant-SECRET-0123456789";
+
+#[test]
+fn an_api_key_shows_as_set_in_debug_json_and_rev_and_never_changes_the_rev() {
+    let with = |k: &str| {
+        let mut p = default();
+        p.backends.get_mut("anthropic").unwrap().api_key = Secret::new(k);
+        p
+    };
+    let p = with(KEY);
+    assert!(!format!("{p:?}").contains(KEY));
+    assert!(format!("{p:?}").contains("api_key: (set)"), "{p:?}");
+    let json = crate::json_text::to_string(&p).unwrap();
+    assert!(
+        !json.contains(KEY) && json.contains(r#""api_key":"(set)""#),
+        "{json}"
+    );
+    assert_eq!(rev(&p), rev(&with("another key")));
+    // Unset: not in the JSON, and the default rev stays as pinned.
+    let json = crate::json_text::to_string(&default()).unwrap();
+    assert!(!json.contains(r#""api_key":"#), "{json}");
+}
+
+#[test]
+fn an_api_key_must_be_a_string_and_the_error_does_not_quote_it() {
+    let d = tempfile::tempdir().unwrap();
+    let path = write(
+        &d.path().join("p.json"),
+        r#"{"policy_version":1,"backends":{"b":{"type":"openai","api_key":12345678}}}"#,
+    );
+    let e = read_file(&path, LAYER_SYSTEM).unwrap_err().to_string();
+    assert!(
+        e.contains("api_key must be a string") && !e.contains("12345678"),
+        "{e}"
+    );
+    let path = write(
+        &d.path().join("q.json"),
+        &format!(
+            r#"{{"policy_version":1,"backends":{{"b":{{"type":"openai","max_tokens":"{KEY}"}}}}}}"#
+        ),
+    );
+    let e = read_file(&path, LAYER_SYSTEM).unwrap_err().to_string();
+    assert!(e.contains("q.json") && !e.contains(KEY), "{e}");
+}
+
+#[test]
+fn only_the_system_layer_can_set_an_api_key_in_a_policy() {
+    let sys = r#"{"policy_version":1,"backends":{"s":{"type":"openai","base_url":"http://x/v1","api_key":"sys-key"}}}"#;
+    let evil = r#"{"policy_version":1,"backends":{"s":{"type":"openai","base_url":"http://evil/v1","api_key":"evil-key"},"t":{"type":"openai","api_key":"k"}}}"#;
+    let (_d, o) = layers(sys, evil, evil);
+    let l = load(&o).unwrap();
+    assert_eq!(l.policy.backends["s"].api_key.expose(), "sys-key");
+    assert_eq!(l.policy.backends["s"].base_url, "http://x/v1");
+    assert!(!l.policy.backends.contains_key("t"));
+    assert_eq!(
+        l.warnings
+            .iter()
+            .filter(|w| w.contains("backends ignored"))
+            .count(),
+        2
+    );
+    assert!(l.warnings.iter().all(|w| !w.contains("evil-key")));
+}

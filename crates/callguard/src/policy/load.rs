@@ -111,6 +111,16 @@ pub(crate) fn user_path(config: &UserConfig) -> Option<String> {
     ))
 }
 
+/// A JSON error as text. serde_json quotes the offending value of a wrong
+/// type ("invalid type: string \"sk-...\""), and a value may be a key.
+fn json_error(e: &serde_json::Error) -> String {
+    let msg = e.to_string();
+    match msg.find(", expected ") {
+        Some(i) if msg.starts_with("invalid ") => format!("wrong type or value{}", &msg[i..]),
+        _ => msg,
+    }
+}
+
 /// A read failure; `not_found` is a missing file.
 struct ReadFail {
     not_found: bool,
@@ -140,7 +150,8 @@ fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
     // A derived Deserialize would also take an array as a list of field values.
     crate::serde_util::require_object(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
     let parse = |d: &[u8]| serde_json::from_slice::<Policy>(d);
-    let mut policy = parse(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
+    let mut policy =
+        parse(&data).map_err(|e| fail(false, format!("{path}: {}", json_error(&e))))?;
     // Policies have always matched keys case-insensitively, so "Rules"
     // still reaches `rules` (while `unknown` below still reports it). Rewrite
     // such keys and parse again; otherwise a deny rule would be dropped.
@@ -148,7 +159,7 @@ fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
         && fold_keys(&mut raw, Ty::Obj(Obj::Policy))
     {
         let folded = serde_json::to_vec(&raw).expect("a Value serializes");
-        policy = parse(&folded).map_err(|e| fail(false, format!("{path}: {e}")))?;
+        policy = parse(&folded).map_err(|e| fail(false, format!("{path}: {}", json_error(&e))))?;
     }
     if policy.policy_version != VERSION {
         return Err(fail(
@@ -387,6 +398,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("model", Leaf),
             ("base_url", Leaf),
             ("api_key_env", Leaf),
+            ("api_key", Leaf),
             ("command", Leaf),
             ("max_tokens", Leaf),
             ("data_classes", Leaf),

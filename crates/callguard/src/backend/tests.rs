@@ -945,3 +945,66 @@ fn fake_regexes_read_ascii_whitespace_and_boundaries() {
     assert_eq!(ask("git push"), "ask");
     assert_eq!(ask("git\u{a0}push"), "allow");
 }
+
+#[test]
+fn api_key_wins_over_api_key_env_and_is_sent_as_the_provider_expects() {
+    let srv = Server::ok(anthropic_ok_body(""));
+    let b = from_config(&policy::Backend {
+        base_url: srv.url.clone(),
+        api_key: policy::Secret::new("sk-ant-literal"),
+        api_key_env: key_env().into(), // set in every process, and not used
+        ..cfg("anthropic")
+    })
+    .unwrap();
+    b.classify(&test_req(), soon()).unwrap();
+    assert_eq!(
+        srv.only_request().header("x-api-key"),
+        Some("sk-ant-literal")
+    );
+
+    // An empty api_key falls back to the variable.
+    let srv = Server::ok(anthropic_ok_body(""));
+    let b = from_config(&policy::Backend {
+        base_url: srv.url.clone(),
+        api_key: policy::Secret::new(""),
+        api_key_env: key_env().into(),
+        ..cfg("anthropic")
+    })
+    .unwrap();
+    b.classify(&test_req(), soon()).unwrap();
+    assert_eq!(
+        srv.only_request().header("x-api-key"),
+        Some(std::env::var(key_env()).unwrap().as_str())
+    );
+
+    // openai: the key without any variable.
+    let ok = format!(
+        r#"{{"choices":[{{"message":{{"content":{}}}}}]}}"#,
+        json_str(OK_TEXT)
+    );
+    let srv = Server::ok(ok);
+    let b = from_config(&policy::Backend {
+        model: "local".into(),
+        base_url: srv.url.clone(),
+        api_key: policy::Secret::new("x-literal"),
+        ..cfg("openai")
+    })
+    .unwrap();
+    b.classify(&test_req(), soon()).unwrap();
+    assert_eq!(
+        srv.only_request().header("authorization"),
+        Some("Bearer x-literal")
+    );
+}
+
+#[test]
+fn a_missing_key_error_never_shows_a_key() {
+    let b = from_config(&policy::Backend {
+        api_key: policy::Secret::new(""),
+        api_key_env: "CALLGUARD_NO_KEY_SET_ANYWHERE".into(),
+        ..cfg("anthropic")
+    })
+    .unwrap();
+    let err = b.classify(&test_req(), soon()).unwrap_err().to_string();
+    assert!(err.contains("CALLGUARD_NO_KEY_SET_ANYWHERE"), "{err}");
+}

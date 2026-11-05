@@ -10,6 +10,7 @@ pub(super) const ANTHROPIC_DEFAULT_URL: &str = "https://api.anthropic.com";
 pub(super) struct Anthropic {
     model: String,
     base_url: String,
+    key: policy::Secret,
     key_env: String,
     max_tokens: i64,
     classes: Vec<String>,
@@ -28,6 +29,7 @@ impl Anthropic {
         let base_url = or(cfg.base_url.trim_end_matches('/'), ANTHROPIC_DEFAULT_URL);
         Ok(Anthropic {
             model: or(&cfg.model, ANTHROPIC_DEFAULT_MODEL),
+            key: cfg.api_key.clone(),
             key_env: or(&cfg.api_key_env, "ANTHROPIC_API_KEY"),
             max_tokens: max_tokens(cfg),
             classes: cfg.data_classes.clone(),
@@ -136,10 +138,10 @@ impl Backend for Anthropic {
         req: &ClassifyRequest,
         deadline: Instant,
     ) -> Result<ClassifyResult, BackendError> {
-        let key = std::env::var(&self.key_env).unwrap_or_default();
+        let key = api_key(&self.key, &self.key_env);
         if key.is_empty() {
             return Err(other(format!(
-                "anthropic: environment variable {} is not set",
+                "anthropic: no api_key, and environment variable {} is not set",
                 self.key_env
             )));
         }

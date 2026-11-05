@@ -6,6 +6,7 @@ use super::*;
 pub(super) struct OpenAi {
     model: String,
     base_url: String,
+    key: policy::Secret,
     key_env: String,
     max_tokens: i64,
     classes: Vec<String>,
@@ -22,6 +23,7 @@ impl OpenAi {
         let base_url = cfg.base_url.trim_end_matches('/').to_owned();
         Ok(OpenAi {
             model: cfg.model.clone(),
+            key: cfg.api_key.clone(),
             key_env: cfg.api_key_env.clone(),
             max_tokens: max_tokens(cfg),
             classes: cfg.data_classes.clone(),
@@ -124,12 +126,10 @@ impl Backend for OpenAi {
         let body = json_text::to_string(&body).map_err(|e| other(e.to_string()))?;
         let auth;
         let mut headers = vec![("content-type", "application/json")];
-        if !self.key_env.is_empty() {
-            let k = std::env::var(&self.key_env).unwrap_or_default();
-            if !k.is_empty() {
-                auth = format!("Bearer {k}");
-                headers.push(("Authorization", &auth));
-            }
+        let k = api_key(&self.key, &self.key_env);
+        if !k.is_empty() {
+            auth = format!("Bearer {k}");
+            headers.push(("Authorization", &auth));
         }
         let raw = post_json(
             &self.agent,
