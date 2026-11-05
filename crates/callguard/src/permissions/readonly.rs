@@ -658,5 +658,5 @@ pub(crate) fn read_only(
         cwd_inside,
         flagged,
     };
-    shell_gate(env, call, nah, |argv| cx.command(argv).then_some(())).is_some()
+    shell_gate(env, call, nah, false, |argv| cx.command(argv).then_some(())).is_some()
 }

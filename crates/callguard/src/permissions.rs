@@ -449,21 +449,33 @@ impl Permissions {
                 .map(|(e, _)| *e)
         };
         // A rule needs a command to name.
-        let e = shell_gate(&self.env, call, nah, literal)??;
+        let e = shell_gate(&self.env, call, nah, true, literal)??;
         Some(e.text.clone())
     }
 }
 
-/// The gate of every shell allow, by rule or built in: nah's answer and the
-/// independent lexer must agree that the call is nothing but commands `pick`
-/// accepts, with nothing around them (assignments, redirects, expansions) that
-/// argv would hide. `pick` returns what the command stands for (the rule that
-/// names it); the value of the first command nah found comes back, which is
-/// `Some(None)` when nah found none (`echo`, `cd`).
+/// Programs that run the repository's own scripts or build files. For an allow
+/// rule naming one (`Bash(npm test)`), nah's children from inside the script
+/// (`jest`, a recipe's commands, a child it could not spell) are not checked
+/// against the rules: the rule runs the command, as in Claude Code. They are
+/// still nah's to block, and a gap that is not opaque still refuses.
+const SCRIPT_RUNNERS: [&str; 8] = ["npm", "yarn", "pnpm", "bun", "make", "just", "cargo", "go"];
+
+/// The gate of every shell allow, by rule (`rules`) or built in: nah's answer
+/// and the independent lexer must agree that the call is nothing but commands
+/// `pick` accepts, with nothing around them (assignments, redirects,
+/// expansions) that argv would hide. `pick` returns what the command stands
+/// for (the rule that names it); the value of the first command comes back.
+///
+/// Every command the lexer reads must pass `pick`. A nah call that equals one
+/// of them is checked as well (its working directory too). A nah call that
+/// equals none (a script's child) only passes for `rules`, and only when one
+/// of the lexer's commands is a script runner.
 pub(crate) fn shell_gate<T>(
     env: &Env,
     call: &Call,
     nah: Option<&NahResult>,
+    rules: bool,
     pick: impl Fn(&[String]) -> Option<T>,
 ) -> Option<Option<T>> {
     if !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str()) {
@@ -471,70 +483,69 @@ pub(crate) fn shell_gate<T>(
     }
     // A real answer of nah for this call, complete but for code it cannot read.
     let n = nah?;
-    if n.verdict != NahVerdict::Delegate {
+    if n.verdict != NahVerdict::Delegate || !opaque_only(n) || call.cwd.is_empty() {
         return None;
-    }
-    let script_hidden = opaque_only(n)?;
-    if call.cwd.is_empty() {
-        return None;
-    }
-    let want = env.fold(&env.normalize(&call.cwd, ""));
-    let mut first = None;
-    for c in &n.calls {
-        let argv = c.argv.as_ref()?;
-        // The child that stands for a script nah could not find.
-        if argv.is_empty() && script_hidden {
-            continue;
-        }
-        if argv.is_empty() {
-            return None;
-        }
-        let cwd = c.cwd.as_deref().filter(|c| !c.is_empty())?;
-        if env.fold(&env.normalize(cwd, "")) != want {
-            return None;
-        }
-        let t = pick(argv)?;
-        first.get_or_insert(t);
     }
     // The second parser. One spelling of the command only: we cannot know
     // which one the harness runs.
     if call.raw_commands.len() != 1 {
         return None;
     }
-    for seg in lexer::split(&call.raw_commands[0])? {
-        pick(&seg)?;
+    let segs = lexer::split(&call.raw_commands[0])?;
+    let mut first = None;
+    for seg in &segs {
+        let t = pick(seg)?;
+        first.get_or_insert(t);
+    }
+    let runs_scripts = rules && segs.iter().any(|s| SCRIPT_RUNNERS.contains(&s[0].as_str()));
+    let want = env.fold(&env.normalize(&call.cwd, ""));
+    let mut seen = false;
+    for c in &n.calls {
+        match c.argv.as_ref().filter(|a| segs.contains(a)) {
+            Some(argv) => {
+                seen = true;
+                let cwd = c.cwd.as_deref().filter(|c| !c.is_empty())?;
+                if env.fold(&env.normalize(cwd, "")) != want {
+                    return None;
+                }
+                pick(argv)?;
+            }
+            None if runs_scripts => {}
+            None => return None,
+        }
+    }
+    // A rule needs a command of nah's to name.
+    if rules && !seen {
+        return None;
     }
     Some(first)
 }
 
 /// Gaps nah reports for a command that runs code of the repository, which it
-/// cannot read: `npm test`, `pytest`. An allow rule for the exact command may
-/// pass over them, as Claude Code does; a budget that ran out or a construct
-/// nah could not parse reports something else (or no answer at all).
-const OPAQUE_GAPS: [&str; 4] = [
+/// cannot read: `npm test`, `pytest`, `cargo test`, `make`, `go test`. An allow
+/// rule for the exact command may pass over them, as Claude Code does; a
+/// budget that ran out or a construct nah could not parse reports something
+/// else (`Limit execution-limit`, `Unmodeled parse-error`) or no answer at all.
+const OPAQUE_GAPS: [&str; 6] = [
     "Unmodeled unresolved-package-script",
     "Unmodeled unrecoverable-source",
+    "Unmodeled unresolved-build-target",
+    "Unmodeled resource-components-unavailable",
     "Unmodeled Process semantic-fields-unavailable",
     "Unmodeled Filesystem access-semantics-partial",
 ];
 
-/// The gap of a package script nah did not find; only then does it report a
-/// child with an empty argv.
-const SCRIPT_GAP: &str = "Unmodeled unresolved-package-script";
-
-/// Whether nah's answer is complete but for the opaque gaps. None if it is not;
-/// else whether an empty-argv child is the script nah could not find.
-fn opaque_only(n: &NahResult) -> Option<bool> {
-    let gaps = &n.facts.as_ref()?.gaps;
-    if !gaps.iter().all(|g| OPAQUE_GAPS.contains(&g.as_str())) {
-        return None;
-    }
-    match n.coverage.as_str() {
-        "full" => {}
-        "partial" if !gaps.is_empty() => {}
-        _ => return None,
-    }
-    Some(gaps.iter().any(|g| g == SCRIPT_GAP))
+/// Whether nah's answer is complete but for the opaque gaps.
+fn opaque_only(n: &NahResult) -> bool {
+    let Some(f) = n.facts.as_ref() else {
+        return false;
+    };
+    f.gaps.iter().all(|g| OPAQUE_GAPS.contains(&g.as_str()))
+        && match n.coverage.as_str() {
+            "full" => true,
+            "partial" => !f.gaps.is_empty(),
+            _ => false,
+        }
 }
 
 /// Whether nah's parse of `call` leaves something unseen, so that deny and ask

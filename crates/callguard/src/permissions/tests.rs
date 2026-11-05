@@ -617,7 +617,6 @@ fn only_the_opaque_gaps_pass_and_never_a_budget_or_a_parse_failure() {
     for other in [
         "Limit execution-limit",
         "Unmodeled parse-error",
-        "Unmodeled unresolved-build-target",
         "Unmodeled dynamic-source",
         "",
     ] {
@@ -644,25 +643,61 @@ fn only_the_opaque_gaps_pass_and_never_a_budget_or_a_parse_failure() {
 }
 
 #[test]
-fn an_empty_argv_child_needs_the_missing_script_gap() {
-    let a = allow(&["Bash(pytest a)"]);
-    let c = bash("pytest a");
+fn a_script_runners_children_are_nahs_to_judge_and_nobody_elses() {
     let gap = "Unmodeled Filesystem access-semantics-partial";
-    let mut n = opaque_nah(&[&["pytest", "a"]], &[gap]);
-    n.calls.push(NahCall {
-        argv: Some(Vec::new()),
+    let child = |argv: Option<Vec<String>>, cwd: Option<&str>| NahCall {
+        argv,
+        via: "npm".into(),
+        cwd: cwd.map(Into::into),
         ..Default::default()
-    });
-    assert!(denied_by_allow(&a, &c, Some(&n)));
-    // An unknown argv is never the script child.
-    let a = allow(&["Bash(npm test)"]);
-    let mut n = npm_test_nah();
-    n.calls[1].argv = None;
+    };
+    let a = allow(&["Bash(npm test)", "Bash(pytest a)", "Bash(git status)"]);
+    // A runner: an unknown or empty child, or the script's own commands in
+    // another directory, are tolerated.
+    for extra in [
+        child(None, None),
+        child(Some(Vec::new()), None),
+        child(Some(argv(&["jest"])), Some("/w/p/sub")),
+        child(Some(argv(&["eslint", "."])), None),
+    ] {
+        let mut n = opaque_nah(&[&["npm", "test"]], &[gap]);
+        n.calls.push(extra);
+        assert!(a.check(&bash("npm test"), Some(&n)).is_some());
+    }
+    // Not a runner: the same child refuses.
+    let mut n = opaque_nah(&[&["pytest", "a"]], &[gap]);
+    n.calls.push(child(Some(Vec::new()), None));
+    assert!(denied_by_allow(&a, &bash("pytest a"), Some(&n)));
+    let mut n = nah_of(&[&["git", "status"]]);
+    n.calls.push(child(None, None));
+    assert!(denied_by_allow(&a, &bash("git status"), Some(&n)));
+    // The runner must be a command of the call, matched by a rule: `npm test`
+    // does not excuse the child of another command, and a rule that names
+    // only the children cannot stand for the command.
+    let mut n = opaque_nah(&[&["npm", "test"], &["git", "status"]], &[gap]);
+    n.calls.push(child(None, None));
+    assert!(a.check(&bash("npm test && git status"), Some(&n)).is_some());
+    let mut n = opaque_nah(&[&["curl", "x"]], &[gap]);
+    n.calls.push(child(None, None));
+    assert!(denied_by_allow(&a, &bash("npm test; curl x"), Some(&n)));
+    // The child alone is no command of nah's.
+    let mut n = opaque_nah(&[], &[gap]);
+    n.calls.push(child(None, None));
     assert!(denied_by_allow(&a, &bash("npm test"), Some(&n)));
-    // The empty child alone is no command.
-    let mut n = npm_test_nah();
-    n.calls.remove(0);
+    // A block in the script still wins.
+    let mut n = opaque_nah(&[&["npm", "test"]], &[gap]);
+    n.calls.push(child(Some(argv(&["rm", "-rf", "/"])), None));
+    n.verdict = NahVerdict::Block;
     assert!(denied_by_allow(&a, &bash("npm test"), Some(&n)));
+    // The built-in read-only rule has no runners.
+    let mut n = nah_of(&[&["git", "status"], &["npm", "test"]]);
+    n.calls.push(child(None, None));
+    assert!(!readonly::read_only(
+        &env(),
+        &bash("git status && npm test"),
+        Some(&n),
+        &|_| false
+    ));
 }
 
 #[test]
