@@ -133,9 +133,7 @@ pub(crate) fn map(nf: &Value, guards: Vec<String>, coverage: &str) -> Facts {
         let mut target = String::new();
         for r in list(e, "resources") {
             let (name, role) = (text(r, "name"), text(r, "role"));
-            if (role == "target" || role == "repository" || target.is_empty())
-                && (target.is_empty() || role == "target")
-            {
+            if target.is_empty() || role == "target" {
                 target = name.clone();
             }
             match text(r, "kind").as_str() {

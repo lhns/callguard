@@ -25,18 +25,12 @@ pub const CLASSIFY_SCHEMA: &str = "callguard/classify/v1";
 /// One judge question. `system` and `prompt` are the rendered prompt for
 /// generative models; `input` is the same data in structured form for
 /// non-generative plugins. `schema` is the JSON schema the answer must follow.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default)]
 pub struct ClassifyRequest {
-    #[serde(deserialize_with = "nullable")]
     pub system: String,
-    #[serde(deserialize_with = "nullable")]
     pub prompt: String,
-    #[serde(deserialize_with = "nullable")]
     pub labels: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "raw_some")]
     pub schema: Option<Box<RawValue>>,
-    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "raw_some")]
     pub input: Option<Box<RawValue>>,
 }
 

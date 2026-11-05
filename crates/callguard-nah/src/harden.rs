@@ -115,7 +115,13 @@ fn set_memory_limit(bytes: usize) -> Result<(), String> {
         .map_err(|e| format!("memory watchdog did not start: {e}"))
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+/// The BSDs: no limit is set, and `memory_limit_warning` says so.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn set_memory_limit(_bytes: usize) -> Result<(), String> {
+    Err("unsupported".into())
+}
+
+#[cfg(target_os = "linux")]
 #[allow(unsafe_code)]
 fn set_memory_limit(bytes: usize) -> Result<(), String> {
     #[repr(C)]
@@ -126,10 +132,7 @@ fn set_memory_limit(bytes: usize) -> Result<(), String> {
     unsafe extern "C" {
         fn setrlimit(resource: i32, limit: *const Rlimit) -> i32;
     }
-    #[cfg(target_os = "linux")]
     const RLIMIT_AS: i32 = 9;
-    #[cfg(not(target_os = "linux"))]
-    const RLIMIT_AS: i32 = 5; // macOS and the BSDs
     let limit = Rlimit {
         cur: bytes,
         max: bytes,

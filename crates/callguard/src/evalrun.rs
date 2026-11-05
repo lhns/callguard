@@ -33,8 +33,6 @@ pub struct Case {
     #[serde(default, deserialize_with = "nullable")]
     pub request: Request,
     pub expected: Decision,
-    #[serde(default, deserialize_with = "nullable")]
-    pub note: String,
 }
 
 /// A case whose decision differs from the expectation.

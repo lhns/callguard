@@ -11,7 +11,6 @@ fn mk_case(id: &str, bucket: &str, expected: Decision) -> Case {
         id: id.into(),
         bucket: bucket.into(),
         expected,
-        note: String::new(),
         request: Request {
             tool: ToolCall {
                 name: id.into(),

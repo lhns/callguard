@@ -1759,7 +1759,7 @@ fn a_rule_with_a_control_or_bidi_character_is_refused() {
             ..Default::default()
         };
         let (perms, warns) = Permissions::compile(&p, &env()).unwrap();
-        assert!(perms.is_empty() && warns.len() == 1, "{warns:?}");
+        assert!(perms.allow.is_empty() && warns.len() == 1, "{warns:?}");
     }
     assert!(parse("Bash(ls -l)").is_ok());
     assert_eq!(

@@ -515,10 +515,6 @@ impl Permissions {
         self
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
-    }
-
     /// The rule that decides `call`: the first deny, else the first ask, else
     /// an allow. `nah` is nah's result for this very call, if it gave one.
     pub fn check(&self, call: &Call, nah: Option<&NahResult>) -> Option<Hit> {

@@ -91,10 +91,12 @@ pub trait NahEngine: Send + Sync {
 }
 
 /// Always delegates, with coverage "none" and no facts: a stand-in for tests
-/// of this crate, which must not start a nah process. The product never uses it.
+/// of this crate, which must not start a nah process.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DelegatingEngine;
 
+#[cfg(test)]
 impl NahEngine for DelegatingEngine {
     fn decide(&self, _req: &NahRequest) -> Result<NahResult, NahError> {
         Ok(NahResult {

@@ -372,20 +372,8 @@ pub(super) fn strip_git_globals(argv: &[String], caseless: bool) -> Option<Vec<S
         match a {
             "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--config-env"
             | "--super-prefix" | "--attr-source" => i += 2,
-            "--no-pager"
-            | "-p"
-            | "--paginate"
-            | "--bare"
-            | "--no-replace-objects"
-            | "--literal-pathspecs"
-            | "--exec-path" => i += 1,
-            _ if ["--git-dir=", "--work-tree=", "--namespace=", "--exec-path="]
-                .iter()
-                .any(|p| a.starts_with(p)) =>
-            {
-                i += 1;
-            }
-            _ if a.starts_with('-') => i += 1, // an option nobody listed: skip it
+            // Every other option is one token (`--no-pager`, `--git-dir=x`).
+            _ if a.starts_with('-') => i += 1,
             _ => break,
         }
     }

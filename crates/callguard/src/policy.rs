@@ -769,9 +769,8 @@ fn walk_unknown(raw: &Value, ty: Ty, path: &str, out: &mut Vec<String>) {
         Ty::Obj(o) => {
             let Some(m) = raw.as_object() else { return };
             let known = schema_fields(o);
-            let mut keys: Vec<&String> = m.keys().collect();
-            keys.sort(); // serde_json's map is sorted already
-            for k in keys {
+            // serde_json's map is sorted (no preserve_order), so is the output.
+            for k in m.keys() {
                 let p = if path.is_empty() {
                     k.clone()
                 } else {

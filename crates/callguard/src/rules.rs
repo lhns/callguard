@@ -565,7 +565,7 @@ impl Env {
                 let drive = b.len() == 2
                     && b[0].is_ascii_alphabetic()
                     && b[1] == b':'
-                    && (i == 0 || (i > 0 && matches!(segs[i - 1], "?" | ".")));
+                    && (i == 0 || matches!(segs[i - 1], "?" | "."));
                 if drive || matches!(*seg, "" | "." | "..") {
                     return (*seg).to_owned();
                 }
@@ -1343,7 +1343,6 @@ impl Builtin {
             let home = slashed_home.strip_suffix('/').unwrap_or(&slashed_home);
             if !home.is_empty()
                 && env.in_dir(&p, home)
-                && p.len() >= home.len()
                 && let Some(rest) = p.get(home.len()..)
             {
                 folded_extra.push(env.fold(&format!("~{rest}")));

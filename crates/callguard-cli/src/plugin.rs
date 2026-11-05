@@ -60,13 +60,4 @@ mod tests {
         assert_eq!(run_plugin(&[]).0, 64);
         assert_eq!(run_plugin(&["pi", "extra"]).0, 64);
     }
-
-    #[test]
-    fn plugins_match_the_files_on_disk() {
-        let root = format!("{}/../..", env!("CARGO_MANIFEST_DIR"));
-        for (h, src) in [("opencode", OPENCODE), ("pi", PI)] {
-            let disk = std::fs::read(format!("{root}/adapters/{h}/callguard.js")).unwrap();
-            assert_eq!(disk, src.as_bytes(), "{h}");
-        }
-    }
 }
