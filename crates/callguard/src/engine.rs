@@ -633,6 +633,17 @@ impl Inner {
         };
         // Without nah's parse an allow cannot stand; a deny or ask can.
         let verdict = verdict.filter(|(d, _, _)| nah_failure.is_none() || *d != Decision::Allow);
+        // A deletion of something critical needs a human: no allow rule and no
+        // judge can pass it. A deny (nah, a rule) is stricter and went first.
+        // Without nah's parse the fallback would ask too; this names the cause.
+        if !matches!(verdict, Some((Decision::Deny, ..)))
+            && let Some(why) = self.critical_removal(&call, nah_res.as_ref(), &project_dir)
+        {
+            let mut out = decided(Decision::Ask, LAYER_BUILTIN, "rm-critical", &why);
+            out.warnings = warns;
+            out.shadow = shadow;
+            return out;
+        }
         if let Some((decision, rule, reason)) = verdict {
             let mut out = decided(decision, LAYER_RULES, &rule, &reason);
             out.warnings = warns;
@@ -667,6 +678,32 @@ impl Inner {
         out.warnings = warns;
         out.shadow = shadow;
         out
+    }
+
+    /// Why the call deletes something critical (`rm-critical`), if it does:
+    /// from nah's argv and from the raw command text.
+    fn critical_removal(
+        &self,
+        call: &Call,
+        nah_res: Option<&NahResult>,
+        project_dir: &str,
+    ) -> Option<String> {
+        if call.kind != rules::KIND_SHELL
+            || call.command.is_empty()
+            || self.pol.disable_builtin.iter().any(|d| d == "rm-critical")
+        {
+            return None;
+        }
+        let nah: Vec<Vec<String>> = nah_res
+            .into_iter()
+            .flat_map(|r| &r.calls)
+            .filter_map(|c| c.argv.clone())
+            .collect();
+        let commands: Vec<&str> = call.commands().collect();
+        let why = rules::critical_target(&self.env, &call.cwd, project_dir, &nah, &commands)?;
+        Some(format!(
+            "deletes a critical target: {why}; a human should confirm"
+        ))
     }
 
     /// What the judge learns about the parse of the call: the host's facts,

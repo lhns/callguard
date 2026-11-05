@@ -69,6 +69,8 @@ mod call;
 pub use call::*;
 mod builtin;
 pub use builtin::*;
+mod critical;
+pub(crate) use critical::find as critical_target;
 mod set;
 pub use set::*;
 

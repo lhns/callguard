@@ -14,6 +14,7 @@ pub const LAYER_PROJECT: &str = "project";
 /// list them in `disable_builtin`.
 pub(crate) const BUILTIN_IDS: &[&str] = &[
     "rm-root",
+    "rm-critical",
     "disk-wipe",
     "fork-bomb",
     "self-protect-write",

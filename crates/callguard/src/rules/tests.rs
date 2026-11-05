@@ -2519,7 +2519,7 @@ fn builtin_ids_match_policy() {
     }
     assert_eq!(
         policy::BUILTIN_IDS.len(),
-        5,
+        6, // `rm-critical` is checked by the engine, not by `Builtin::check`
         "policy::BUILTIN_IDS has changed; update this test with the new rule"
     );
 }

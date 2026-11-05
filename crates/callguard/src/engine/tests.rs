@@ -1100,9 +1100,10 @@ fn disable_builtin() {
         Options::default(),
         Some(answer("allow", 1.0)),
     );
+    // `rm-critical` still asks about it: it is a separate built-in.
     assert_ne!(
-        e.decide(&bash("rm -rf /")).layer,
-        LAYER_BUILTIN,
+        e.decide(&bash("rm -rf /")).rule,
+        "rm-root",
         "disabled builtin fired"
     );
     let (e, _) = new_test_engine(
@@ -2455,6 +2456,88 @@ fn perm_engine(
         },
         Some(answer("ask", 0.9)),
     )
+}
+
+#[test]
+fn rm_critical_asks_whatever_allows_it_and_never_reaches_the_judge() {
+    let allow_rm: (&[&str], &[&str], &[&str]) = (&[], &[], &["Bash(rm *)"]);
+    // An allow rule and the judge's allow cannot pass it.
+    let (e, via) = perm_engine(
+        allow_rm,
+        NahMode::Delegate,
+        &[&["rm", "-rf", "/usr"]],
+        no_mut,
+    );
+    let got = e.decide(&bash("rm -rf /usr"));
+    assert!(
+        got.decision == Decision::Ask
+            && got.layer == LAYER_BUILTIN
+            && got.rule == "rm-critical"
+            && got.enforced,
+        "{got:?}"
+    );
+    assert_eq!(via.calls(), 0);
+    // Unattended turns the ask into a deny, as for every ask.
+    let got = e.decide(&unattended(bash("rm -rf /usr")));
+    assert!(
+        got.decision == Decision::Deny && got.rule == "rm-critical",
+        "{got:?}"
+    );
+    // An ordinary target is still allowed by the same rule.
+    let (e, via) = perm_engine(
+        allow_rm,
+        NahMode::Delegate,
+        &[&["rm", "-rf", "sub"]],
+        no_mut,
+    );
+    let got = e.decide(&bash("rm -rf sub"));
+    assert!(
+        got.decision == Decision::Allow && got.layer == LAYER_RULES,
+        "{got:?}"
+    );
+    assert_eq!(via.calls(), 0);
+    // A deny rule is stricter and wins.
+    let (e, _) = perm_engine(
+        (&["Bash(rm *)"], &[], &[]),
+        NahMode::Delegate,
+        &[&["rm", "-rf", "/usr"]],
+        no_mut,
+    );
+    let got = e.decide(&bash("rm -rf /usr"));
+    assert!(
+        got.decision == Decision::Deny && got.layer == LAYER_RULES,
+        "{got:?}"
+    );
+    // So is a nah block.
+    let (e, _) = perm_engine(allow_rm, NahMode::Block, &[&["rm", "-rf", "/usr"]], no_mut);
+    assert_eq!(e.decide(&bash("rm -rf /usr")).layer, LAYER_NAH);
+    // rm-root still denies first; the judge is never asked either way.
+    let (e, _) = perm_engine(allow_rm, NahMode::Delegate, &[&["rm", "-rf", "/"]], no_mut);
+    assert_eq!(e.decide(&bash("rm -rf /")).rule, "rm-root");
+    // Found in nah's argv when the text hides it, and with no parse at all.
+    let (e, via) = perm_engine(
+        allow_rm,
+        NahMode::Delegate,
+        &[&["bash", "-c", "rm -rf /usr"], &["rm", "-rf", "/usr"]],
+        no_mut,
+    );
+    assert_eq!(e.decide(&bash("bash -c \"$CMD\"")).rule, "rm-critical");
+    assert_eq!(via.calls(), 0);
+    let (e, via) = nah_engine(NahMode::Fail, |_| {}, Options::default());
+    let got = e.decide(&bash("rm -rf /usr"));
+    assert!(
+        got.decision == Decision::Ask && got.rule == "rm-critical",
+        "{got:?}"
+    );
+    assert_eq!(via.calls(), 0);
+    // `disable_builtin` names it like any other built-in.
+    let (e, _) = perm_engine(
+        allow_rm,
+        NahMode::Delegate,
+        &[&["rm", "-rf", "/usr"]],
+        |p| p.disable_builtin = vec!["rm-critical".into()],
+    );
+    assert_eq!(e.decide(&bash("rm -rf /usr")).decision, Decision::Allow);
 }
 
 #[test]

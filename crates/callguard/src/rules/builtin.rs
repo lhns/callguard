@@ -171,6 +171,73 @@ fn skip_wrapper(toks: &[&str], mut i: usize, valued: &[&str]) -> usize {
     i
 }
 
+/// A deletion command found at a command position.
+pub(super) struct Removal<'a> {
+    pub recursive: bool,
+    pub no_preserve_root: bool,
+    /// The words that are neither options nor Windows switches.
+    pub targets: Vec<&'a str>,
+}
+
+/// The deletion command `toks` runs (`rm`, `rmdir`, `Remove-Item`, ...) after
+/// wrappers such as sudo, timeout or `sh -c` and `VAR=value` prefixes, if it is
+/// one.
+pub(super) fn removal<'a>(toks: &[&'a str]) -> Option<Removal<'a>> {
+    let mut i = 0;
+    while i < toks.len() {
+        let name = prog_name(toks[i], true);
+        if let Some(is_flag) = command_flag(&name) {
+            // The command is the text after the flag; without one, nothing
+            // runs that we can read.
+            let at = toks[i + 1..]
+                .iter()
+                .position(|t| is_flag(&t.to_lowercase()));
+            i = at.map_or(toks.len(), |k| i + k + 2);
+            continue;
+        }
+        if let Some(valued) = wrapper(&name) {
+            i = skip_wrapper(toks, i + 1, valued);
+            continue;
+        }
+        if toks[i].contains('=') {
+            i += 1; // VAR=value prefix
+            continue;
+        }
+        break;
+    }
+    let name = prog_name(toks.get(i)?, true);
+    if !REMOVERS.contains(&name.as_str()) {
+        return None;
+    }
+    let mut out = Removal {
+        recursive: false,
+        no_preserve_root: false,
+        targets: Vec::new(),
+    };
+    for t in &toks[i + 1..] {
+        let lower = t.to_lowercase();
+        // GNU rm takes any unambiguous prefix of a long option.
+        if t.len() > 3 && "--no-preserve-root".starts_with(t) {
+            out.no_preserve_root = true;
+        }
+        if (t.len() > 2 && "--recursive".starts_with(t))
+            || (t.len() > 1 && "-recurse".starts_with(&lower)) // PowerShell accepts -r, -rec, ...
+            || ((name == "rm" || name == "rmdir")
+                && UNIX_FLAGS.is_match(t)
+                && t.contains(['r', 'R']))
+        {
+            out.recursive = true;
+        } else if t.starts_with('-') {
+            // any other option
+        } else if WIN_FLAG.is_match(t) && name != "rm" {
+            out.recursive = out.recursive || lower == "/s";
+        } else {
+            out.targets.push(t);
+        }
+    }
+    Some(out)
+}
+
 /// Whether a shell command recursively deletes a root-like target (`/`, `~`,
 /// `$HOME`, a drive root, `.git`) or passes `--no-preserve-root`, at a command
 /// position: after wrappers such as sudo, timeout or `sh -c`, so text inside
@@ -185,59 +252,13 @@ pub(crate) fn rm_root(command: &str) -> bool {
                 None => vec![t],
             })
             .collect();
-        let mut i = 0;
-        while i < toks.len() {
-            let name = prog_name(toks[i], true);
-            if let Some(is_flag) = command_flag(&name) {
-                // The command is the text after the flag; without one, nothing
-                // runs that we can read.
-                let at = toks[i + 1..]
+        let Some(r) = removal(&toks) else { continue };
+        if r.no_preserve_root
+            || (r.recursive
+                && r.targets
                     .iter()
-                    .position(|t| is_flag(&t.to_lowercase()));
-                i = at.map_or(toks.len(), |k| i + k + 2);
-                continue;
-            }
-            if let Some(valued) = wrapper(&name) {
-                i = skip_wrapper(&toks, i + 1, valued);
-                continue;
-            }
-            if toks[i].contains('=') {
-                i += 1; // VAR=value prefix
-                continue;
-            }
-            break;
-        }
-        if i >= toks.len() {
-            continue;
-        }
-        let name = prog_name(toks[i], true);
-        if !REMOVERS.contains(&name.as_str()) {
-            continue;
-        }
-        let mut recursive = false;
-        let mut targets: Vec<String> = Vec::new();
-        for t in &toks[i + 1..] {
-            let lower = t.to_lowercase();
-            // GNU rm takes any unambiguous prefix of a long option.
-            if t.len() > 3 && "--no-preserve-root".starts_with(t) {
-                return true;
-            }
-            if (t.len() > 2 && "--recursive".starts_with(t))
-                || (t.len() > 1 && "-recurse".starts_with(&lower)) // PowerShell accepts -r, -rec, ...
-                || ((name == "rm" || name == "rmdir")
-                    && UNIX_FLAGS.is_match(t)
-                    && t.contains(['r', 'R']))
-            {
-                recursive = true;
-            } else if t.starts_with('-') {
-                // any other option
-            } else if WIN_FLAG.is_match(t) && name != "rm" {
-                recursive = recursive || lower == "/s";
-            } else {
-                targets.push(path_clean(&t.replace('\\', "/")));
-            }
-        }
-        if recursive && targets.iter().any(|t| RM_DANGER.is_match(t)) {
+                    .any(|t| RM_DANGER.is_match(&path_clean(&t.replace('\\', "/")))))
+        {
             return true;
         }
     }
