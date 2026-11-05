@@ -70,7 +70,7 @@ fn labels_match(pat: &str, host: &str) -> bool {
 /// The host of `url` if it has the plain shape `http(s)://host[:port]/...` and
 /// nothing a parser could read differently: ASCII only, no whitespace,
 /// backslash or user info. None otherwise.
-pub(super) fn strict_host(url: &str) -> Option<String> {
+pub(crate) fn strict_host(url: &str) -> Option<String> {
     if !url.bytes().all(|b| (0x21..0x7f).contains(&b)) || url.contains('\\') {
         return None;
     }
@@ -103,7 +103,7 @@ pub(super) fn strict_host(url: &str) -> Option<String> {
 /// Every host `url` could mean, for deny and ask. Over-approximates: user
 /// info, backslashes, stray whitespace, `scheme:/host` with too few slashes,
 /// percent escapes and Unicode full stops each add candidates.
-pub(super) fn candidate_hosts(url: &str) -> Vec<String> {
+pub(crate) fn candidate_hosts(url: &str) -> Vec<String> {
     let squeezed: String = url
         .chars()
         .filter(|c| !c.is_ascii_whitespace() && !c.is_ascii_control())

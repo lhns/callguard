@@ -55,6 +55,7 @@ pub(crate) use readonly::read_only;
 pub(crate) use spec::prog_name;
 use spec::{Spec, Tok};
 use web::{Domain, Mcp};
+pub(crate) use web::{candidate_hosts, strict_host};
 
 const WEBFETCH_TOOLS: [&str; 3] = ["WebFetch", "webfetch", "web_extract"];
 const WEBSEARCH_TOOLS: [&str; 3] = ["WebSearch", "websearch", "web_search"];

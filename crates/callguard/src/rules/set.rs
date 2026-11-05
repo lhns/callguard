@@ -1,5 +1,6 @@
 use super::*;
 use crate::nah::NahResult;
+use crate::permissions::{candidate_hosts, strict_host};
 
 // --- Policy rules -----------------------------------------------------------
 
@@ -9,6 +10,7 @@ struct Compiled {
     decision: Decision,
     command: Option<Regex>,
     url: Option<Regex>,
+    hosts: Vec<String>,
     fields: BTreeMap<String, Regex>,
     path: Vec<Regex>,
     not_path: Vec<Regex>,
@@ -62,6 +64,27 @@ impl Compiled {
                 })
         {
             return false;
+        }
+        // Like the URL regex: allow needs every URL to be a plain one with a
+        // listed host, deny and ask fire on any host a URL could mean.
+        if !self.hosts.is_empty() {
+            let listed = |h: &str| self.hosts.iter().any(|x| x == h);
+            let hit = |u: &String| {
+                if allow {
+                    strict_host(u).is_some_and(|h| listed(&h))
+                } else {
+                    candidate_hosts(u).iter().any(|h| listed(h))
+                }
+            };
+            if call.urls.is_empty()
+                || if allow {
+                    !call.urls.iter().all(hit)
+                } else {
+                    !call.urls.iter().any(hit)
+                }
+            {
+                return false;
+            }
         }
         for (k, re) in &self.fields {
             if k == "*" {
@@ -147,6 +170,7 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
         decision,
         command: None,
         url: None,
+        hosts: m.host.clone(),
         fields: BTreeMap::new(),
         path: Vec::new(),
         not_path: Vec::new(),
@@ -156,6 +180,20 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
     }
     if !m.url.is_empty() {
         c.url = Some(re(&m.url, "match.url".into())?);
+    }
+    for h in &m.host {
+        let plain = !h.is_empty()
+            && h.split('.').all(|l| {
+                !l.is_empty()
+                    && l.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            });
+        if !plain {
+            return Err(format!(
+                "match.host {}: a host is a lower-case name such as docs.rs",
+                quote_string(h)
+            ));
+        }
     }
     for (k, v) in &m.field {
         c.fields.insert(

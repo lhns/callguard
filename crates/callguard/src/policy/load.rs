@@ -320,6 +320,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("path", Leaf),
             ("not_path", Leaf),
             ("in_project", Leaf),
+            ("host", Leaf),
             ("read_only", Leaf),
             ("context", Leaf),
             ("unattended", Leaf),

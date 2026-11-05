@@ -140,6 +140,11 @@ pub struct Match {
     pub not_path: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_project: Option<bool>,
+    /// The URL's host is one of these (exact, lower case, no wildcard). Allow
+    /// needs every URL of the call to be plain (`https://host/...`); deny and
+    /// ask match any host a trick could mean (`https://host@evil.com/`).
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
+    pub host: Vec<String>,
     /// Whether the shell call is made only of read-only commands on files
     /// inside the project (see `permissions::read_only`). Needs nah's parse.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -166,6 +171,7 @@ impl Match {
             && self.path.is_empty()
             && self.not_path.is_empty()
             && self.in_project.is_none()
+            && self.host.is_empty()
             && self.read_only.is_none()
             && self.context.is_empty()
             && self.unattended.is_none()

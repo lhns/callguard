@@ -152,6 +152,16 @@ pub(crate) fn default_rules() -> Vec<Rule> {
             },
         ),
         rule(
+            "docs-fetch",
+            "allow",
+            "fetching a page of a well-known documentation site needs no review",
+            Match {
+                tool: strings(&["WebFetch", "webfetch", "web_extract"]),
+                host: strings(DOCS_HOSTS),
+                ..Default::default()
+            },
+        ),
+        rule(
             "secret-read",
             "ask",
             "reads a common secret location",
@@ -232,6 +242,46 @@ pub(crate) fn default_rules() -> Vec<Rule> {
         ),
     ]
 }
+
+/// Hosts of the `docs-fetch` rule: documentation of languages, frameworks and
+/// tools, exact names only. None hosts pages that anyone can upload (no code
+/// hosting, pastes, wikis, forums or package registries). Pages of a package's
+/// own docs (docs.rs, pkg.go.dev) are written by its authors, so text aimed at
+/// a classifier in one still reaches `classifier-injection`.
+pub const DOCS_HOSTS: &[&str] = &[
+    "docs.python.org",
+    "docs.rs",
+    "doc.rust-lang.org",
+    "developer.mozilla.org",
+    "go.dev",
+    "pkg.go.dev",
+    "docs.github.com",
+    "nodejs.org",
+    "docs.npmjs.com",
+    "docs.oracle.com",
+    "docs.docker.com",
+    "kubernetes.io",
+    "react.dev",
+    "vuejs.org",
+    "angular.dev",
+    "www.typescriptlang.org",
+    "docs.aws.amazon.com",
+    "www.postgresql.org",
+    "www.sqlite.org",
+    "redis.io",
+    "docs.djangoproject.com",
+    "flask.palletsprojects.com",
+    "fastapi.tiangolo.com",
+    "numpy.org",
+    "pandas.pydata.org",
+    "docs.pytest.org",
+    "git-scm.com",
+    "www.gnu.org",
+    "man7.org",
+    "docs.anthropic.com",
+    "tailwindcss.com",
+    "expressjs.com",
+];
 
 // Command patterns of the default rules (RE2 syntax, compiled with
 // `rules::compile_regex`). Best effort, not a parser.
