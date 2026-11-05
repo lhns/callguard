@@ -1,11 +1,8 @@
 //! `Read(path)` and `Edit(path)` patterns: Claude's anchors, matched on
 //! POSIX-form paths (`/c/Users/x` on Windows), with symlink resolution.
 
-use std::collections::HashSet;
-
+use crate::glob::{self, Dialect};
 use crate::rules::{Env, path_clean};
-
-use super::spec::glob_match;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
@@ -133,11 +130,14 @@ impl PathSpec {
         } else {
             (pat, path.to_owned())
         };
-        let pat: Vec<&str> = pat.split('/').collect();
-        let path: Vec<&str> = path.split('/').collect();
         // Deny and ask read `[...]` as a class or as the letters; allow only as
-        // the letters, so a name like `[id].tsx` works and cannot widen.
-        match_segs(&pat, &path, 0, 0, !allow, &mut HashSet::new())
+        // the letters, so a name like `[id].tsx` works and cannot widen. A
+        // pattern that does not compile counts as a match for deny and ask and
+        // as none for allow.
+        match glob::compile(&pat, Dialect::PathRule { classes: !allow }) {
+            Ok(re) => re.is_match(&path),
+            Err(_) => !allow,
+        }
     }
 }
 
@@ -147,35 +147,6 @@ pub struct Ctx {
     pub cwd: Option<String>,
     pub project: Option<String>,
     pub caseless: bool,
-}
-
-fn match_segs(
-    pat: &[&str],
-    path: &[&str],
-    i: usize,
-    j: usize,
-    classes: bool,
-    failed: &mut HashSet<(usize, usize)>,
-) -> bool {
-    if i == pat.len() {
-        return j == path.len();
-    }
-    if failed.contains(&(i, j)) {
-        return false;
-    }
-    let ok = if pat[i] == "**" {
-        (j..=path.len()).any(|k| match_segs(pat, path, i + 1, k, classes, failed))
-    } else {
-        let seg = pat[i].replace("**", "*");
-        j < path.len()
-            && (glob_match(&seg, path[j], true, false)
-                || (classes && glob_match(&seg, path[j], true, true)))
-            && match_segs(pat, path, i + 1, j + 1, classes, failed)
-    };
-    if !ok {
-        failed.insert((i, j));
-    }
-    ok
 }
 
 /// POSIX form of a normalized (slash, absolute) path: `C:/Users/x` becomes

@@ -1858,3 +1858,16 @@ fn a_path_rule_sees_the_name_windows_reads() {
         assert_eq!(hit(&perms, &c), Some("deny"), "{name}");
     }
 }
+
+#[test]
+fn a_path_pattern_that_does_not_compile_matches_deny_and_ask_and_not_allow() {
+    let spec = PathSpec::parse(&format!("//{}", "?".repeat(500_000))).unwrap();
+    let ctx = Ctx {
+        home: String::new(),
+        cwd: Some("/w".into()),
+        project: Some("/w".into()),
+        caseless: false,
+    };
+    assert!(spec.matches("/x", &ctx, false), "deny and ask fail closed");
+    assert!(!spec.matches("/x", &ctx, true), "allow matches nothing");
+}

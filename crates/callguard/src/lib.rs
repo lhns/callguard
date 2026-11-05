@@ -10,6 +10,7 @@ pub mod evalrun;
 pub mod evals;
 pub mod fallback;
 pub mod gitfilter;
+mod glob;
 pub mod hook;
 pub mod hostmeta;
 pub mod io_util;

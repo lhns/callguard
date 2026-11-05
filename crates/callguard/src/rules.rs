@@ -588,7 +588,7 @@ impl Env {
             .any(|d| root(d) || root(&trim(d)) || homes.contains(&self.fold(&trim(d))))
     }
 
-    /// Compiles a path glob. `*` and `?` stay inside one path segment, `**`
+    /// Compiles a policy path glob (`glob::Dialect::Policy`): `*` and `?` stay inside one path segment, `**`
     /// crosses segments, `**/` also matches nothing and a trailing `/**` also
     /// matches the directory itself. A leading `~/` is expanded. The result
     /// matches normalized (slash, absolute) paths.
@@ -597,59 +597,12 @@ impl Env {
         if !self.home.is_empty() && g.starts_with("~/") {
             g = format!("{}{}", self.slash(&self.home), &g[1..]);
         }
-        // `(?s)`: a file name may hold a newline, which `.` would not cross.
-        let mut b = String::from("(?s)");
-        if self.caseless() {
-            b.push_str("(?i)");
-        }
-        b.push('^');
-        let bytes = g.as_bytes();
-        let mut i = 0;
-        while i < bytes.len() {
-            let c = bytes[i];
-            if c == b'/' && &g[i..] == "/**" {
-                b.push_str("(?:/.*)?");
-                i += 3;
-            } else if c == b'*' && bytes.get(i + 1) == Some(&b'*') {
-                let mut j = i;
-                while j < bytes.len() && bytes[j] == b'*' {
-                    j += 1;
-                }
-                if j < bytes.len() && bytes[j] == b'/' && (i == 0 || bytes[i - 1] == b'/') {
-                    b.push_str("(?:.*/)?");
-                    j += 1;
-                } else {
-                    b.push_str(".*");
-                }
-                i = j;
-            } else if c == b'*' {
-                b.push_str("[^/]*");
-                i += 1;
-            } else if c == b'?' {
-                b.push_str("[^/]");
-                i += 1;
-            } else if c == b'[' {
-                let Some(end) = g[i..].find(']') else {
-                    return Err(RulesError(format!(
-                        "glob {}: unclosed [",
-                        quote_string(glob)
-                    )));
-                };
-                let class = &g[i + 1..i + end];
-                let class = match class.strip_prefix('!') {
-                    Some(rest) => format!("^{rest}"),
-                    None => class.to_owned(),
-                };
-                b.push_str(&format!("[{class}]"));
-                i += end + 1;
-            } else {
-                let ch = g[i..].chars().next().unwrap_or('\u{fffd}');
-                b.push_str(&regex::escape(&ch.to_string()));
-                i += ch.len_utf8();
-            }
-        }
-        b.push('$');
-        compile_regex(&b).map_err(|e| RulesError(format!("glob {}: {e}", quote_string(glob))))
+        crate::glob::compile(
+            &g,
+            crate::glob::Dialect::Policy {
+                caseless: self.caseless(),
+            },
+        )
     }
 }
 

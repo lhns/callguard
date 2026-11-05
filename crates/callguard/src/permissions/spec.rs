@@ -259,84 +259,20 @@ impl Matcher<'_> {
     }
 }
 
-/// `*` matches any run of characters (none included) in one token.
+/// `*` matches any run of characters (none included) in one token; every
+/// other character is a letter. Not a path glob (that is `crate::glob`): this
+/// is for argv tokens and hosts.
 pub(super) fn glob(pat: &str, s: &str) -> bool {
-    glob_match(pat, s, false, false)
-}
-
-/// The ranges of a `[...]` class; a single character is a range of one.
-type Ranges = Vec<(char, char)>;
-
-/// One element of a compiled glob.
-enum Piece {
-    Star,
-    /// `?`: one character.
-    One,
-    /// `[a-c]`, `[!a]`, `[^a]`.
-    Class(Ranges, bool),
-    Lit(char),
-}
-
-/// Reads `[...]` at the start of `p`: its ranges, whether it is negated, and
-/// the characters it spans. None if it is not closed (then `[` is a letter).
-fn class(p: &[char]) -> Option<(Ranges, bool, usize)> {
-    let negated = matches!(p.get(1), Some('!' | '^'));
-    let start = 1 + usize::from(negated);
-    // A `]` right after the opening is a member, as in POSIX.
-    let end = (start + 1..p.len()).find(|&k| p[k] == ']')?;
-    let body = &p[start..end];
-    let mut ranges = Vec::new();
-    let mut k = 0;
-    while k < body.len() {
-        if body.get(k + 1) == Some(&'-') && k + 2 < body.len() {
-            ranges.push((body[k], body[k + 2]));
-            k += 3;
-        } else {
-            ranges.push((body[k], body[k]));
-            k += 1;
-        }
-    }
-    Some((ranges, negated, end + 1))
-}
-
-/// Glob matching on one path segment or token: `*` matches any run of
-/// characters (none included), with `question` a `?` matches one character,
-/// with `classes` a `[...]` matches one character of its set (otherwise `[`
-/// is a letter).
-pub(super) fn glob_match(pat: &str, s: &str, question: bool, classes: bool) -> bool {
     let p: Vec<char> = pat.chars().collect();
-    let mut pieces = Vec::new();
-    let mut k = 0;
-    while k < p.len() {
-        let (piece, len) = match p[k] {
-            '*' => (Piece::Star, 1),
-            '?' if question => (Piece::One, 1),
-            '[' if classes => match class(&p[k..]) {
-                Some((ranges, negated, len)) => (Piece::Class(ranges, negated), len),
-                None => (Piece::Lit('['), 1),
-            },
-            c => (Piece::Lit(c), 1),
-        };
-        pieces.push(piece);
-        k += len;
-    }
     let t: Vec<char> = s.chars().collect();
-    let one = |piece: &Piece, c: char| match piece {
-        Piece::One => true,
-        Piece::Class(ranges, negated) => {
-            ranges.iter().any(|&(lo, hi)| (lo..=hi).contains(&c)) != *negated
-        }
-        Piece::Lit(l) => *l == c,
-        Piece::Star => false,
-    };
     let (mut pi, mut ti) = (0, 0);
     let (mut star, mut mark) = (None, 0);
     while ti < t.len() {
-        if matches!(pieces.get(pi), Some(Piece::Star)) {
+        if p.get(pi) == Some(&'*') {
             star = Some(pi);
             mark = ti;
             pi += 1;
-        } else if pieces.get(pi).is_some_and(|piece| one(piece, t[ti])) {
+        } else if p.get(pi) == Some(&t[ti]) {
             pi += 1;
             ti += 1;
         } else if let Some(sp) = star {
@@ -347,10 +283,10 @@ pub(super) fn glob_match(pat: &str, s: &str, question: bool, classes: bool) -> b
             return false;
         }
     }
-    while matches!(pieces.get(pi), Some(Piece::Star)) {
+    while p.get(pi) == Some(&'*') {
         pi += 1;
     }
-    pi == pieces.len()
+    pi == p.len()
 }
 
 /// The program name of a command word: base name without `.exe`, folded when
