@@ -283,6 +283,63 @@ fn windows_device_and_share_prefixes_name_the_plain_path() {
     );
 }
 
+/// Everyday searches stay free: a content search's `pattern` is text, and a
+/// `{a,b}` that starts nowhere new is still inside the project.
+#[test]
+fn a_search_for_text_or_a_brace_list_stays_in_the_project() {
+    let unix = unix();
+    let st = set(&unix, policy::default_rules());
+    let id = |tool: &str, input: serde_json::Value| {
+        let c = Call::new(at(tool, raw(&input.to_string()), "/w/p", "/w/p"), &unix);
+        st.match_call(&c).map(|r| r.id)
+    };
+    let free = Some("read-in-project");
+    for tool in ["Grep", "grep", "search_files"] {
+        for pat in [
+            "// TODO",
+            "impl Foo {",
+            "/api/users",
+            "a..b",
+            "~/.ssh/x",
+            "C:x",
+        ] {
+            assert_eq!(
+                id(tool, serde_json::json!({ "pattern": pat })).as_deref(),
+                free,
+                "{tool} {pat}"
+            );
+        }
+    }
+    let inside = serde_json::json!({ "pattern": "x", "glob": "*.{ts,tsx}" });
+    assert_eq!(id("Grep", inside).as_deref(), free);
+    assert_eq!(
+        id("Glob", serde_json::json!({ "pattern": "**/*.{ts,tsx}" })).as_deref(),
+        free
+    );
+    // A content search's file filter, a file search and a brace that reaches out
+    // are still read as paths.
+    for (tool, input) in [
+        (
+            "Grep",
+            serde_json::json!({ "pattern": "x", "glob": "/etc/*" }),
+        ),
+        (
+            "Grep",
+            serde_json::json!({ "pattern": "x", "glob": "{a,/etc/*}" }),
+        ),
+        ("Glob", serde_json::json!({ "pattern": "// TODO" })),
+        ("Glob", serde_json::json!({ "pattern": "{a,~/.ssh/*}" })),
+        ("Glob", serde_json::json!({ "pattern": "{a,../../*}" })),
+        ("Glob", serde_json::json!({ "pattern": "{C:/x,a}" })),
+        (
+            "search_files",
+            serde_json::json!({ "pattern": "/etc/*", "target": "files" }),
+        ),
+    ] {
+        assert_ne!(id(tool, input.clone()).as_deref(), free, "{tool} {input}");
+    }
+}
+
 #[test]
 fn a_read_tools_pattern_decides_like_a_path() {
     let unix = unix();

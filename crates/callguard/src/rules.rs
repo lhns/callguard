@@ -249,8 +249,9 @@ pub(crate) fn path_clean(p: &str) -> String {
 }
 
 /// Replaces a lone UTF-16 surrogate escape in a JSON string with `\ufffd`.
-/// `serde_json` accepts such an escape in a raw value but fails when it decodes the string, and the call would then be matched on its
-/// escaped text (where `\n` is not a line break) instead of its content.
+/// `serde_json` accepts such an escape in a raw value but fails when it decodes
+/// the string, and the call would then be matched on its escaped text (where
+/// `\n` is not a line break) instead of its content.
 pub(crate) fn sanitize_surrogates(json: &str) -> std::borrow::Cow<'_, str> {
     if !json.contains("\\u") {
         return json.into();
@@ -720,7 +721,7 @@ pub struct Call {
     /// false.
     pub project_ignored: bool,
     /// A read tool's `pattern` or `glob` can name files outside `path`
-    /// (absolute, `~`, `..`, `{`): no allow rule may match on the path.
+    /// (see [`pattern_escapes`]): no allow rule may match on the path.
     pub pattern_escapes: bool,
     /// Where such patterns start: the directory part of each literal prefix,
     /// as written and resolved, with whether it is in the project. Deny and
@@ -741,13 +742,26 @@ pub(crate) const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "
 /// The fields of a read tool that hold a glob or pattern for files.
 const PATTERN_KEYS: [&str; 2] = ["pattern", "glob"];
 
-/// Whether the glob `v` can reach outside the directory it is searched in.
+/// Whether the glob `v` can reach outside the directory it is searched in. Each
+/// `{a,b}` alternative counts as a start, so `*.{ts,tsx}` stays inside and
+/// `{a,/etc}/*` does not.
 fn pattern_escapes(v: &str) -> bool {
-    let b = v.as_bytes();
-    v.starts_with(['/', '\\', '~'])
-        || v.contains("..")
-        || v.contains('{')
-        || (b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic())
+    v.contains("..")
+        || v.split(['{', ',']).any(|start| {
+            let b = start.as_bytes();
+            start.starts_with(['/', '\\', '~'])
+                || (b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic())
+        })
+}
+
+/// Whether a read tool's `pattern` is a regex over file text, which names no
+/// file. Hermes's `search_files` matches file names when `target` says so.
+fn pattern_is_text(tool: &str, fields: &BTreeMap<String, String>) -> bool {
+    match tool {
+        "Grep" | "grep" => true,
+        "search_files" => !field_values(fields, "target").iter().any(|t| t == "files"),
+        _ => false,
+    }
 }
 
 /// The directory a glob starts in: its literal prefix up to the last slash,
@@ -849,7 +863,11 @@ impl Call {
     /// Reads the `pattern` and `glob` fields of a read tool into
     /// `pattern_escapes` and `pattern_paths`.
     fn add_patterns(&mut self, env: &Env, project: Option<&(String, Option<String>)>) {
+        let text = pattern_is_text(&self.tool, &self.fields);
         for key in PATTERN_KEYS {
+            if text && key == "pattern" {
+                continue;
+            }
             for v in field_values(&self.fields, key) {
                 self.pattern_escapes |= pattern_escapes(&v);
                 let Some(dir) = pattern_dir(env, &v) else {

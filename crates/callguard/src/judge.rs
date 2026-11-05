@@ -120,8 +120,9 @@ pub struct Config {
     pub min_confidence: f64,
 }
 
-/// A validated judge answer. An allow below `min_confidence` is already an ask. `input_cut` is true if the judge
-/// saw the tool input cut short (see [`cap_input`]).
+/// A validated judge answer. An allow below `min_confidence` is already an ask.
+/// `input_cut` is true if the judge saw the tool input cut short (see
+/// [`cap_input`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct JudgeResult {
     pub decision: Decision,
