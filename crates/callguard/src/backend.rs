@@ -173,7 +173,9 @@ fn http_agent_from(
     Ok(ureq::Agent::config_builder()
         .tls_config(tls)
         .proxy(proxy)
-        .redirect_auth_headers(ureq::config::RedirectAuthHeaders::SameHost)
+        // A redirect would carry `x-api-key` along (ureq strips only
+        // `Authorization` and `Cookie`): it is an error, which is the fail-safe.
+        .max_redirects(0)
         .http_status_as_error(false)
         .build()
         .into())
@@ -332,7 +334,6 @@ fn post_json(
         .post(url)
         .config()
         .timeout_global(Some(remaining(deadline)?))
-        .http_status_as_error(false)
         .build();
     for (k, v) in headers {
         req = req.header(*k, *v);
@@ -1418,27 +1419,26 @@ mod tests {
         }
     }
 
+    /// ureq strips only `Authorization` and `Cookie` on a redirect, so a key in
+    /// `x-api-key` would follow it to another host: a redirect is an error.
     #[test]
-    fn a_redirect_keeps_authorization_on_the_same_host_only() {
-        let target = Server::ok("{}".into());
-        let hdr = [("Authorization", "Bearer secret")];
-        // The same host (the port differs, the name does not).
-        let same = Server::redirect(&format!("{}/next", target.url));
-        let agent = http_agent_from(&same.url, &|_| None).unwrap();
-        post_json(&agent, &same.url, &hdr, "{}".into(), soon(), "test").unwrap();
-        let got = target.only_request();
-        assert_eq!(
-            got.header("authorization"),
-            Some("Bearer secret"),
-            "{got:?}"
-        );
-        // Another host name for the same server loses it.
-        let other_target = Server::ok("{}".into());
-        let port = other_target.url.rsplit(':').next().unwrap();
-        let cross = Server::redirect(&format!("http://localhost:{port}/next"));
-        post_json(&agent, &cross.url, &hdr, "{}".into(), soon(), "test").unwrap();
-        let got = other_target.only_request();
-        assert_eq!(got.header("authorization"), None, "{got:?}");
+    fn a_redirect_is_an_error_and_its_target_gets_no_request() {
+        let hdr = [("Authorization", "Bearer secret"), ("x-api-key", "secret")];
+        for (same_host, name) in [(true, "same host"), (false, "another host name")] {
+            let target = Server::ok("{}".into());
+            let location = if same_host {
+                format!("{}/next", target.url)
+            } else {
+                let port = target.url.rsplit(':').next().unwrap();
+                format!("http://localhost:{port}/next")
+            };
+            let from = Server::redirect(&location);
+            let agent = http_agent_from(&from.url, &|_| None).unwrap();
+            let got = post_json(&agent, &from.url, &hdr, "{}".into(), soon(), "test");
+            assert!(got.is_err(), "{name}: {got:?}");
+            assert_eq!(from.requests().len(), 1, "{name}");
+            assert!(target.requests().is_empty(), "{name}: {:?}", target.requests());
+        }
     }
 
     /// A socks5 proxy from the environment is really used: the first byte the
