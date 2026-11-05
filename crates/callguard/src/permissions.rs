@@ -551,7 +551,7 @@ impl Permissions {
             Rule::Fetch { domain } => {
                 WEBFETCH_TOOLS.contains(&call.tool.as_str())
                     && domain.as_ref().is_none_or(|d| {
-                        let urls = urls_of(call);
+                        let urls = &call.urls;
                         urls.is_empty()
                             || urls.iter().any(|u| {
                                 let hosts = web::candidate_hosts(u);
@@ -682,7 +682,7 @@ impl Permissions {
                 }
                 Rule::Fetch { domain: Some(d) } => {
                     WEBFETCH_TOOLS.contains(&call.tool.as_str()) && {
-                        let urls = urls_of(call);
+                        let urls = &call.urls;
                         urls.len() == 1 && web::strict_host(&urls[0]).is_some_and(|h| d.matches(&h))
                     }
                 }
@@ -765,28 +765,6 @@ pub(crate) fn parse_has_hole(call: &Call, nah: Option<&NahResult>) -> bool {
         || n.calls
             .iter()
             .any(|c| c.argv.as_ref().is_none_or(Vec::is_empty))
-}
-
-/// The distinct URLs of a fetch call: the `url` field in any letter case, and
-/// the strings of a `urls` list.
-fn urls_of(call: &Call) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut add = |u: String| {
-        if !u.is_empty() && !out.contains(&u) {
-            out.push(u);
-        }
-    };
-    for (k, v) in &call.fields {
-        let k = k.to_ascii_lowercase();
-        if k != "url" && k != "urls" {
-            continue;
-        }
-        match serde_json::from_str::<Vec<String>>(v) {
-            Ok(list) => list.into_iter().for_each(&mut add),
-            Err(_) => add(v.clone()),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

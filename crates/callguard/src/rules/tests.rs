@@ -312,6 +312,34 @@ fn a_read_tools_pattern_decides_like_a_path() {
 }
 
 #[test]
+fn match_url_sees_a_urls_list_and_every_string_of_it() {
+    let unix = unix();
+    let rule = |decision: &str| Rule {
+        id: "u".into(),
+        decision: decision.into(),
+        r#match: Match {
+            url: r"evil\.com".into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let call = |json: &str| Call::new(input("web_extract", json), &unix);
+    let deny = set(&unix, vec![rule("deny")]);
+    for json in [
+        r#"{"urls":["https://evil.com/"]}"#,
+        r#"{"urls":["https://ok.com/","https://evil.com/",1]}"#,
+        r#"{"url":"https://ok.com/","URLS":["https://evil.com/"]}"#,
+    ] {
+        assert!(deny.match_call(&call(json)).is_some(), "{json}");
+    }
+    assert!(deny.match_call(&call(r#"{"urls":["https://ok.com/",2]}"#)).is_none());
+    // Allow needs every URL to match.
+    let allow = set(&unix, vec![rule("allow")]);
+    assert!(allow.match_call(&call(r#"{"urls":["https://evil.com/a","http://evil.com"]}"#)).is_some());
+    assert!(allow.match_call(&call(r#"{"urls":["https://evil.com/","https://ok.com/"]}"#)).is_none());
+}
+
+#[test]
 fn new_call() {
     let unix = unix();
     let c = Call::new(
@@ -358,7 +386,7 @@ fn new_call() {
         input("WebFetch", r#"{"url":"https://x.test","n":3}"#),
         &unix,
     );
-    assert!(c.url == "https://x.test" && c.fields["n"] == "3", "{c:?}");
+    assert!(c.urls == ["https://x.test"] && c.fields["n"] == "3", "{c:?}");
     // A RawValue cannot hold invalid
     // JSON (a request never carries it), so this is valid JSON that is no object.
     let c = Call::new(input("Bash", r#""not json""#), &unix);
@@ -434,7 +462,7 @@ fn input_keys_in_any_case() {
         assert_eq!(b.check(&c).map(|h| h.id), Some(id.to_owned()), "{name}");
     }
     let c = Call::new(input("WebFetch", r#"{"URL":"https://x.example"}"#), &unix);
-    assert_eq!(c.url, "https://x.example");
+    assert_eq!(c.urls, ["https://x.example"]);
     let c = Call::new(input("Bash", r#"{"command":"ls"}"#), &unix);
     assert_eq!(c.command, "ls");
     let c = Call::new(input("Bash", r#"{"Command":"ls","command":"ls"}"#), &unix);

@@ -898,6 +898,16 @@ fn a_brace_in_a_path_rule_cannot_be_read() {
 }
 
 #[test]
+fn a_mixed_urls_list_still_shows_its_hosts() {
+    let d = deny(&["WebFetch(domain:evil.com)"]);
+    let c = call("web_extract", r#"{"urls":["https://ok.com/","https://evil.com/",1]}"#);
+    assert_eq!(hit(&d, &c), Some("deny"));
+    let a = allow(&["WebFetch(domain:ok.com)"]);
+    let c = call("web_extract", r#"{"urls":["https://ok.com/",1]}"#);
+    assert_eq!(hit(&a, &c), Some("allow"));
+}
+
+#[test]
 fn agents_monitors_and_package_manager_runs_are_never_honoured() {
     for layer in [None, Some("system"), Some("user"), Some("project")] {
         for r in [

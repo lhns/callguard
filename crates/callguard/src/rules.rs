@@ -764,7 +764,9 @@ pub struct Call {
     /// The distinct values of the command field as the host sent them, before
     /// line continuations are joined. Allow rules need exactly one.
     pub raw_commands: Vec<String>,
-    pub url: String,
+    /// The distinct non-empty strings of the `url` field (any letter case) and
+    /// of a `urls` list, in field-name order. Other list entries are ignored.
+    pub urls: Vec<String>,
     /// Normalized absolute path, "" if none.
     pub path: String,
     pub in_project: bool,
@@ -862,6 +864,33 @@ pub(crate) fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<
     values
 }
 
+/// The URLs in the `url` and `urls` fields (see [`Call::urls`]).
+fn urls_of(fields: &BTreeMap<String, String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |u: String| {
+        if !u.is_empty() && !out.contains(&u) {
+            out.push(u);
+        }
+    };
+    for (k, v) in fields {
+        let k = k.to_ascii_lowercase();
+        if k != "url" && k != "urls" {
+            continue;
+        }
+        match serde_json::from_str::<Vec<Value>>(v) {
+            Ok(list) => list
+                .into_iter()
+                .filter_map(|u| match u {
+                    Value::String(s) => Some(s),
+                    _ => None,
+                })
+                .for_each(&mut add),
+            Err(_) => add(v.clone()),
+        }
+    }
+    out
+}
+
 impl Call {
     /// The spellings of the command a shell may read: line continuations
     /// joined with a space, and with nothing if that differs.
@@ -953,10 +982,7 @@ impl Call {
                 c.command_joined = joined;
             }
         }
-        c.url = field_values(&c.fields, "url")
-            .into_iter()
-            .next()
-            .unwrap_or_default();
+        c.urls = urls_of(&c.fields);
         let mut raw_path = PATH_KEYS
             .iter()
             .find_map(|k| field_values(&c.fields, k).into_iter().next())
@@ -1498,8 +1524,14 @@ impl Compiled {
                 return false;
             }
         }
+        // Like the command: deny and ask fire on any URL, allow needs all.
         if let Some(re) = &self.url
-            && (call.url.is_empty() || !re.is_match(&call.url))
+            && (call.urls.is_empty()
+                || if allow {
+                    !call.urls.iter().all(|u| re.is_match(u))
+                } else {
+                    !call.urls.iter().any(|u| re.is_match(u))
+                })
         {
             return false;
         }
