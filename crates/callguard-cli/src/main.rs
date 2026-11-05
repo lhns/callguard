@@ -121,6 +121,10 @@ fn guarded(
     }
 }
 
+/// Exit code of a mistyped verb. In a hook setting (`callguard hok claude`)
+/// Claude treats every code but 2 as "run the tool", so a typo must block.
+const BLOCK: i32 = 2;
+
 fn run(
     args: &[String],
     stdin: &mut dyn io::Read,
@@ -134,8 +138,13 @@ fn run(
         panic!("test panic");
     }
     let Some(verb) = args.first() else {
-        let _ = stderr.write_all(USAGE.as_bytes());
-        return 64;
+        let _ = write!(
+            stderr,
+            "callguard: no command; blocking the call
+
+{USAGE}"
+        );
+        return BLOCK;
     };
     let rest = &args[1..];
     match verb.as_str() {
@@ -156,8 +165,11 @@ fn run(
             0
         }
         other => {
-            let _ = write!(stderr, "callguard: unknown command {other:?}\n\n{USAGE}");
-            64
+            let _ = write!(
+                stderr,
+                "callguard: unknown command {other:?}; blocking the call\n\n{USAGE}"
+            );
+            BLOCK
         }
     }
 }
@@ -246,8 +258,13 @@ mod tests {
                 String::from_utf8(err).unwrap(),
             )
         };
-        assert_eq!(run_args(&[]).0, 64);
-        assert_eq!(run_args(&["frobnicate"]).0, 64);
+        for a in [&[][..], &["frobnicate"], &["hok", "claude"]] {
+            let (code, _, err) = run_args(a);
+            assert!(
+                code == 2 && err.contains("blocking the call"),
+                "{a:?}: {err}"
+            );
+        }
         let (code, out, _) = run_args(&["version"]);
         assert!(code == 0 && out.starts_with("callguard "), "{out}");
         let (code, out, _) = run_args(&["--help"]);

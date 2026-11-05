@@ -43,7 +43,7 @@ All hook commands take the same flags:
 - In `permission_mode: auto` callguard emits nothing on `allow`, so Claude's classifier still runs; `--allow-in-auto` changes that.
 - For `AskUserQuestion` and `ExitPlanMode` an `allow` is also dropped (they need `updatedInput`); `ask` and `deny` still apply.
 - `permission_mode: dontAsk` counts as unattended.
-- Exit codes: the hook exits 0 with a JSON decision, or 2 with the reason on stderr. Claude runs the tool after any other non-zero exit, so callguard never uses one; a usage error in the hook command (unknown harness, bad flag) also exits 2. Keep `onFailure: "block"` so a timeout blocks too.
+- Exit codes: the hook exits 0 with a JSON decision, or 2 with the reason on stderr. Claude runs the tool after any other non-zero exit, so callguard never uses one; a usage error in the hook command (unknown harness, bad flag) or a mistyped verb also exits 2. Keep `onFailure: "block"` so a timeout blocks too.
 
 ### Hermes
 

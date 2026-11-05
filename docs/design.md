@@ -337,7 +337,7 @@ Verdict `callguard/verdict/v1`:
 | opencode 2.x | plugin, `ctx.tool.hook("execute.before")` | return | throw (configurable: `--ask=delegate` returns) | throw | return | shape from docs + nah's adapter; untested `[U]` |
 | pi | extension, `pi.on("tool_call")` | return | `ctx.ui.confirm`, else block | `{block: true, reason}` | return | verified against pi docs; untested `[U]` |
 
-Claude Code details: exit 0 with JSON for every decision. On an internal failure the adapter still prints an ask (or deny when unattended) and exits 0; if it cannot even produce JSON it exits 2. A usage error in the hook command (unknown harness, bad flag) also exits 2. It never exits 1, 3 or 64, which Claude treats as non-blocking. The README's hook snippet sets `timeout` and `onFailure: "block"`. Deny reasons tell the agent not to route around the block and to ask the user.
+Claude Code details: exit 0 with JSON for every decision. On an internal failure the adapter still prints an ask (or deny when unattended) and exits 0; if it cannot even produce JSON it exits 2. A usage error in the hook command (unknown harness, bad flag) or a mistyped verb (`callguard hok claude`) also exits 2. It never exits 1, 3 or 64, which Claude treats as non-blocking. The README's hook snippet sets `timeout` and `onFailure: "block"`. Deny reasons tell the agent not to route around the block and to ask the user.
 
 Two Claude-specific limits on `allow`:
 - Tools that need a user answer (`AskUserQuestion`, `ExitPlanMode`) need `updatedInput` together with `allow` [H]; a bare `allow` is wrong for them. The adapter emits nothing on `allow` for these tools; `ask` and `deny` still apply.
