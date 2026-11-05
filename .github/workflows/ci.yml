@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # rust-toolchain.toml names the version and the components.
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: lint
       - run: cargo fmt --all --check
@@ -42,7 +42,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: test
       # Release mode: the nah tests need nah's analysis to run at release speed.
@@ -51,7 +51,7 @@ jobs:
       # runs them (see nah_child.rs).
       - name: Test
         run: >
-          cargo test --release --workspace --features callguard-cli/test-engines
+          cargo test --release --locked --workspace --features callguard-cli/test-engines
           -- --include-ignored --test-threads=1
           --skip the_five_gap_commands_today
           --skip the_gap_commands_hold_when_wrapped
