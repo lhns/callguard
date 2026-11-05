@@ -17,8 +17,9 @@ fn primary(tool: &str) -> &'static [&'static str] {
 }
 
 /// The parameters a shell, path or WebFetch tool has, where `Bash(git:status)`
-/// and `Read(a:b)` are also ordinary specs. None for every other tool, where
-/// any identifier before the colon is a parameter.
+/// and `Read(a:b)` are also ordinary specs, and the agent tools, where
+/// `plugin:name` is a name. None for every other tool, where any identifier
+/// before the colon is a parameter.
 fn known(tool: &str) -> Option<&'static [&'static str]> {
     Some(match tool {
         "Bash" | "PowerShell" => &["run_in_background", "timeout", "description"],
@@ -29,6 +30,19 @@ fn known(tool: &str) -> Option<&'static [&'static str]> {
         "NotebookEdit" => &["cell_id", "cell_type", "edit_mode"],
         "Write" | "MultiEdit" | "LS" => &[],
         "WebFetch" => &["prompt"],
+        // A plugin agent is `plugin:name`: only these are parameters, so a
+        // deny on `Agent(plug:rev)` still fires.
+        "Agent" | "Task" | "task" => &[
+            "model",
+            "isolation",
+            "description",
+            "run_in_background",
+            "subagent_type",
+            "prompt",
+            "name",
+            "team_name",
+            "mode",
+        ],
         _ => return None,
     })
 }

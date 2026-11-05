@@ -179,10 +179,18 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
         else {
             return Err("only a path rule can have a `!` carve-out".into());
         };
+        // The limits `carve::attach` applies: nothing is carved out of a
+        // rule that blocks a directory whole or is not a bare or ./ pattern,
+        // and a `!` pattern anchored with /, ~/ or // carves nothing.
+        let carvable = spec.anchor == paths::Anchor::Cwd && !carve::blocks_whole(&spec);
         let mut carve = Vec::new();
         for c in carves {
             match parse(c)? {
-                Rule::Negation { write: w, spec } if w == write => carve.push(spec),
+                Rule::Negation { write: w, spec: n } if w == write => {
+                    if carvable && n.anchor == paths::Anchor::Cwd {
+                        carve.push(n);
+                    }
+                }
                 _ => return Err("a carve-out must be a `!` rule of the same tool family".into()),
             }
         }

@@ -3074,10 +3074,33 @@ fn powershell_aliases_also_work_on_a_parsed_call() {
 
 #[test]
 fn only_a_tools_own_primary_field_is_refused() {
-    let d = deny(&["Monitor(command:x)", "Agent(url:y)"]);
+    let d = deny(&["Monitor(command:x)", "Foo(url:y)"]);
     assert_eq!(
         hit(&d, &call("Monitor", r#"{"command":"x"}"#)),
         Some("deny")
     );
-    assert_eq!(hit(&d, &call("Agent", r#"{"url":"y"}"#)), Some("deny"));
+    assert_eq!(hit(&d, &call("Foo", r#"{"url":"y"}"#)), Some("deny"));
+}
+
+#[test]
+fn a_plugin_agent_name_is_a_name_not_a_parameter() {
+    let d = deny(&["Agent(plug:rev)", "Task(plug:rev2)"]);
+    assert_eq!(hit(&d, &agent("Agent", "plug:rev")), Some("deny"));
+    assert_eq!(hit(&d, &agent("Task", "plug:rev2")), Some("deny"));
+    assert!(matches!(parse("Agent(model:opus)"), Ok(Rule::Param { .. })));
+}
+
+#[test]
+fn a_hand_written_carve_obeys_the_same_limits_as_the_list_form() {
+    let d = set(&["Read(secrets/**) except Read(!ok.txt)"], &[], &[]);
+    assert_eq!(hit(&d, &read("/w/p/secrets/ok.txt")), Some("deny"));
+    let d = set(&["Read(~/*.env) except Read(!ok.env)"], &[], &[]);
+    assert!(matches!(
+        parse("Read(~/*.env) except Read(!ok.env)"),
+        Ok(Rule::Path { carve, .. }) if carve.is_empty()
+    ));
+    drop(d);
+    let d = set(&["Read(*.env) except Read(!ok.env)"], &[], &[]);
+    assert_eq!(hit(&d, &read("/w/p/ok.env")), None);
+    assert_eq!(hit(&d, &read("/w/p/x.env")), Some("deny"));
 }

@@ -49,7 +49,7 @@ pub(super) fn split(text: &str) -> Option<(&str, Vec<&str>)> {
 
 /// A directory the rule blocks as a whole: its pattern ends in `/**` (a
 /// trailing `/` is `/**`), or is `**`. A carve-out cannot reopen files in it.
-fn blocks_whole(s: &PathSpec) -> bool {
+pub(super) fn blocks_whole(s: &PathSpec) -> bool {
     s.rest == "**" || s.rest.ends_with("/**")
 }
 
