@@ -47,6 +47,21 @@ pub fn load_options(
     }
 }
 
+/// The values of `--add-dir`, relative ones made absolute from this process's
+/// directory (the request's own `cwd` moves with the agent). An empty one stays
+/// empty, and the engine refuses it with a warning.
+pub fn add_dirs(given: Vec<String>) -> Vec<String> {
+    given
+        .into_iter()
+        .map(|d| {
+            if d.trim().is_empty() {
+                return d;
+            }
+            std::path::absolute(&d).map_or(d, |p| p.to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
 /// Engine options for `decide` and `hook`. `log_path` is the `--log` flag:
 /// "" is the default place, "-" no log. With the `test-engines` feature the
 /// `--test-engine <name>` flag makes the nah child misbehave; the flag is the
@@ -69,4 +84,19 @@ pub fn options(log_path: &str, test_engine: &str) -> Options {
     }
     let _ = test_engine;
     o
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_dirs_become_absolute_and_an_empty_one_stays_for_the_engine_to_refuse() {
+        let got = add_dirs(vec!["rel/x".into(), String::new(), "  ".into()]);
+        assert!(std::path::Path::new(&got[0]).is_absolute(), "{got:?}");
+        assert!(got[0].ends_with("x"));
+        assert_eq!((got[1].as_str(), got[2].as_str()), ("", "  "));
+        let abs = std::env::temp_dir().to_string_lossy().into_owned();
+        assert_eq!(add_dirs(vec![abs.clone()]), [abs]);
+    }
 }

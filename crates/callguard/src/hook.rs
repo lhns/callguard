@@ -41,6 +41,8 @@ pub struct Options {
     pub context_file: String,
     /// Lets the Claude adapter emit allow in permission_mode auto.
     pub allow_in_auto: bool,
+    /// `--add-dir` entries, appended to `req.additional_dirs`.
+    pub additional_dirs: Vec<String>,
 }
 
 /// Reads `input` up to [`MAX_INPUT`].
@@ -117,6 +119,7 @@ fn run_decider(d: Decider, opt: &Options, req: &mut Request) -> Verdict {
     if let Err(e) = apply_context(req, opt) {
         return fallback(Some(req), &format!("context: {e}"));
     }
+    req.additional_dirs.extend(opt.additional_dirs.clone());
     match catch_unwind(AssertUnwindSafe(|| d(req))) {
         Ok(v) => v,
         Err(p) => fallback(

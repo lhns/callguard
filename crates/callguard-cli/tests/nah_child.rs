@@ -915,9 +915,10 @@ impl Sandbox {
     }
 }
 
-/// Whether a permission rule allowed the call.
+/// Whether a permission rule allowed the call (not the built-in rule for
+/// read-only commands, which allows `git status` and `git log` by itself).
 fn allowed_by_rule(v: &Value) -> bool {
-    decision(v) == "allow" && v["layer"] == "rules"
+    decision(v) == "allow" && v["layer"] == "rules" && v["rule"] != "read-only-command"
 }
 
 /// What the `__engine` child makes of a command, for the tests that must not
@@ -986,7 +987,11 @@ fn a_permission_allow_matches_plain_commands_only() {
         let (_, v, _) = sb.decide(&command, &[]);
         eprintln!("{command:?}: {} {} {}", decision(&v), v["layer"], v["rule"]);
         assert!(!allowed_by_rule(&v), "{command:?}: {v}");
-        assert_ne!(decision(&v), "allow", "{command:?}: {v}");
+        // Two read-only commands in a row are allowed by the built-in rule.
+        assert!(
+            decision(&v) != "allow" || v["rule"] == "read-only-command",
+            "{command:?}: {v}"
+        );
     }
     // Two spellings of the command key: the harness may run either.
     let (_, v, _) = sb.decide_input(r#"{"Command":"git status","command":"rm x"}"#, None, &[]);
@@ -1195,6 +1200,7 @@ impl Sandbox {
             &self.trust_record(),
             &callguard::trust::canonical(&self.proj_str()),
             &self.project_allow(),
+            &[],
         )
         .unwrap();
     }

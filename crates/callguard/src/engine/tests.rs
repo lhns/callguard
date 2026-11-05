@@ -2444,6 +2444,7 @@ fn perm_engine(
                 deny: v(perms.0),
                 ask: v(perms.1),
                 allow: v(perms.2),
+                ..Default::default()
             };
             mutate(p);
         }),
@@ -2832,4 +2833,50 @@ fn a_project_that_is_a_root_has_no_in_project_rules_and_says_so() {
         got.rule == "write-in-project" && got.warnings.is_empty(),
         "{got:?}"
     );
+}
+
+#[test]
+fn additional_dirs_of_the_policy_and_the_request_count_as_inside_the_project() {
+    let outside = "/w/lib/a.txt";
+    let (plain, _) = new_test_engine(
+        test_policy(no_mut),
+        Options::default(),
+        Some(answer("ask", 0.9)),
+    );
+    let write = |dirs: &[&str]| {
+        let mut r = call("Edit", &format!(r#"{{"file_path":"{outside}"}}"#));
+        r.additional_dirs = dirs.iter().map(|s| (*s).to_owned()).collect();
+        r
+    };
+    assert_ne!(plain.decide(&write(&[])).rule, "write-in-project");
+    // From the request.
+    let got = plain.decide(&write(&["/w/lib"]));
+    assert!(
+        got.rule == "write-in-project" && got.warnings.is_empty(),
+        "{got:?}"
+    );
+    // A bad entry is named and ignored; a good one next to it still counts.
+    let got = plain.decide(&write(&["", "relative", "/"]));
+    assert_ne!(got.rule, "write-in-project", "{got:?}");
+    for bad in ["\"\"", "\"relative\"", "\"/\""] {
+        assert!(
+            got.warnings
+                .iter()
+                .any(|w| w.starts_with("additional_dirs") && w.contains(bad)),
+            "{bad}: {:?}",
+            got.warnings
+        );
+    }
+    // From the policy; a protected name still blocks the write.
+    let (e, _) = new_test_engine(
+        test_policy(|p| p.permissions.additional_directories = vec!["/w/lib".into()]),
+        Options::default(),
+        Some(answer("ask", 0.9)),
+    );
+    assert_eq!(e.decide(&write(&[])).rule, "write-in-project");
+    let mut r = call("Edit", r#"{"file_path":"/w/lib/.husky/pre-commit"}"#);
+    r.additional_dirs = vec![];
+    assert_ne!(e.decide(&r).rule, "write-in-project");
+    // The directories are in the policy's rev.
+    assert_ne!(e.policy_rev(), plain.policy_rev());
 }

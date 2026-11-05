@@ -334,7 +334,7 @@ impl Env {
 
     /// Whether the normalized directory `dir` (and its real location) is the
     /// user's home or a file system root, so that "inside it" says nothing.
-    pub(super) fn is_broad_dir(&self, dir: &str, real: Option<&str>) -> bool {
+    pub(crate) fn is_broad_dir(&self, dir: &str, real: Option<&str>) -> bool {
         let trim = |p: &str| {
             if p.len() > 1 {
                 p.trim_end_matches('/').to_owned()

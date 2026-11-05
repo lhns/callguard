@@ -20,6 +20,8 @@ Flags:
   --no-user-policy    skip the user policy layer
   --log PATH          decision log path, or - to disable
   --unattended        no human can answer a prompt
+  --add-dir PATH      a directory besides the project that counts as inside it
+                      (repeatable)
 ";
 
 pub fn run(
@@ -34,6 +36,7 @@ pub fn run(
             spec("no-user-policy", Kind::Bool),
             spec("log", Kind::Str),
             spec("unattended", Kind::Bool),
+            spec("add-dir", Kind::List),
             #[cfg(feature = "test-engines")]
             spec("test-engine", Kind::Str),
         ],
@@ -88,6 +91,8 @@ pub fn run(
     if unattended {
         req.unattended = true;
     }
+    req.additional_dirs
+        .extend(engine_child::add_dirs(f.list("add-dir")));
     if req.tool.name.is_empty() {
         return fail(&req, stdout, "request has no tool.name");
     }

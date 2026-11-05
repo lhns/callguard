@@ -1,9 +1,10 @@
 //! Project trust, like Claude's workspace trust: a project's `permissions.allow`
-//! rules count only after the user has seen them and said yes with
-//! `callguard trust`. The record is `<user config dir>/callguard/
-//! trusted-projects.json`, a list of `{project, rules_sha256, at}`; the hash
-//! covers the project directory and the allow list in file order, so a changed
-//! rule, or the same file in another place, is not trusted.
+//! rules and `permissions.additionalDirectories` count only after the user has
+//! seen them and said yes with `callguard trust`. The record is `<user config
+//! dir>/callguard/trusted-projects.json`, a list of `{project, rules_sha256,
+//! at}`; the hash covers the project directory, the allow list in file order
+//! and the directories, so a changed rule, or the same file in another place,
+//! is not trusted.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -66,14 +67,25 @@ fn same_project(a: &str, b: &str) -> bool {
     }
 }
 
-/// SHA-256 over the canonical project and the allow rules in file order.
-pub(crate) fn rules_hash(project: &str, allow: &[String]) -> String {
+/// SHA-256 over the canonical project, the allow rules in file order and the
+/// additional directories. Without directories the input is what it was before
+/// they existed, so earlier trusts stay valid.
+pub(crate) fn rules_hash(project: &str, allow: &[String], dirs: &[String]) -> String {
     let mut h = Sha256::new();
     h.update(b"callguard-trust-v1\n");
     // Length-prefixed, so no rule can borrow from its neighbour.
-    for part in std::iter::once(project).chain(allow.iter().map(String::as_str)) {
+    let put = |h: &mut Sha256, part: &str| {
         h.update((part.len() as u64).to_le_bytes());
         h.update(part.as_bytes());
+    };
+    for p in std::iter::once(project).chain(allow.iter().map(String::as_str)) {
+        put(&mut h, p);
+    }
+    if !dirs.is_empty() {
+        h.update(b"additionalDirectories\n");
+        for d in dirs {
+            put(&mut h, d);
+        }
     }
     hex::encode(h.finalize())
 }
@@ -90,9 +102,9 @@ pub fn load(path: &Path) -> Record {
     }
 }
 
-/// The state of `allow` for the canonical `project` in `entries`.
-pub fn state(entries: &[Entry], project: &str, allow: &[String]) -> State {
-    let want = rules_hash(project, allow);
+/// The state of `allow` and `dirs` for the canonical `project` in `entries`.
+pub fn state(entries: &[Entry], project: &str, allow: &[String], dirs: &[String]) -> State {
+    let want = rules_hash(project, allow, dirs);
     match entries.iter().find(|e| same_project(&e.project, project)) {
         Some(e) if e.rules_sha256 == want => State::Trusted,
         Some(_) => State::Changed,
@@ -128,13 +140,18 @@ fn existing(path: &Path) -> Vec<Entry> {
     }
 }
 
-/// Trusts `allow` for `project` (canonical), replacing an older entry.
-pub fn write_entry(path: &Path, project: &str, allow: &[String]) -> std::io::Result<()> {
+/// Trusts `allow` and `dirs` for `project` (canonical), replacing an older entry.
+pub fn write_entry(
+    path: &Path,
+    project: &str,
+    allow: &[String],
+    dirs: &[String],
+) -> std::io::Result<()> {
     let mut entries = existing(path);
     entries.retain(|e| !same_project(&e.project, project));
     entries.push(Entry {
         project: project.to_owned(),
-        rules_sha256: rules_hash(project, allow),
+        rules_sha256: rules_hash(project, allow, dirs),
         at: now(),
     });
     store(path, &entries)
@@ -152,21 +169,34 @@ pub fn revoke(path: &Path, project: &str) -> std::io::Result<bool> {
     Ok(true)
 }
 
-/// The decision a project's allow rules get at policy load: Err carries the
-/// warning when they are dropped.
+/// What a project asks to have trusted, as the warning names it.
+fn subject(allow: &[String], dirs: &[String]) -> String {
+    let mut parts = Vec::new();
+    if !allow.is_empty() {
+        let rules = if allow.len() == 1 { "rule" } else { "rules" };
+        parts.push(format!("permissions.allow ({} {rules})", allow.len()));
+    }
+    if !dirs.is_empty() {
+        let n = dirs.len();
+        let dir = if n == 1 { "directory" } else { "directories" };
+        parts.push(format!("permissions.additionalDirectories ({n} {dir})"));
+    }
+    format!("project {}", parts.join(" and "))
+}
+
+/// The decision a project's allow rules and additional directories get at
+/// policy load: Err carries the warning when they are dropped.
 pub fn check_for_load(
     user_config_dir: &UserConfig,
     project_dir: &str,
     allow: &[String],
+    dirs: &[String],
 ) -> Result<(), String> {
     let project = canonical(project_dir);
-    let n = allow.len();
-    let rules = if n == 1 { "rule" } else { "rules" };
+    let what = subject(allow, dirs);
     let run = "run `callguard trust` in that project to review and trust them";
     let Some(path) = record_path(user_config_dir) else {
-        return Err(format!(
-            "project permissions.allow ({n} {rules}) ignored: the project is not trusted; {run}"
-        ));
+        return Err(format!("{what} ignored: the project is not trusted; {run}"));
     };
     let mut note = String::new();
     let entries = match load(&path) {
@@ -177,13 +207,13 @@ pub fn check_for_load(
             Vec::new()
         }
     };
-    match state(&entries, &project, allow) {
+    match state(&entries, &project, allow, dirs) {
         State::Trusted => Ok(()),
         State::Changed => Err(format!(
-            "project permissions.allow ({n} {rules}) ignored: the rules changed since they were trusted; {run}"
+            "{what} ignored: the rules changed since they were trusted; {run}"
         )),
         State::Untrusted => Err(format!(
-            "project permissions.allow ({n} {rules}) ignored: the project is not trusted; {run}{note}"
+            "{what} ignored: the project is not trusted; {run}{note}"
         )),
     }
 }

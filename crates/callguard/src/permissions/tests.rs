@@ -49,6 +49,7 @@ fn set(deny: &[&str], ask: &[&str], allow: &[&str]) -> Permissions {
         deny: v(deny),
         ask: v(ask),
         allow: v(allow),
+        ..Default::default()
     };
     let (perms, warns) = Permissions::compile(&p, &env()).unwrap();
     assert!(warns.is_empty(), "{warns:?}");
@@ -1951,6 +1952,7 @@ fn a_rule_with_a_control_or_bidi_character_is_refused() {
                 deny: d,
                 ask: a,
                 allow: vec![],
+                ..Default::default()
             };
             assert!(Permissions::compile(&p, &env()).is_err(), "{r:?}");
             let mut pol = policy::default();

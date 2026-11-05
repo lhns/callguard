@@ -85,11 +85,22 @@ pub struct Permissions {
     pub ask: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
     pub allow: Vec<String>,
+    /// Directories besides the project that count as inside it, in Claude's
+    /// key. Absolute (or `~/...`); the project layer's need `callguard trust`.
+    #[serde(
+        rename = "additionalDirectories",
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "nullable"
+    )]
+    pub additional_directories: Vec<String>,
 }
 
 impl Permissions {
     pub fn is_empty(&self) -> bool {
-        self.deny.is_empty() && self.ask.is_empty() && self.allow.is_empty()
+        self.deny.is_empty()
+            && self.ask.is_empty()
+            && self.allow.is_empty()
+            && self.additional_directories.is_empty()
     }
 }
 

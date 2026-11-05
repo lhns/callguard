@@ -23,6 +23,8 @@ pub struct CallInput {
     pub project_dir: String,
     pub context: BTreeMap<String, String>,
     pub unattended: bool,
+    /// Normalized directories that count as inside the project besides it.
+    pub additional_dirs: Vec<String>,
 }
 
 /// A tool call prepared for matching.
@@ -87,24 +89,29 @@ pub(crate) struct Roots {
 }
 
 impl Roots {
-    /// The roots for `project_dir`, and whether it was left out because it is
-    /// the home directory or a file system root, which say nothing about a
-    /// project.
-    fn new(env: &Env, project_dir: &str, cwd: &str) -> (Roots, bool) {
-        if project_dir.is_empty() {
-            return (Roots::default(), false);
+    /// The roots for `project_dir` and the additional directories, and whether
+    /// the project was left out because it is the home directory or a file
+    /// system root, which say nothing about a project.
+    fn new(env: &Env, project_dir: &str, cwd: &str, additional: &[String]) -> (Roots, bool) {
+        let mut roots = Roots::default();
+        let mut ignored = false;
+        if !project_dir.is_empty() {
+            let dir = env.normalize(project_dir, cwd);
+            let real = env.real(&dir);
+            if env.is_broad_dir(&dir, real.as_deref()) {
+                ignored = true;
+            } else {
+                roots.dirs.push((dir, real));
+            }
         }
-        let dir = env.normalize(project_dir, cwd);
-        let real = env.real(&dir);
-        if env.is_broad_dir(&dir, real.as_deref()) {
-            return (Roots::default(), true);
+        for d in additional {
+            let dir = env.clean_names(&env.normalize(d, ""));
+            let real = env.real(&dir);
+            if !env.is_broad_dir(&dir, real.as_deref()) {
+                roots.dirs.push((dir, real));
+            }
         }
-        (
-            Roots {
-                dirs: vec![(dir, real)],
-            },
-            false,
-        )
+        (roots, ignored)
     }
 
     /// Whether the normalized path `p` is in a root, by its name.
@@ -339,7 +346,8 @@ impl Call {
             c.raw_paths.push(input.cwd.clone()); // Glob, Grep and LS default to the working directory
         }
         let raw_path = c.raw_paths.first().cloned().unwrap_or_default();
-        let (roots, ignored) = Roots::new(env, &input.project_dir, &input.cwd);
+        let (roots, ignored) =
+            Roots::new(env, &input.project_dir, &input.cwd, &input.additional_dirs);
         c.project_ignored = ignored;
         if !raw_path.is_empty() {
             let path = env.clean_names(&env.normalize(&raw_path, &input.cwd));

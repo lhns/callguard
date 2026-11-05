@@ -853,6 +853,7 @@ fn conditions() {
                 project_dir: "/w".into(),
                 context: BTreeMap::from([("trust".to_owned(), "tainted".to_owned())]),
                 unattended: true,
+                ..Default::default()
             },
             &unix,
         );
@@ -3508,4 +3509,92 @@ fn a_host_condition_reads_every_host_for_deny_and_one_for_allow() {
         r.r#match.host = vec![bad.into()];
         assert!(Set::compile(&[r], &unix).is_err(), "{bad:?}");
     }
+}
+
+// --- additional directories ------------------------------------------------
+
+fn with_extra(tool: &str, input: Option<Box<RawValue>>, extra: &[&str]) -> Call {
+    Call::new(
+        CallInput {
+            additional_dirs: extra.iter().map(|s| (*s).to_owned()).collect(),
+            ..at(tool, input, "/w/p", "/w/p")
+        },
+        &unix(),
+    )
+}
+
+#[test]
+fn an_additional_directory_counts_as_inside_the_project_for_reads_and_writes() {
+    let st = set(&unix(), policy::default_rules());
+    let id = |c: &Call| st.match_call(c).map(|m| m.id);
+    let extra = ["/w/lib"];
+    // Without it the file is outside; with it, inside, for both rules.
+    let read = |p: &str, extra: &[&str]| id(&with_extra("Read", file_input(p), extra));
+    let write = |p: &str, extra: &[&str]| id(&with_extra("Edit", file_input(p), extra));
+    assert_eq!(read("/w/lib/a.rs", &[]), None);
+    assert_eq!(read("/w/lib/a.rs", &extra), Some("read-in-project".into()));
+    assert_eq!(write("/w/lib/a.rs", &[]), None);
+    assert_eq!(
+        write("/w/lib/sub/a.rs", &extra),
+        Some("write-in-project".into())
+    );
+    // The directory itself, not a sibling that shares the prefix.
+    assert_eq!(read("/w/lib", &extra), Some("read-in-project".into()));
+    assert_eq!(read("/w/library/a.rs", &extra), None);
+    // The project still works, and `..` does not climb out of the extra directory.
+    assert_eq!(read("/w/p/a.rs", &extra), Some("read-in-project".into()));
+    assert_eq!(read("/w/lib/../other/a.rs", &extra), None);
+    // Protected names block the write there as in the project; secrets still ask.
+    for p in [
+        "/w/lib/.git/config",
+        "/w/lib/.husky/pre-commit",
+        "/w/lib/.bashrc",
+    ] {
+        assert_eq!(write(p, &extra), None, "{p}");
+    }
+    assert_eq!(read("/w/lib/.env", &extra), Some("secret-read".into()));
+    // The pattern of a read tool starts in the extra directory too.
+    let grep = with_extra("Grep", raw(r#"{"pattern":"x","path":"/w/lib"}"#), &extra);
+    assert_eq!(id(&grep), Some("read-in-project".into()));
+}
+
+#[test]
+fn read_only_commands_may_read_an_additional_directory() {
+    let unix = unix();
+    let st = set(&unix, policy::default_rules());
+    let nah = nah_with(&[&["cat", "/w/lib/a.txt"]]);
+    let call = |extra: &[&str]| {
+        Call::new(
+            CallInput {
+                additional_dirs: extra.iter().map(|s| (*s).to_owned()).collect(),
+                ..at("Bash", bash_input("cat /w/lib/a.txt"), "/w/p", "/w/p")
+            },
+            &unix,
+        )
+    };
+    assert_eq!(st.match_with(&call(&[]), Some(&nah)).map(|m| m.id), None);
+    assert_eq!(
+        st.match_with(&call(&["/w/lib"]), Some(&nah)).map(|m| m.id),
+        Some("read-only-command".into())
+    );
+}
+
+#[test]
+fn an_additional_directory_does_not_clear_a_broad_project() {
+    // A project that is the home directory still counts for nothing, but an
+    // additional directory is a real one.
+    let unix = unix();
+    let c = Call::new(
+        CallInput {
+            additional_dirs: vec!["/w/lib".into()],
+            ..at("Read", file_input("/w/lib/a"), "/home/u", "/home/u")
+        },
+        &unix,
+    );
+    assert!(c.project_ignored && c.in_project);
+    let c = Call::new(
+        at("Read", file_input("/home/u/a"), "/home/u", "/home/u"),
+        &unix,
+    );
+    assert!(c.project_ignored && !c.in_project);
 }

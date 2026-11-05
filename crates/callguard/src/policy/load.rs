@@ -196,9 +196,11 @@ fn apply(
     // layer, before the merge (the file itself stays as written).
     let mut layer_policy = f.policy.clone();
     let allow = &f.policy.permissions.allow;
-    // A project's allow rules count only once the user has trusted them.
-    let trusted = if layer == LAYER_PROJECT && !allow.is_empty() {
-        match crate::trust::check_for_load(&o.user_config_dir, &o.project_dir, allow) {
+    let dirs = &f.policy.permissions.additional_directories;
+    // A project's allow rules and additional directories count only once the
+    // user has trusted them.
+    let trusted = if layer == LAYER_PROJECT && !(allow.is_empty() && dirs.is_empty()) {
+        match crate::trust::check_for_load(&o.user_config_dir, &o.project_dir, allow, dirs) {
             Ok(()) => true,
             Err(w) => {
                 out.warnings.push(format!("{path}: {w}"));
@@ -215,6 +217,13 @@ fn apply(
     };
     layer_policy.permissions.allow = kept;
     out.warnings.extend(dropped);
+    let (dirs_kept, dir_warns) = if trusted {
+        permissions::vet_dir_list(&crate::rules::Env::host(), dirs, path)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    layer_policy.permissions.additional_directories = dirs_kept;
+    out.warnings.extend(dir_warns);
     // llm.block goes into the judge's prompt; text written by a repo must not.
     if layer == LAYER_PROJECT
         && let Some(l) = layer_policy.llm.as_mut()
@@ -326,7 +335,12 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("unattended", Leaf),
             ("harness", Leaf),
         ],
-        Obj::Permissions => &[("deny", Leaf), ("ask", Leaf), ("allow", Leaf)],
+        Obj::Permissions => &[
+            ("deny", Leaf),
+            ("ask", Leaf),
+            ("allow", Leaf),
+            ("additionalDirectories", Leaf),
+        ],
         Obj::Nah => &[
             ("enabled", Leaf),
             ("path", Leaf),

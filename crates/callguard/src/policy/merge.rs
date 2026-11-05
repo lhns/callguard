@@ -79,6 +79,7 @@ fn append_permissions(dst: &mut Permissions, src: &Permissions) {
         (&mut dst.deny, &src.deny),
         (&mut dst.ask, &src.ask),
         (&mut dst.allow, &src.allow),
+        (&mut dst.additional_directories, &src.additional_directories),
     ] {
         for r in from {
             if !to.contains(r) {

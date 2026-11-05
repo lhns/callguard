@@ -234,6 +234,52 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
     Ok(rule)
 }
 
+/// Reads an additional directory: absolute (`~/x` is expanded), not the home
+/// directory or a file system root, not on the network. Returns the normalized
+/// path; the error is the reason, for the warning.
+pub(crate) fn vet_dir(env: &Env, text: &str) -> Result<String, String> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Err("it is empty".into());
+    }
+    if t.chars().any(is_hiding) {
+        return Err("it contains a control or bidirectional character".into());
+    }
+    if paths::is_network(env, t) {
+        return Err("it is a network path".into());
+    }
+    let norm = env.clean_names(&env.normalize(t, ""));
+    if env.drive_relative(t) || !env.is_abs(&norm) {
+        return Err("it is a relative path; write an absolute one or start with ~/".into());
+    }
+    if env.is_broad_dir(&norm, env.real(&norm).as_deref()) {
+        return Err("it is the home directory or a file system root".into());
+    }
+    Ok(norm)
+}
+
+/// [`vet_dir`] for callers outside the crate: why the directory would be
+/// ignored.
+pub fn vet_dir_reason(text: &str) -> Result<(), String> {
+    vet_dir(&Env::host(), text).map(|_| ())
+}
+
+/// The additional directories of one policy file that survive [`vet_dir`] (as
+/// written), and a warning for each that does not.
+pub(crate) fn vet_dir_list(env: &Env, dirs: &[String], src: &str) -> (Vec<String>, Vec<String>) {
+    let (mut kept, mut warns) = (Vec::new(), Vec::new());
+    for d in dirs {
+        match vet_dir(env, d) {
+            Ok(_) => kept.push(d.clone()),
+            Err(why) => warns.push(format!(
+                "{src}: permissions.additionalDirectories {} ignored: {why}",
+                quote_string(&escape_unprintable(d))
+            )),
+        }
+    }
+    (kept, warns)
+}
+
 /// [`vet_allow`] for callers outside the crate: why the rule would be dropped.
 pub fn vet_reason(text: &str, layer: Option<&str>) -> Result<(), String> {
     vet_allow(text, layer).map(|_| ())

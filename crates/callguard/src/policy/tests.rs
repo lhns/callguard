@@ -643,7 +643,7 @@ fn a_deny_or_ask_rule_that_cannot_be_read_is_a_problem_of_its_file() {
 fn trust_project(o: &LoadOptions, allow: &[&str]) {
     let rules: Vec<String> = allow.iter().map(|s| (*s).to_owned()).collect();
     let rec = crate::trust::record_path(&o.user_config_dir).unwrap();
-    crate::trust::write_entry(&rec, &crate::trust::canonical(&o.project_dir), &rules).unwrap();
+    crate::trust::write_entry(&rec, &crate::trust::canonical(&o.project_dir), &rules, &[]).unwrap();
 }
 
 const USER_EMPTY: &str = r#"{"policy_version":1}"#;
@@ -855,4 +855,175 @@ fn a_short_nah_timeout_alone_clamps_the_budget() {
         "",
     );
     assert_eq!(load(&o).unwrap().policy.nah.unwrap().budget_ms, 500);
+}
+
+// --- additional directories ------------------------------------------------
+
+/// Trusts the project layer's additional directories, as `callguard trust` would.
+fn trust_dirs(o: &LoadOptions, dirs: &[&str]) {
+    let dirs: Vec<String> = dirs.iter().map(|s| (*s).to_owned()).collect();
+    let rec = crate::trust::record_path(&o.user_config_dir).unwrap();
+    crate::trust::write_entry(&rec, &crate::trust::canonical(&o.project_dir), &[], &dirs).unwrap();
+}
+
+fn dirs_json(dirs: &[&str]) -> String {
+    serde_json::json!({"policy_version": 1, "permissions": {"additionalDirectories": dirs}})
+        .to_string()
+}
+
+/// An absolute directory that is neither the home nor a root.
+fn abs(d: &TempDir, name: &str) -> String {
+    d.path().join(name).to_string_lossy().replace('\\', "/")
+}
+
+#[test]
+fn additional_directories_are_read_in_claudes_key_and_any_letter_case() {
+    let d = tempfile::tempdir().unwrap();
+    let a = abs(&d, "a");
+    let raw =
+        format!(r#"{{"policy_version":1,"permissions":{{"AdditionalDirectories":["{a}"]}}}}"#);
+    assert!(
+        unknown_keys(raw.as_bytes())
+            .iter()
+            .all(|k| k.starts_with("permissions.Add"))
+    );
+    let f = write(&d.path().join("p.json"), &raw);
+    let f = read_file(&f, LAYER_USER).unwrap();
+    assert_eq!(
+        f.policy.permissions.additional_directories,
+        std::slice::from_ref(&a)
+    );
+    // Written back under Claude's spelling, and part of the rev.
+    let mut p = default();
+    let before = rev(&p);
+    p.permissions.additional_directories.push(a);
+    assert_ne!(rev(&p), before);
+    assert!(canonical_json(&p).contains(r#""additionalDirectories":["#));
+    assert!(
+        unknown_keys(br#"{"policy_version":1,"permissions":{"additionalDirectories":[]}}"#)
+            .is_empty()
+    );
+}
+
+#[test]
+fn additional_directories_add_up_across_layers_and_bad_ones_are_dropped_with_a_warning() {
+    let d = tempfile::tempdir().unwrap();
+    let (sys_dir, user_dir) = (abs(&d, "sys"), abs(&d, "user"));
+    let home = crate::policy::home_dir().unwrap_or_default();
+    let mut bad = vec!["", "  ", "relative/dir", "../up", "~", "/"];
+    if !home.is_empty() {
+        bad.push(home.as_str());
+    }
+    if cfg!(windows) {
+        bad.extend(["C:\\", "\\\\host\\share\\x", "C:rel"]);
+    }
+    let mut user_list = vec![user_dir.as_str(), sys_dir.as_str()];
+    user_list.extend(bad.iter().copied());
+    let (_d2, o) = layers(&dirs_json(&[&sys_dir]), &dirs_json(&user_list), "");
+    let l = load(&o).unwrap();
+    // Appended in layer order, a repeat once.
+    assert_eq!(
+        l.policy.permissions.additional_directories,
+        [sys_dir.clone(), user_dir.clone()]
+    );
+    let warns: Vec<&String> = l
+        .warnings
+        .iter()
+        .filter(|w| w.contains("additionalDirectories"))
+        .collect();
+    assert_eq!(warns.len(), bad.len(), "{:?}", l.warnings);
+    assert!(warns.iter().all(|w| w.contains("ignored")), "{warns:?}");
+    // The home directory and a root say why.
+    assert!(
+        warns
+            .iter()
+            .any(|w| w.contains("home directory or a file system root"))
+    );
+    assert!(warns.iter().any(|w| w.contains("relative")));
+    assert!(warns.iter().any(|w| w.contains("empty")));
+}
+
+#[test]
+fn a_tilde_path_below_home_is_expanded_and_a_project_dir_needs_trust() {
+    let d = tempfile::tempdir().unwrap();
+    let a = abs(&d, "a");
+    let (_d2, o) = layers(
+        r#"{"policy_version":1}"#,
+        r#"{"policy_version":1,"permissions":{"additionalDirectories":["~/work"]}}"#,
+        &dirs_json(&[&a]),
+    );
+    let l = load(&o).unwrap();
+    // Untrusted: the project's entry is dropped and the warning says how to trust.
+    let p = &l.policy.permissions;
+    assert_eq!(p.additional_directories, ["~/work"].map(String::from));
+    let w: Vec<&String> = l
+        .warnings
+        .iter()
+        .filter(|w| w.contains("not trusted"))
+        .collect();
+    assert_eq!(w.len(), 1, "{:?}", l.warnings);
+    assert!(
+        w[0].contains("additionalDirectories (1 directory)") && w[0].contains("callguard trust"),
+        "{w:?}"
+    );
+    // Trusted: it joins the list after the user's.
+    trust_dirs(&o, &[&a]);
+    let l = load(&o).unwrap();
+    assert_eq!(
+        l.policy.permissions.additional_directories,
+        ["~/work".to_owned(), a.clone()]
+    );
+    assert!(
+        !l.warnings.iter().any(|w| w.contains("not trusted")),
+        "{:?}",
+        l.warnings
+    );
+    // A changed list is not trusted any more.
+    let b = abs(&d, "b");
+    let proj = std::path::Path::new(&o.project_dir).join(".callguard/policy.json");
+    std::fs::write(proj, dirs_json(&[&a, &b])).unwrap();
+    let l = load(&o).unwrap();
+    assert_eq!(
+        l.policy.permissions.additional_directories,
+        ["~/work".to_owned()]
+    );
+    assert!(
+        l.warnings.iter().any(|w| w.contains("changed since")),
+        "{:?}",
+        l.warnings
+    );
+}
+
+#[test]
+fn allow_rules_and_directories_are_trusted_together() {
+    let d = tempfile::tempdir().unwrap();
+    let a = abs(&d, "a");
+    let proj = serde_json::json!({"policy_version": 1, "permissions": {
+        "allow": ["Bash(git log *)"], "additionalDirectories": [a]}})
+    .to_string();
+    let (_d2, o) = layers(r#"{"policy_version":1}"#, USER_EMPTY, &proj);
+    // Trusting only the rules leaves the directories out, and says so.
+    trust_project(&o, &["Bash(git log *)"]);
+    let l = load(&o).unwrap();
+    assert!(l.policy.permissions.allow.is_empty());
+    assert!(l.policy.permissions.additional_directories.is_empty());
+    assert!(
+        l.warnings
+            .iter()
+            .any(|w| w
+                .contains("allow (1 rule) and permissions.additionalDirectories (1 directory)")),
+        "{:?}",
+        l.warnings
+    );
+    let rec = crate::trust::record_path(&o.user_config_dir).unwrap();
+    crate::trust::write_entry(
+        &rec,
+        &crate::trust::canonical(&o.project_dir),
+        &["Bash(git log *)".to_owned()],
+        std::slice::from_ref(&a),
+    )
+    .unwrap();
+    let l = load(&o).unwrap();
+    assert_eq!(l.policy.permissions.allow, ["Bash(git log *)"]);
+    assert_eq!(l.policy.permissions.additional_directories, [a]);
 }

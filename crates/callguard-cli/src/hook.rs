@@ -23,6 +23,8 @@ Flags:
   --context-file PATH   JSON object of strings merged into the context;
                         must be root-owned, the agent must not be able to write it
   --allow-in-auto       claude only: also emit allow in permission_mode auto
+  --add-dir PATH        a directory besides the project that counts as inside
+                        it (repeatable; not the home directory or a root)
 ";
 
 /// Runs a hook adapter. Usage errors exit 2: Claude and Hermes treat exit 2 as
@@ -57,6 +59,7 @@ pub fn run(
             spec("context", Kind::Pair),
             spec("context-file", Kind::Str),
             spec("allow-in-auto", Kind::Bool),
+            spec("add-dir", Kind::List),
         ],
         &args[1..],
     ) {
@@ -91,6 +94,7 @@ pub fn run(
         context: f.pairs("context").into_iter().collect(),
         context_file: f.str("context-file"),
         allow_in_auto: f.bool("allow-in-auto"),
+        additional_dirs: engine_child::add_dirs(f.list("add-dir")),
     };
     let policy_path = f.opt_str("policy");
     let test_engine = f.str("test-engine");

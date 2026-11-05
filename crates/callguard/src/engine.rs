@@ -99,6 +99,8 @@ struct Inner {
     builtin: Builtin,
     rules: Set,
     perms: Permissions,
+    /// The policy's additional directories, normalized.
+    extra_dirs: Vec<String>,
     /// None when logging is off.
     logger: Option<declog::Logger>,
     nah: Arc<dyn NahEngine>,
@@ -236,6 +238,16 @@ impl Engine {
         let (perms, perm_warnings) = Permissions::compile(&pol.permissions, &env)
             .map_err(|e| EngineError(format!("invalid policy: {e}")))?;
         opts.warnings.extend(perm_warnings);
+        let mut extra_dirs = Vec::new();
+        for d in &pol.permissions.additional_directories {
+            match crate::permissions::vet_dir(&env, d) {
+                Ok(dir) => extra_dirs.push(dir),
+                Err(why) => opts.warnings.push(format!(
+                    "permissions.additionalDirectories {} ignored: {why}",
+                    quote_string(d)
+                )),
+            }
+        }
         let builtin = Builtin::new(env.clone(), &pol.disable_builtin, &opts.protect_paths)
             .map_err(|e| EngineError(e.to_string()))?;
         let probe: Option<ProbeFn> = if opts.no_host_meta {
@@ -264,6 +276,7 @@ impl Engine {
                 builtin,
                 rules: set,
                 perms,
+                extra_dirs,
                 logger,
                 nah,
                 judge: Box::new(|b, cfg, input, deadline| judge::judge(b, cfg, input, deadline)),
@@ -501,6 +514,18 @@ impl Inner {
             return Outcome::fallback(req, "request has no tool name");
         }
         let project_dir = resolve_project_dir(req);
+        let mut warns: Vec<String> = Vec::new();
+        let mut additional_dirs = self.extra_dirs.clone();
+        for d in &req.additional_dirs {
+            match crate::permissions::vet_dir(&self.env, d) {
+                Ok(dir) if !additional_dirs.contains(&dir) => additional_dirs.push(dir),
+                Ok(_) => {}
+                Err(why) => warns.push(format!(
+                    "additional_dirs {} ignored: {why}",
+                    quote_string(d)
+                )),
+            }
+        }
         let call = Call::new(
             CallInput {
                 harness: req.harness.clone(),
@@ -510,13 +535,13 @@ impl Inner {
                 project_dir: project_dir.clone(),
                 context: req.context.clone(),
                 unattended: req.unattended,
+                additional_dirs,
             },
             &self.env,
         );
 
         // A project that is the home directory or a root says nothing about
         // what is "inside the project"; the in-project rules stay quiet.
-        let mut warns: Vec<String> = Vec::new();
         if call.project_ignored && call.path.is_some() {
             warns.push(format!(
                 "project directory {project_dir} is the home directory or a file system root: no path counts as inside the project"
@@ -611,11 +636,16 @@ impl Inner {
         }
 
         // 2 rules: the regex rules and the permission rules, the stricter
-        // decision wins and a regex rule wins a tie.
+        // decision wins and a regex rule wins a tie, except between two
+        // allows, where the user's own permission rule is the one named (a
+        // default allow such as `read-only-command` would hide it).
         let regex_hit = self.rules.match_with(&call, nah_res.as_ref());
         let perm_hit = self.perms.check(&call, nah_res.as_ref());
         let perm_wins = match (&regex_hit, &perm_hit) {
-            (Some(r), Some(p)) => p.decision > r.decision,
+            (Some(r), Some(p)) => {
+                p.decision > r.decision
+                    || (p.decision == Decision::Allow && r.decision == Decision::Allow)
+            }
             (None, Some(_)) => true,
             _ => false,
         };

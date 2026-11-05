@@ -1,4 +1,5 @@
-//! `callguard trust`: review and trust a project's allow rules.
+//! `callguard trust`: review and trust a project's allow rules and additional
+//! directories.
 //!
 //! Granting needs a person: stdin and stdout must both be terminals, there is
 //! no `--yes` and no environment override. `--list` and `--revoke` grant
@@ -93,11 +94,15 @@ fn project_policy(project: &str) -> PathBuf {
     Path::new(project).join(".callguard").join("policy.json")
 }
 
-/// The project layer's allow rules, or why its policy file cannot be read.
-fn project_allow(project: &str) -> Result<Vec<String>, String> {
+/// The project layer's allow rules and additional directories, or why its
+/// policy file cannot be read.
+fn project_covered(project: &str) -> Result<(Vec<String>, Vec<String>), String> {
     let path = project_policy(project);
     match policy::read_file(&path.to_string_lossy(), policy::LAYER_PROJECT) {
-        Ok(f) => Ok(f.policy.permissions.allow),
+        Ok(f) => {
+            let p = f.policy.permissions;
+            Ok((p.allow, p.additional_directories))
+        }
         Err(e) => Err(e.to_string()),
     }
 }
@@ -137,10 +142,10 @@ pub fn flow(
             }
         };
     }
-    let allow = match project_allow(&project) {
-        Ok(allow) => allow,
+    let (allow, dirs) = match project_covered(&project) {
+        Ok(covered) => covered,
         // No policy file, no rules.
-        Err(_) if !project_policy(&project).exists() => Vec::new(),
+        Err(_) if !project_policy(&project).exists() => (Vec::new(), Vec::new()),
         Err(e) => {
             let _ = writeln!(err, "callguard trust: the project's policy: {e}");
             return 1;
@@ -151,10 +156,10 @@ pub fn flow(
         "project: {}",
         permissions::escape_unprintable(&project)
     );
-    if allow.is_empty() {
+    if allow.is_empty() && dirs.is_empty() {
         let _ = writeln!(
             out,
-            "the project's policy has no allow rules; nothing to trust"
+            "the project's policy has no allow rules or additional directories; nothing to trust"
         );
         return 0;
     }
@@ -165,7 +170,9 @@ pub fn flow(
         );
         return 1;
     }
-    let _ = writeln!(out, "allow rules ({}):", allow.len());
+    if !allow.is_empty() {
+        let _ = writeln!(out, "allow rules ({}):", allow.len());
+    }
     // Rules print escaped: a control character must not hide a rule (or the
     // reason one is dropped) from the person approving.
     for r in &allow {
@@ -180,11 +187,30 @@ pub fn flow(
             }
         }
     }
+    if !dirs.is_empty() {
+        let _ = writeln!(
+            out,
+            "additional directories, which count as inside the project ({}):",
+            dirs.len()
+        );
+    }
+    for d in &dirs {
+        let shown = permissions::escape_unprintable(d);
+        match permissions::vet_dir_reason(d) {
+            Ok(()) => {
+                let _ = writeln!(out, "  {shown}");
+            }
+            Err(why) => {
+                let why = permissions::escape_unprintable(&why);
+                let _ = writeln!(out, "  {shown}   (would be ignored: {why})");
+            }
+        }
+    }
     if !trust::confirm(input, out) {
         let _ = writeln!(out, "not trusted");
         return 1;
     }
-    match trust::write_entry(&record, &project, &allow) {
+    match trust::write_entry(&record, &project, &allow, &dirs) {
         Ok(()) => {
             let _ = writeln!(out, "trusted: {project}");
             0
@@ -213,11 +239,13 @@ fn list(record: &Path, out: &mut dyn Write) -> i32 {
                 let _ = writeln!(out, "no trusted projects");
             }
             for e in &entries {
-                let status = match project_allow(&e.project) {
-                    Ok(allow) => match trust::state(std::slice::from_ref(e), &e.project, &allow) {
-                        State::Trusted => "matches",
-                        _ => "rules changed since trusted",
-                    },
+                let status = match project_covered(&e.project) {
+                    Ok((allow, dirs)) => {
+                        match trust::state(std::slice::from_ref(e), &e.project, &allow, &dirs) {
+                            State::Trusted => "matches",
+                            _ => "rules changed since trusted",
+                        }
+                    }
                     Err(_) => "project policy not found",
                 };
                 let _ = writeln!(out, "{}  {}  {status}", e.project, e.at);
@@ -268,6 +296,55 @@ mod tests {
 
     fn record(o: &Opts) -> PathBuf {
         trust::record_path(&o.user_config_dir).unwrap()
+    }
+
+    #[test]
+    fn additional_directories_are_shown_trusted_and_listed() {
+        let (d, o) = setup(&[]);
+        let extra = d.path().join("extra").to_string_lossy().replace('\\', "/");
+        let body = serde_json::json!({
+            "policy_version": 1,
+            "permissions": {"additionalDirectories": [extra, "relative"]}
+        });
+        std::fs::write(
+            Path::new(&o.project).join(".callguard/policy.json"),
+            body.to_string(),
+        )
+        .unwrap();
+        let (code, out, _) = go(
+            &o, true, "y
+",
+        );
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("additional directories"), "{out}");
+        assert!(
+            out.contains(&format!(
+                "  {extra}
+"
+            )),
+            "{out}"
+        );
+        assert!(
+            out.contains("relative   (would be ignored: it is a relative path"),
+            "{out}"
+        );
+        let Record::Entries(e) = trust::load(&record(&o)) else {
+            panic!()
+        };
+        let dirs = [extra, "relative".to_owned()];
+        assert_eq!(
+            trust::state(&e, &trust::canonical(&o.project), &[], &dirs),
+            State::Trusted
+        );
+        // A rules-only trust would not cover them.
+        assert_eq!(
+            trust::state(&e, &trust::canonical(&o.project), &[], &[]),
+            State::Changed
+        );
+        let (mut list_opts, mut out) = (Opts { list: true, ..o }, Vec::new());
+        list_opts.project = String::new();
+        assert_eq!(list(&record(&list_opts), &mut out), 0);
+        assert!(String::from_utf8(out).unwrap().contains("matches"));
     }
 
     #[test]

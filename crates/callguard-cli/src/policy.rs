@@ -113,14 +113,20 @@ fn check_policy(lo: &LoadOptions) -> PolicyReport {
             .join("policy.json");
         if let Ok(f) = policy::read_file(&pp.to_string_lossy(), policy::LAYER_PROJECT) {
             let allow = &f.policy.permissions.allow;
-            if !allow.is_empty() {
+            let dirs = &f.policy.permissions.additional_directories;
+            if !allow.is_empty() || !dirs.is_empty() {
                 rep.project_trust = Some(
                     match callguard::trust::check_for_load(
                         &lo.user_config_dir,
                         &lo.project_dir,
                         allow,
+                        dirs,
                     ) {
-                        Ok(()) => format!("trusted ({} allow rules)", allow.len()),
+                        Ok(()) => format!(
+                            "trusted ({} allow rules, {} additional directories)",
+                            allow.len(),
+                            dirs.len()
+                        ),
                         Err(w) => w,
                     },
                 );
@@ -147,7 +153,7 @@ impl PolicyReport {
             let _ = writeln!(w, "merged policy:\n{b}\npolicy_rev: {}", self.policy_rev);
         }
         if let Some(t) = &self.project_trust {
-            let _ = writeln!(w, "project allow rules: {t}");
+            let _ = writeln!(w, "project allow rules and directories: {t}");
         }
         for x in &self.warnings {
             let _ = writeln!(w, "warning: {x}");

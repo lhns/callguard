@@ -13,6 +13,8 @@ pub enum Kind {
     Float,
     /// A repeatable `KEY=VALUE` flag.
     Pair,
+    /// A repeatable string flag.
+    List,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +50,7 @@ pub struct Parsed {
     ints: HashMap<&'static str, i64>,
     floats: HashMap<&'static str, f64>,
     pairs: HashMap<&'static str, Vec<(String, String)>>,
+    lists: HashMap<&'static str, Vec<String>>,
     /// The arguments after the flags.
     pub rest: Vec<String>,
 }
@@ -77,6 +80,11 @@ impl Parsed {
 
     pub fn float(&self, name: &str, default: f64) -> f64 {
         self.floats.get(name).copied().unwrap_or(default)
+    }
+
+    /// The values of a repeatable string flag in the order given.
+    pub fn list(&self, name: &str) -> Vec<String> {
+        self.lists.get(name).cloned().unwrap_or_default()
     }
 
     /// The `KEY=VALUE` entries in the order given.
@@ -172,6 +180,7 @@ pub fn parse(specs: &[Spec], args: &[String]) -> Result<Parsed, FlagError> {
                     .or_default()
                     .push((k.to_owned(), v.to_owned()));
             }
+            Kind::List => out.lists.entry(sp.name).or_default().push(value),
             Kind::Bool => unreachable!("handled above"),
         }
     }
@@ -189,10 +198,24 @@ mod tests {
         spec("n", Kind::Int),
         spec("usd", Kind::Float),
         spec("context", Kind::Pair),
+        spec("add-dir", Kind::List),
     ];
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_list_flag_repeats_in_order() {
+        let p = parse(
+            SPECS,
+            &args(&["--add-dir", "/a", "-add-dir=/b", "--add-dir", "", "rest"]),
+        )
+        .unwrap();
+        assert_eq!(p.list("add-dir"), ["/a", "/b", ""]);
+        assert!(p.list("nope").is_empty());
+        assert_eq!(p.rest, ["rest"]);
+        assert!(parse(SPECS, &args(&["--add-dir"])).is_err());
     }
 
     #[test]

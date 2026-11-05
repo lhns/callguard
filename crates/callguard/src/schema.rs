@@ -101,6 +101,10 @@ pub struct Request {
     pub project_dir: String,
     #[serde(deserialize_with = "nullable")]
     pub tool: ToolCall,
+    /// Directories besides the project that count as inside it: absolute
+    /// paths, as `permissions.additionalDirectories` takes them.
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
+    pub additional_dirs: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Transcript>,
     #[serde(
@@ -137,6 +141,7 @@ impl Request {
                 "cwd",
                 "project_dir",
                 "tool",
+                "additional_dirs",
                 "transcript",
                 "context",
                 "unattended",
