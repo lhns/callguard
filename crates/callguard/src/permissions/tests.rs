@@ -289,7 +289,7 @@ fn deny_matches_normalised_calls() {
     for (cmd, a) in cases {
         let n = nah_of(&[a]);
         let h = d.check(&bash(cmd), Some(&n));
-        assert_eq!(h.map(|h| h.decision), Some("deny"), "{cmd}");
+        assert_eq!(h.map(|h| h.decision), Some(Decision::Deny), "{cmd}");
     }
     // A command that is not git push is left alone.
     let n = nah_of(&[&["git", "status"]]);
@@ -309,7 +309,7 @@ fn a_blocking_nah_result_is_a_hole_and_no_allow() {
     let d = deny(&["Bash(git push:*)"]);
     assert_eq!(
         d.check(&c, Some(&blocked)).map(|h| h.decision),
-        Some("deny")
+        Some(Decision::Deny)
     );
     let a = allow(&["Bash(git status:*)"]);
     assert!(a.check(&bash("git status"), Some(&blocked)).is_none());
@@ -368,7 +368,11 @@ fn deny_falls_back_to_raw_text_when_the_parse_has_a_hole() {
     ] {
         for c in raw {
             let h = d.check(&bash(c), hole);
-            assert_eq!(h.map(|h| h.decision), Some("deny"), "{c} / {hole:?}");
+            assert_eq!(
+                h.map(|h| h.decision),
+                Some(Decision::Deny),
+                "{c} / {hole:?}"
+            );
         }
         assert!(d.check(&bash("ls"), hole).is_none());
     }
@@ -385,11 +389,14 @@ fn ask_and_the_order_of_decisions() {
     let n = nah_of(&[&["git", "push"]]);
     assert_eq!(
         p.check(&bash("git push"), Some(&n)).unwrap().decision,
-        "deny"
+        Decision::Deny
     );
     let n = nah_of(&[&["git", "log"]]);
     let h = p.check(&bash("git log"), Some(&n)).unwrap();
-    assert_eq!((h.decision, h.rule.as_str()), ("ask", "Bash(git *)"));
+    assert_eq!(
+        (h.decision, h.rule.as_str()),
+        (Decision::Ask, "Bash(git *)")
+    );
 }
 
 #[test]
@@ -446,7 +453,7 @@ fn plain_commands_are_allowed() {
         let h = a
             .check(&bash(cmd), Some(&n))
             .unwrap_or_else(|| panic!("{cmd}"));
-        assert_eq!(h.decision, "allow", "{cmd}");
+        assert_eq!(h.decision, Decision::Allow, "{cmd}");
         assert!(h.rule.starts_with("Bash(git "), "{cmd}: {}", h.rule);
     }
 }
@@ -617,14 +624,17 @@ fn deny_beats_ask_beats_allow() {
         p.check(&bash("git status --short"), Some(&n))
             .unwrap()
             .decision,
-        "deny"
+        Decision::Deny
     );
     let n = nah_of(&[&["git", "log"]]);
-    assert_eq!(p.check(&bash("git log"), Some(&n)).unwrap().decision, "ask");
+    assert_eq!(
+        p.check(&bash("git log"), Some(&n)).unwrap().decision,
+        Decision::Ask
+    );
     let n = nah_of(&[&["git", "status"]]);
     assert_eq!(
         p.check(&bash("git status"), Some(&n)).unwrap().decision,
-        "allow"
+        Decision::Allow
     );
 }
 
@@ -1027,7 +1037,7 @@ fn edit(p: &str) -> Call {
 }
 
 fn hit(p: &Permissions, c: &Call) -> Option<&'static str> {
-    p.check(c, None).map(|h| h.decision)
+    p.check(c, None).map(|h| h.decision.as_str())
 }
 
 #[test]

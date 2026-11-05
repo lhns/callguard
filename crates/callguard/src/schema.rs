@@ -16,7 +16,8 @@ pub const VERDICT_SCHEMA: &str = "callguard/verdict/v1";
 
 /// The outcome for one tool call. An unknown decision cannot be built,
 /// so there is no validity check. Parse an untrusted string with [`Decision::parse`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Ordered by strictness: `Allow < Ask < Deny`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Decision {
     /// No human prompt needed.

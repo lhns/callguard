@@ -46,6 +46,7 @@ use crate::rules::{
     Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, PATH_KEYS, RulesError, field_values,
     kind_of,
 };
+use crate::schema::Decision;
 
 use paths::{Ctx, PathSpec};
 pub(crate) use spec::prog_name;
@@ -431,10 +432,10 @@ struct Entry {
 /// Resolves symlinks: a normalized path in, its real location in POSIX form.
 type Resolver = Box<dyn Fn(&Env, &str) -> Option<String> + Send + Sync>;
 
-/// A permission rule that fired. `decision` is "deny", "ask" or "allow".
+/// A permission rule that fired.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
-    pub decision: &'static str,
+    pub decision: Decision,
     pub rule: String,
     pub reason: String,
 }
@@ -522,13 +523,13 @@ impl Permissions {
             reason: format!("permission rule {}", e.text),
         };
         if let Some(e) = self.deny.iter().find(|e| self.matches(e, call, nah)) {
-            return Some(hit("deny", e));
+            return Some(hit(Decision::Deny, e));
         }
         if let Some(e) = self.ask.iter().find(|e| self.matches(e, call, nah)) {
-            return Some(hit("ask", e));
+            return Some(hit(Decision::Ask, e));
         }
         self.allowed(call, nah).map(|text| Hit {
-            decision: "allow",
+            decision: Decision::Allow,
             reason: format!("permission rule {text}"),
             rule: text,
         })

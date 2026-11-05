@@ -2197,7 +2197,7 @@ fn builtin() {
         }
         let h = hit.unwrap_or_else(|| panic!("{name}: no hit, want {id}/{dec}"));
         assert!(
-            h.id == id && h.decision == dec && !h.reason.is_empty(),
+            h.id == id && h.decision.as_str() == dec && !h.reason.is_empty(),
             "{name}: got {h:?}, want {id}/{dec}"
         );
     }
@@ -2324,7 +2324,7 @@ fn builtin_protects_extra_paths() {
         ))
         .unwrap();
     assert!(
-        hit.id == "self-protect-shell" && hit.decision == "ask",
+        hit.id == "self-protect-shell" && hit.decision == Decision::Ask,
         "{hit:?}"
     );
 
@@ -2577,7 +2577,7 @@ fn the_trust_verb_and_record_are_guarded_and_the_guard_cannot_be_disabled() {
             &unix,
         ))
         .unwrap();
-    assert_eq!(patch.decision, "ask");
+    assert_eq!(patch.decision, Decision::Ask);
 }
 
 #[test]

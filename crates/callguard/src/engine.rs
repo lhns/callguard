@@ -136,8 +136,8 @@ impl Outcome {
     }
 }
 
-fn decided(decision: &str, layer: &str, rule: &str, reason: &str) -> Outcome {
-    let mut v = blank_verdict(Decision::parse(decision).unwrap_or(Decision::Ask), layer);
+fn decided(decision: Decision, layer: &str, rule: &str, reason: &str) -> Outcome {
+    let mut v = blank_verdict(decision, layer);
     v.rule = rule.into();
     v.reason = reason.into();
     v.confidence = 1.0;
@@ -511,7 +511,7 @@ impl Inner {
 
         // 0 builtin
         if let Some(hit) = self.builtin.check(&call) {
-            let mut out = decided(&hit.decision, LAYER_BUILTIN, &hit.id, &hit.reason);
+            let mut out = decided(hit.decision, LAYER_BUILTIN, &hit.id, &hit.reason);
             out.warnings = warns;
             return out;
         }
@@ -572,7 +572,7 @@ impl Inner {
                         format!("nah:{}", res.rule)
                     };
                     if !shadowed {
-                        let mut out = decided("deny", LAYER_NAH, &rule, &res.reason);
+                        let mut out = decided(Decision::Deny, LAYER_NAH, &rule, &res.reason);
                         out.warnings = warns;
                         out.warnings.extend(res.warnings);
                         return out;
@@ -600,33 +600,27 @@ impl Inner {
         // decision wins and a regex rule wins a tie.
         let regex_hit = self.rules.match_call(&call);
         let perm_hit = self.perms.check(&call, nah_res.as_ref());
-        let rank = |d: &str| match d {
-            "deny" => 3,
-            "ask" => 2,
-            "allow" => 1,
-            _ => 0,
-        };
         let perm_wins = match (&regex_hit, &perm_hit) {
-            (Some(r), Some(p)) => rank(p.decision) > rank(&r.decision),
+            (Some(r), Some(p)) => p.decision > r.decision,
             (None, Some(_)) => true,
             _ => false,
         };
         let verdict = match (regex_hit, perm_hit) {
-            (_, Some(p)) if perm_wins => Some((p.decision.to_owned(), p.rule, p.reason)),
+            (_, Some(p)) if perm_wins => Some((p.decision, p.rule, p.reason)),
             (Some(r), _) => {
                 let reason = if r.description.is_empty() {
                     format!("policy rule {}", r.id)
                 } else {
-                    r.description.clone()
+                    r.description
                 };
                 Some((r.decision, r.id, reason))
             }
             _ => None,
         };
         // Without nah's parse an allow cannot stand; a deny or ask can.
-        let verdict = verdict.filter(|(d, _, _)| nah_failure.is_none() || d != "allow");
+        let verdict = verdict.filter(|(d, _, _)| nah_failure.is_none() || *d != Decision::Allow);
         if let Some((decision, rule, reason)) = verdict {
-            let mut out = decided(&decision, LAYER_RULES, &rule, &reason);
+            let mut out = decided(decision, LAYER_RULES, &rule, &reason);
             out.warnings = warns;
             out.shadow = shadow;
             return out;
@@ -802,7 +796,7 @@ impl Inner {
         // The judge saw a cut input and nah did not see all of the call: the part
         // nobody read may hold the payload (padding pushes it past the cut).
         // Only an allow is doubted: a deny stands.
-        if res.decision == "allow"
+        if res.decision == Decision::Allow
             && res.input_cut
             && crate::permissions::parse_has_hole(call, nah_res)
         {
@@ -817,17 +811,7 @@ impl Inner {
                 warns,
             );
         }
-        let Some(d) = Decision::parse(&res.decision) else {
-            return fail(
-                "judge",
-                &b.name(),
-                &format!(
-                    "the llm judge returned decision {}",
-                    quote_string(&res.decision)
-                ),
-                warns,
-            );
-        };
+        let d = res.decision;
         let mut v = blank_verdict(d, LAYER_LLM);
         v.rule = res.rule;
         v.reason = res.reason;

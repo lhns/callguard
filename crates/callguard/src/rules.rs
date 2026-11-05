@@ -15,6 +15,7 @@ use serde_json::value::RawValue;
 
 use crate::permissions::prog_name;
 use crate::policy::{self, quote_string};
+use crate::schema::Decision;
 
 /// Tool kinds (design section 4).
 pub const KIND_SHELL: &str = "shell";
@@ -969,11 +970,11 @@ impl Call {
 
 // --- Built-in rules ---------------------------------------------------------
 
-/// A built-in rule that fired. `decision` is "deny" or "ask".
+/// A built-in rule that fired. `decision` is deny or ask.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hit {
     pub id: String,
-    pub decision: String,
+    pub decision: Decision,
     pub reason: String,
 }
 
@@ -1262,10 +1263,10 @@ fn trust_guard(c: &Call) -> Option<Hit> {
     let named = |s: &str| {
         s.to_ascii_lowercase().contains(file) || unquoted(s).to_ascii_lowercase().contains(file)
     };
-    let hit = |decision: &str, reason: &str| {
+    let hit = |decision: Decision, reason: &str| {
         Some(Hit {
             id: "self-protect-trust".into(),
-            decision: decision.into(),
+            decision,
             reason: reason.into(),
         })
     };
@@ -1274,13 +1275,13 @@ fn trust_guard(c: &Call) -> Option<Hit> {
             .any(|p| p.to_ascii_lowercase().ends_with(&format!("/{file}")))
         {
             return hit(
-                "deny",
+                Decision::Deny,
                 "callguard denies edits to its project trust record; the user runs `callguard trust`",
             );
         }
         if c.path.is_empty() && named(&c.whole) {
             return hit(
-                "ask",
+                Decision::Ask,
                 "edit names the project trust record; a human should confirm",
             );
         }
@@ -1288,13 +1289,13 @@ fn trust_guard(c: &Call) -> Option<Hit> {
     if c.kind == KIND_SHELL && !c.command.is_empty() {
         if c.commands().any(named) {
             return hit(
-                "ask",
+                Decision::Ask,
                 "command names the project trust record; a human should confirm",
             );
         }
         if c.commands().any(runs_trust_verb) {
             return hit(
-                "ask",
+                Decision::Ask,
                 "command runs `callguard trust`, which grants project rules; a human should confirm",
             );
         }
@@ -1377,10 +1378,10 @@ impl Builtin {
             return Some(hit);
         }
         let on = |id: &str| !self.disabled.iter().any(|d| d == id);
-        let hit = |id: &str, decision: &str, reason: String| {
+        let hit = |id: &str, decision: Decision, reason: String| {
             Some(Hit {
                 id: id.into(),
-                decision: decision.into(),
+                decision,
                 reason,
             })
         };
@@ -1390,7 +1391,7 @@ impl Builtin {
             {
                 return hit(
                     "self-protect-write",
-                    "deny",
+                    Decision::Deny,
                     format!(
                         "callguard denies edits to hook and policy files ({}); ask the user to change them",
                         c.path
@@ -1401,7 +1402,7 @@ impl Builtin {
             if c.path.is_empty() && self.names_protected(&c.whole) {
                 return hit(
                     "self-protect-write",
-                    "ask",
+                    Decision::Ask,
                     "edit names a hook or policy file; a human should confirm".into(),
                 );
             }
@@ -1410,7 +1411,7 @@ impl Builtin {
             if on("rm-root") && c.commands().any(rm_root) {
                 return hit(
                     "rm-root",
-                    "deny",
+                    Decision::Deny,
                     "recursive deletion of a root, home or .git directory".into(),
                 );
             }
@@ -1420,17 +1421,17 @@ impl Builtin {
             {
                 return hit(
                     "disk-wipe",
-                    "deny",
+                    Decision::Deny,
                     "command formats or overwrites a disk".into(),
                 );
             }
             if on("fork-bomb") && c.commands().any(|cmd| FORK_BOMB.is_match(cmd)) {
-                return hit("fork-bomb", "deny", "fork bomb".into());
+                return hit("fork-bomb", Decision::Deny, "fork bomb".into());
             }
             if on("self-protect-shell") && c.commands().any(|cmd| self.names_protected(cmd)) {
                 return hit(
                     "self-protect-shell",
-                    "ask",
+                    Decision::Ask,
                     "command names a hook or policy file; a human should confirm".into(),
                 );
             }
@@ -1443,6 +1444,8 @@ impl Builtin {
 
 struct Compiled {
     rule: policy::Rule,
+    /// `rule.decision`, parsed.
+    decision: Decision,
     command: Option<Regex>,
     url: Option<Regex>,
     fields: BTreeMap<String, Regex>,
@@ -1472,7 +1475,7 @@ impl Compiled {
         }
         // A regex rule reads every spelling of the command (see
         // `Call::command_joined`): deny and ask fire on any, allow needs all.
-        let allow = self.rule.decision == "allow";
+        let allow = self.decision == Decision::Allow;
         if let Some(re) = &self.command {
             let hit = |c: &str| !c.is_empty() && re.is_match(c);
             if call.command.is_empty()
@@ -1563,12 +1566,12 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
     if r.id.is_empty() {
         return Err("missing id".into());
     }
-    if !["allow", "ask", "deny"].contains(&r.decision.as_str()) {
+    let Some(decision) = Decision::parse(&r.decision) else {
         return Err(format!(
             "decision {} must be allow, ask or deny",
             quote_string(&r.decision)
         ));
-    }
+    };
     let m = &r.r#match;
     if m.is_empty() {
         return Err("no match conditions".into());
@@ -1576,6 +1579,7 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
     let re = |pat: &str, what: String| compile_regex(pat).map_err(|e| format!("{what}: {e}"));
     let mut c = Compiled {
         rule: r.clone(),
+        decision,
         command: None,
         url: None,
         fields: BTreeMap::new(),
@@ -1609,13 +1613,12 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
     Ok(c)
 }
 
-fn rank(decision: &str) -> u8 {
-    match decision {
-        "allow" => 1,
-        "ask" => 2,
-        "deny" => 3,
-        _ => 0,
-    }
+/// The rule that decided a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Matched {
+    pub id: String,
+    pub description: String,
+    pub decision: Decision,
 }
 
 impl Set {
@@ -1633,17 +1636,21 @@ impl Set {
 
     /// The matching rule that wins: deny over ask over allow, then list order.
     /// (Named `match_call` because `match` is a keyword.)
-    pub fn match_call(&self, call: &Call) -> Option<policy::Rule> {
+    pub fn match_call(&self, call: &Call) -> Option<Matched> {
         let mut best: Option<&Compiled> = None;
         for c in &self.rules {
             if !c.matches(call) {
                 continue;
             }
-            if best.is_none_or(|b| rank(&c.rule.decision) > rank(&b.rule.decision)) {
+            if best.is_none_or(|b| c.decision > b.decision) {
                 best = Some(c);
             }
         }
-        best.map(|c| c.rule.clone())
+        best.map(|c| Matched {
+            id: c.rule.id.clone(),
+            description: c.rule.description.clone(),
+            decision: c.decision,
+        })
     }
 }
 

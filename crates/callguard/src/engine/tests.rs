@@ -121,14 +121,16 @@ impl Via {
         *self.last.lock().unwrap() = Some(input);
         *self.cfg.lock().unwrap() = Some(cfg.clone());
         let r = b.classify(&ClassifyRequest::default(), deadline)?;
+        let decision = Decision::parse(&r.label)
+            .ok_or_else(|| JudgeError::InvalidOutput(format!("label {:?}", r.label)))?;
         Ok(JudgeResult {
-            decision: r.label,
+            decision,
             confidence: r.confidence,
             rule: r.rule,
             reason: r.reason,
+            input_cut: false,
             input_tokens: r.input_tokens,
             output_tokens: r.output_tokens,
-            ..Default::default()
         })
     }
 }
@@ -876,9 +878,13 @@ fn deadlines() {
         i.judge = Box::new(|_, _, _, _| {
             std::thread::sleep(Duration::from_millis(1500));
             Ok(JudgeResult {
-                decision: "allow".into(),
+                decision: Decision::Allow,
                 confidence: 1.0,
-                ..Default::default()
+                rule: String::new(),
+                reason: String::new(),
+                input_cut: false,
+                input_tokens: 0,
+                output_tokens: 0,
             })
         });
     });
