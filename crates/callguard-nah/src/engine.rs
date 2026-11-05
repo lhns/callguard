@@ -15,8 +15,8 @@ use nah_proto::observation::Observation;
 use nah_proto::tool::ToolCallInput;
 use serde_json::{Value, json};
 
+use crate::facts;
 use crate::observe::{host_platform, observe};
-use crate::{facts, graph};
 
 /// nah recurses deeply on nested input; its worst inputs overflow any stack,
 /// so this only makes an overflow rare. The process boundary is the
@@ -168,7 +168,7 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
             "nah ran out of its analysis budget (deadline-exceeded)".into(),
         ));
     }
-    let graph = graph::graph_facts(&result, &observations.borrow());
+    let graph = facts::graph_facts(&result, &observations.borrow());
     let mapped = facts::map(&graph, names.clone(), &coverage);
     let calls = facts::calls(&graph);
 

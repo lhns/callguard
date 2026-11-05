@@ -4,7 +4,6 @@
 
 mod engine;
 mod facts;
-mod graph;
 mod harden;
 mod observe;
 
