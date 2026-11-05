@@ -5,7 +5,6 @@
 //! call. Nah is a [`NahEngine`] held in `Options`; the default is a supervised
 //! child process running nah.
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
@@ -17,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::backend::{self, Backend};
 use crate::declog::{self, ShadowVerdict};
-use crate::fallback::{fallback_verdict, new_id};
+use crate::fallback::{fallback_verdict, new_id, panic_message};
 use crate::hostmeta::{self, Meta};
 use crate::judge::{self, JudgeError, JudgeResult};
 use crate::nah::{NahEngine, NahRequest, NahResult, NahVerdict};
@@ -161,16 +160,6 @@ fn blank_verdict(decision: Decision, layer: &str) -> Verdict {
         backend: String::new(),
         latency_ms: 0,
         warnings: Vec::new(),
-    }
-}
-
-fn panic_message(p: &(dyn Any + Send)) -> String {
-    if let Some(s) = p.downcast_ref::<&str>() {
-        (*s).to_owned()
-    } else if let Some(s) = p.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic".into()
     }
 }
 

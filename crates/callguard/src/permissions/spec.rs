@@ -255,19 +255,22 @@ pub(super) fn glob(pat: &str, s: &str) -> bool {
     glob_match(pat, s, false, false)
 }
 
+/// The ranges of a `[...]` class; a single character is a range of one.
+type Ranges = Vec<(char, char)>;
+
 /// One element of a compiled glob.
 enum Piece {
     Star,
     /// `?`: one character.
     One,
     /// `[a-c]`, `[!a]`, `[^a]`.
-    Class(Vec<(char, char)>, bool),
+    Class(Ranges, bool),
     Lit(char),
 }
 
 /// Reads `[...]` at the start of `p`: its ranges, whether it is negated, and
 /// the characters it spans. None if it is not closed (then `[` is a letter).
-fn class(p: &[char]) -> Option<(Vec<(char, char)>, bool, usize)> {
+fn class(p: &[char]) -> Option<(Ranges, bool, usize)> {
     let negated = matches!(p.get(1), Some('!' | '^'));
     let start = 1 + usize::from(negated);
     // A `]` right after the opening is a member, as in POSIX.

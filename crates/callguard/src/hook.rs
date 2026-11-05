@@ -6,7 +6,6 @@
 //! A [`Decider`] borrows the request; the adapters catch panics from it
 //! (`catch_unwind`) and answer with the fallback.
 
-use std::any::Any;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -14,7 +13,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
-use crate::fallback::fallback_verdict;
+use crate::fallback::{fallback_verdict, panic_message};
 use crate::json_text;
 use crate::schema::{
     Decision, LAYER_FALLBACK, REQUEST_SCHEMA, Request, ToolCall, Transcript, VERDICT_SCHEMA,
@@ -79,18 +78,6 @@ fn parse_partial<T: for<'de> Deserialize<'de> + Default>(
         }
         Err(e) => (T::default(), Some(e)),
     }
-}
-
-/// The text of a panic payload.
-pub fn panic_message(p: &(dyn Any + Send)) -> String {
-    p.downcast_ref::<&str>().map_or_else(
-        || {
-            p.downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_else(|| "panic".into())
-        },
-        |s| (*s).to_owned(),
-    )
 }
 
 /// callguard's fallback verdict, or a local ask/deny when that cannot be

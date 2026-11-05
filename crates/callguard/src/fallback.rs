@@ -1,5 +1,6 @@
 //! The verdict for a call callguard could not evaluate.
 
+use std::any::Any;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,6 +20,17 @@ pub fn new_id() -> String {
         b[8..].copy_from_slice(&COUNTER.fetch_add(1, Ordering::Relaxed).to_le_bytes());
     }
     hex::encode(b)
+}
+
+/// The text of a panic payload.
+pub fn panic_message(p: &(dyn Any + Send)) -> String {
+    if let Some(s) = p.downcast_ref::<&str>() {
+        (*s).to_owned()
+    } else if let Some(s) = p.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".into()
+    }
 }
 
 /// Ask, or deny when the request is unattended; enforced, layer "fallback".

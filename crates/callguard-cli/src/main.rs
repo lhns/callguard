@@ -12,7 +12,8 @@ mod trust;
 use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use callguard::hook::{LAST_RESORT_JSON, last_resort, panic_message};
+use callguard::fallback::panic_message;
+use callguard::hook::{LAST_RESORT_JSON, last_resort};
 use callguard::json_text;
 use callguard::schema::Request;
 
