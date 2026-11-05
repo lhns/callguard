@@ -20,6 +20,7 @@ use crate::serde_util::{is_false, is_zero, nullable};
 mod types;
 pub use types::*;
 mod load;
+pub(crate) mod protected;
 pub use load::*;
 mod validate;
 pub use validate::*;

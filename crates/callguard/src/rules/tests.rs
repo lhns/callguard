@@ -1728,6 +1728,72 @@ fn default_rules() {
     }
 }
 
+/// Claude's protected directories and files, by name at any depth, are not
+/// pre-approved by `write-in-project`; their neighbours still are.
+#[test]
+fn protected_names_are_not_auto_allowed() {
+    let cases: [(Env, &str, &[&str], &[&str]); 2] = [
+        (
+            unix(),
+            "/w/p",
+            &[
+                "/w/p/.husky/pre-commit",
+                "/w/p/.vscode/tasks.json",
+                "/w/p/.idea/workspace.xml",
+                "/w/p/.cargo/config.toml",
+                "/w/p/.config/git/config",
+                "/w/p/.devcontainer/devcontainer.json",
+                "/w/p/sub/.yarn/releases/y.cjs",
+                "/w/p/.mvn/wrapper/maven-wrapper.properties",
+                "/w/p/.bashrc",
+                "/w/p/.zshenv",
+                "/w/p/.envrc",
+                "/w/p/sub/.npmrc",
+                "/w/p/bunfig.toml",
+                "/w/p/.pre-commit-config.yaml",
+                "/w/p/lefthook.yml",
+                "/w/p/gradle/wrapper/gradle-wrapper.properties",
+                "/w/p/.mcp.json",
+                "/w/p/.claude.json",
+                "/w/p/.gitmodules",
+                "/w/p/pyrightconfig.json",
+            ],
+            &[
+                "/w/p/src/a.rs",
+                "/w/p/.config/other",
+                "/w/p/.config/git2/x",
+                "/w/p/git/x",
+                "/w/p/.github/ci.yml",
+                "/w/p/.bashrc.md",
+            ],
+        ),
+        (
+            win(),
+            "C:/w/p",
+            &[
+                r"C:\w\p\.HUSKY\pre-commit",
+                r"C:\w\p\.Config\Git\config",
+                r"C:\w\p\.BashRC",
+                r"C:\w\p\sub\.NPMRC",
+            ],
+            &[r"C:\w\p\src\a.rs", r"C:\w\p\.config\other"],
+        ),
+    ];
+    for (env, project, blocked, open) in cases {
+        let st = set(&env, policy::default_rules());
+        let id = |p: &str| {
+            let c = Call::new(at("Edit", file_input(p), project, project), &env);
+            st.match_call(&c).map(|r| r.id).unwrap_or_default()
+        };
+        for p in blocked {
+            assert_eq!(id(p), "", "{p}");
+        }
+        for p in open {
+            assert_eq!(id(p), "write-in-project", "{p}");
+        }
+    }
+}
+
 /// RE2's `\b`, `\s`, `\w` and `\d` are ASCII; the regex crate's are Unicode. A
 /// non-ASCII letter next to a command must not hide it from a default rule.
 #[test]

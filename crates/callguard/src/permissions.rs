@@ -345,8 +345,8 @@ impl Permissions {
             return false;
         }
         let ctx = self.ctx(call);
-        // `Edit(**/hooks/*)` names no guarded directory, but may reach one.
-        let guarded = allow && !names_guarded_dir(spec);
+        // `Edit(**/hooks/*)` names no protected name, but may reach one.
+        let guarded = allow && !names_protected(spec);
         let root = ctx.project.as_deref().or(ctx.cwd.as_deref());
         for r in raw {
             if allow && (paths::is_network(&self.env, r) || self.env.drive_relative(r)) {
@@ -360,7 +360,7 @@ impl Permissions {
                 && [Some(&posix), resolved.as_ref()]
                     .into_iter()
                     .flatten()
-                    .any(|p| in_guarded_dir(p, root))
+                    .any(|p| in_protected(p, root))
             {
                 return false;
             }

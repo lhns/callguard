@@ -20,17 +20,6 @@ pub(crate) const BUILTIN_IDS: &[&str] = &[
     "self-protect-shell",
 ];
 
-/// Directories whose contents the default write rule does not auto-allow:
-/// they carry hooks, policy and VCS state.
-pub(crate) const PROTECTED_DIRS: &[&str] = &[
-    "**/.git/**",
-    "**/.claude/**",
-    "**/.callguard/**",
-    "**/.opencode/**",
-    "**/.pi/**",
-    "**/.hermes/**",
-];
-
 /// One policy file, or the merged result of all layers. Option fields
 /// distinguish "not set" from zero values so that layers can be merged.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -148,32 +148,22 @@ pub(super) const RUN_COMMANDS: &[(&str, &str)] = &[
     ("dotnet", "run"),
 ];
 
-/// Hook, policy and VCS directories. Allow rules do not match inside them
-/// unless they name one outright, which only the system layer can do.
-pub(super) const GUARDED_DIRS: [&str; 6] = [
-    ".git",
-    ".claude",
-    ".callguard",
-    ".hermes",
-    ".opencode",
-    ".pi",
-];
-
-/// Whether the pattern spells out a guarded directory.
-pub(super) fn names_guarded_dir(s: &PathSpec) -> bool {
-    s.rest
-        .split('/')
-        .any(|seg| GUARDED_DIRS.contains(&seg.to_lowercase().as_str()))
+/// Whether the pattern spells out a protected directory or file name
+/// (`policy::protected`). Allow rules do not match inside them unless they name
+/// one outright, which only the system layer can do.
+pub(super) fn names_protected(s: &PathSpec) -> bool {
+    let rest = s.rest.to_lowercase();
+    policy::protected::in_segments(&rest.split('/').collect::<Vec<_>>())
 }
 
 /// Whether the POSIX-form `path`, below `root` when it is inside, has a
-/// guarded directory in it. Parents of the project do not count.
-pub(super) fn in_guarded_dir(path: &str, root: Option<&str>) -> bool {
+/// protected directory or file name in it. Parents of the project do not count.
+pub(super) fn in_protected(path: &str, root: Option<&str>) -> bool {
     let path = path.to_lowercase();
     let below = root
         .and_then(|r| path.strip_prefix(&format!("{}/", r.to_lowercase().trim_end_matches('/'))))
         .unwrap_or(&path);
-    below.split('/').any(|seg| GUARDED_DIRS.contains(&seg))
+    policy::protected::in_segments(&below.split('/').collect::<Vec<_>>())
 }
 
 /// Reads an allow rule and refuses the ones that loosen the guard too far.
@@ -226,9 +216,9 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
             }
             // Hook, policy and VCS directories are never pre-approved by a
             // user or project rule; only the system layer may allow them.
-            if guarded_layer && names_guarded_dir(s) {
+            if guarded_layer && names_protected(s) {
                 return blocked(
-                    "a user or project rule may not allow paths in hook, policy or VCS directories",
+                    "a user or project rule may not allow protected paths (hook, policy, VCS and tool configuration directories and files)",
                 );
             }
         }

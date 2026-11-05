@@ -478,13 +478,14 @@ fn rev_matches_the_golden_files() {
 }
 
 /// Not the golden value of the empty policy (11ed5b44...): nah is on by default, its timeout
-/// is 10 s, the call's deadline 11 s, and `nah.path` is gone. Switchboard
+/// is 10 s, the call's deadline 11 s, `nah.path` is gone, and the write rule
+/// excludes the protected names of `policy::protected`. Switchboard
 /// treats the rev as opaque.
 #[test]
 fn default_policy_rev_is_pinned() {
     assert_eq!(
         rev(&default()),
-        "sha256:53321eb274f273583885759acd5b2c1ee533b6898c520739eeaed83f0f6a1eab"
+        "sha256:2b53e3dccf90369c54b08d6e73efb6471db22fc5f30d8048760708158bb5e304"
     );
 }
 
@@ -691,7 +692,6 @@ fn layers_add_deny_and_ask_and_vet_allow() {
             "Bash(pytest:*)",
             "WebFetch(domain:docs.rs)",
             "WebFetch(domain:evil.com)",
-            "Edit(~/.bashrc)",
             "Bash(git log *)",
             "Edit(src/**)"
         ]
@@ -701,13 +701,14 @@ fn layers_add_deny_and_ask_and_vet_allow() {
         "{:?}",
         l.warnings
     );
-    // The system layer's Bash(*) and Bash(python *), the project's Bash(*).
+    // The system layer's Bash(*) and Bash(python *), the project's Bash(*) and
+    // Edit(~/.bashrc).
     let dropped: Vec<&String> = l
         .warnings
         .iter()
         .filter(|w| w.contains("dropped"))
         .collect();
-    assert_eq!(dropped.len(), 3, "{dropped:?}");
+    assert_eq!(dropped.len(), 4, "{dropped:?}");
     assert!(
         dropped
             .iter()

@@ -133,11 +133,11 @@ pub(crate) fn default_rules() -> Vec<Rule> {
         rule(
             "write-in-project",
             "allow",
-            "writes inside the project (outside protected directories) need no review",
+            "writes inside the project (outside protected directories and files) need no review",
             Match {
                 kind: strings(&["write"]),
                 in_project: Some(true),
-                not_path: strings(PROTECTED_DIRS),
+                not_path: protected::globs(),
                 ..Default::default()
             },
         ),

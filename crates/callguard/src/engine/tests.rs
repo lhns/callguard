@@ -380,7 +380,7 @@ fn default_policy_rev_is_pinned() {
     .unwrap();
     assert_eq!(
         e.policy_rev(),
-        "sha256:53321eb274f273583885759acd5b2c1ee533b6898c520739eeaed83f0f6a1eab"
+        "sha256:2b53e3dccf90369c54b08d6e73efb6471db22fc5f30d8048760708158bb5e304"
     );
 }
 
@@ -1066,6 +1066,31 @@ fn new_rejects_bad_policy() {
     )
     .unwrap();
     assert_eq!(e.policy().mode, "enforce");
+}
+
+/// Protected directories and files are not pre-approved by `write-in-project`:
+/// without an allow rule the judge decides.
+#[test]
+fn writes_to_protected_names_go_to_the_judge() {
+    let (e, v) = new_test_engine(
+        test_policy(no_mut),
+        Options::default(),
+        Some(answer("allow", 0.95)),
+    );
+    for (p, layer) in [
+        ("/w/p/.husky/pre-commit", LAYER_LLM),
+        ("/w/p/.vscode/tasks.json", LAYER_LLM),
+        ("/w/p/.bashrc", LAYER_LLM),
+        ("/w/p/sub/.mcp.json", LAYER_LLM),
+        ("/w/p/.config/git/config", LAYER_LLM),
+        ("/w/p/.HUSKY/pre-commit", LAYER_LLM),
+        ("/w/p/src/a.rs", LAYER_RULES),
+    ] {
+        let before = v.calls();
+        let got = e.decide(&call("Write", &format!(r#"{{"file_path":"{p}"}}"#)));
+        assert_eq!(got.layer, layer, "{p}: {got:?}");
+        assert_eq!(v.calls() - before, usize::from(layer == LAYER_LLM), "{p}");
+    }
 }
 
 #[test]

@@ -856,6 +856,71 @@ fn hook_policy_and_vcs_directories_are_never_pre_approved_below_the_system_layer
 }
 
 #[test]
+fn protected_files_and_config_git_are_never_pre_approved_below_the_system_layer() {
+    for r in [
+        "Edit(.bashrc)",
+        "Edit(~/.bashrc)",
+        "Write(.mcp.json)",
+        "Edit(/.husky/pre-commit)",
+        "Edit(.vscode/**)",
+        "Edit(.config/git/config)",
+        "Edit(**/.npmrc)",
+        "Edit(bunfig.toml)",
+    ] {
+        for layer in ["user", "project"] {
+            assert!(vet(r, Some(layer)).is_err(), "{r} in {layer}");
+        }
+        assert!(
+            vet(r, Some("system")).is_ok(),
+            "{r}: system keeps authority"
+        );
+    }
+    for r in [
+        "Edit(.config/other)",
+        "Edit(git/x)",
+        "Edit(.config/**)",
+        "Edit(src/**)",
+    ] {
+        assert!(vet(r, Some("user")).is_ok(), "{r}");
+    }
+}
+
+#[test]
+fn a_wildcard_allow_never_reaches_a_protected_name() {
+    let a = allow(&["Edit(**/*.toml)", "Edit(**/pre-commit)", "Edit(src/**)"]);
+    for p in [
+        "/w/p/bunfig.toml",
+        "/w/p/.cargo/config.toml",
+        "/w/p/.husky/pre-commit",
+        "/w/p/.HUSKY/pre-commit",
+        "/w/p/.config/git/config",
+        "/w/p/.BashRC",
+        "/w/p/sub/.npmrc",
+    ] {
+        assert_eq!(hit(&a, &edit(p)), None, "{p}");
+    }
+    assert_eq!(hit(&a, &edit("/w/p/.config/other.toml")), Some("allow"));
+    assert_eq!(hit(&a, &edit("/w/p/src/a.rs")), Some("allow"));
+    // The project's own parents do not count.
+    let a = allow(&["Edit(src/**)"]);
+    let c = Call::new(
+        CallInput {
+            tool: "Edit".into(),
+            input: Some(RawValue::from_string(r#"{"file_path":"src/a.rs"}"#.into()).unwrap()),
+            cwd: "/home/u/.config/git/p".into(),
+            project_dir: "/home/u/.config/git/p".into(),
+            ..Default::default()
+        },
+        &env(),
+    );
+    assert_eq!(hit(&a, &c), Some("allow"));
+    // Through a link: the resolved path is checked too.
+    let a = allow(&["Edit(**/*.toml)"])
+        .with_resolver(Box::new(|_, p| Some(p.replace("/w/p/link", "/w/p/.cargo"))));
+    assert_eq!(hit(&a, &edit("/w/p/link/config.toml")), None);
+}
+
+#[test]
 fn a_wildcard_allow_never_reaches_a_guarded_directory() {
     let a = allow(&["Edit(**/hooks/*)", "Edit(.g*/hooks/*)", "Edit(src/**)"]);
     for p in [
