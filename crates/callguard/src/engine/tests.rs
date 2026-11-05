@@ -1083,7 +1083,15 @@ fn writes_to_protected_names_go_to_the_judge() {
         ("/w/p/.bashrc", LAYER_LLM),
         ("/w/p/sub/.mcp.json", LAYER_LLM),
         ("/w/p/.config/git/config", LAYER_LLM),
-        ("/w/p/.HUSKY/pre-commit", LAYER_LLM),
+        // A different directory where names keep their case.
+        (
+            "/w/p/.HUSKY/pre-commit",
+            if cfg!(any(windows, target_os = "macos")) {
+                LAYER_LLM
+            } else {
+                LAYER_RULES
+            },
+        ),
         ("/w/p/src/a.rs", LAYER_RULES),
     ] {
         let before = v.calls();
