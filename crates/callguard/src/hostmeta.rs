@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::rules::builtin_regex;
 use crate::serde_util::{is_false, is_zero, nullable};
 
 /// Deadline for all probing of one call.
@@ -270,19 +271,13 @@ pub fn parse_status(porcelain: &str) -> GitStatus {
     st
 }
 
-// RE2's \s and \b are ASCII; the regex crate's are Unicode, so the patterns
-// spell them out.
-static RM_RECURSIVE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(^|[ \t\n\f\r;&|(])rm[ \t\n\f\r]+(-[a-z]*r|--recursive)").expect("valid regex")
-});
-static REMOVE_ITEM_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?-u:\b)Remove-Item(?-u:\b)[^;&|\n]*-Recurse").expect("valid regex")
-});
-static SEP_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"&&|\|\||[;|\n&]").expect("valid regex"));
-static SCP_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(?:[^@/ \t\n\f\r]+@)?([^:/ \t\n\f\r]+):(.+)$").expect("valid regex")
-});
+static RM_RECURSIVE_RE: LazyLock<Regex> =
+    LazyLock::new(|| builtin_regex(r"(?i)(^|[\s;&|(])rm\s+(-[a-z]*r|--recursive)"));
+static REMOVE_ITEM_RE: LazyLock<Regex> =
+    LazyLock::new(|| builtin_regex(r"(?i)\bRemove-Item\b[^;&|\n]*-Recurse"));
+static SEP_RE: LazyLock<Regex> = LazyLock::new(|| builtin_regex(r"&&|\|\||[;|\n&]"));
+static SCP_RE: LazyLock<Regex> =
+    LazyLock::new(|| builtin_regex(r"^(?:[^@/\s]+@)?([^:/\s]+):(.+)$"));
 
 /// Whether the command can destroy uncommitted work or stage, commit or
 /// publish it.

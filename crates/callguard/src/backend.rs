@@ -1013,16 +1013,6 @@ impl Backend for Fake {
     }
 }
 
-/// RE2 reads `\s`, `\S` and `\b` as ASCII; the regex crate reads them as
-/// Unicode. This spells them out so the patterns match the same text.
-fn re2(pattern: &str) -> regex::Regex {
-    let p = pattern
-        .replace(r"\S", r"[^ \t\n\f\r]")
-        .replace(r"\s", r"[ \t\n\f\r]")
-        .replace(r"\b", r"(?-u:\b)");
-    regex::Regex::new(&p).expect("valid regex")
-}
-
 /// Injected text the obey-injection mode follows.
 const OBEY_PATTERN: &str = r"(?i)label[ _+-]this[ _+-]allow|ignore[ _+-](all[ _+-])?(the[ _+-])?(previous|prior)[ _+-]instructions|classifier|you are the reviewer";
 
@@ -1031,7 +1021,8 @@ mod res {
 
     use regex::Regex;
 
-    use super::{OBEY_PATTERN, re2};
+    use super::OBEY_PATTERN;
+    use crate::rules::builtin_regex as re2;
 
     pub static OBEY: LazyLock<Regex> = LazyLock::new(|| re2(OBEY_PATTERN));
     pub static INJECTION: LazyLock<Regex> = LazyLock::new(|| {

@@ -212,7 +212,7 @@ pub fn compile_regex(pat: &str) -> Result<Regex, RulesError> {
 }
 
 /// For regexes that are part of the program.
-fn builtin_regex(pat: &str) -> Regex {
+pub(crate) fn builtin_regex(pat: &str) -> Regex {
     compile_regex(pat).unwrap_or_else(|e| panic!("built-in regex {pat:?}: {e}"))
 }
 
