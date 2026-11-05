@@ -101,14 +101,22 @@ pub(crate) fn system_path() -> String {
 /// The user policy file path, None when the layer is skipped or the
 /// directory is unknown.
 pub(crate) fn user_path(config: &UserConfig) -> Option<String> {
+    user_file(config, "policy.json")
+}
+
+/// The user backends file path, None when the layer is skipped or the
+/// directory is unknown. Only this directory is ever searched for it.
+pub(crate) fn backends_path(config: &UserConfig) -> Option<String> {
+    user_file(config, BACKENDS_FILE)
+}
+
+fn user_file(config: &UserConfig, name: &str) -> Option<String> {
     let dir = match config {
         UserConfig::None => return None,
         UserConfig::Default => user_config_dir()?,
         UserConfig::Dir(d) => d.clone(),
     };
-    Some(path_string(
-        Path::new(&dir).join("callguard").join("policy.json"),
-    ))
+    Some(path_string(Path::new(&dir).join("callguard").join(name)))
 }
 
 /// A JSON error as text. serde_json quotes the offending value of a wrong
@@ -127,11 +135,15 @@ struct ReadFail {
     err: PolicyError,
 }
 
-fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
-    let fail = |not_found, msg: String| ReadFail {
+fn fail(not_found: bool, msg: String) -> ReadFail {
+    ReadFail {
         not_found,
         err: PolicyError(msg),
-    };
+    }
+}
+
+/// The bytes of a JSON object file, without a byte order mark.
+fn read_json_object(path: &str) -> Result<Vec<u8>, ReadFail> {
     // A FIFO would block the read until something writes to it, past the
     // deadline; so would any file that is not a plain one. (A missing path
     // falls through to the read, which reports it.)
@@ -149,6 +161,11 @@ fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
     }
     // A derived Deserialize would also take an array as a list of field values.
     crate::serde_util::require_object(&data).map_err(|e| fail(false, format!("{path}: {e}")))?;
+    Ok(data)
+}
+
+fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
+    let data = read_json_object(path)?;
     let parse = |d: &[u8]| serde_json::from_slice::<Policy>(d);
     let mut policy =
         parse(&data).map_err(|e| fail(false, format!("{path}: {}", json_error(&e))))?;
@@ -297,7 +314,87 @@ pub fn load(o: &LoadOptions) -> Result<Loaded, PolicyError> {
         );
         apply(&mut out, &p, LAYER_PROJECT, false, o)?;
     }
+    apply_backends(&mut out, o)?;
     Ok(out)
+}
+
+/// The user's backends file: `default` and `backends`. It is read last and
+/// only from the user's own config directory.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct BackendsFile {
+    #[serde(deserialize_with = "nullable")]
+    default: String,
+    #[serde(deserialize_with = "nullable")]
+    backends: BTreeMap<String, Backend>,
+}
+
+fn read_backends_inner(path: &str) -> Result<(File, BackendsFile), ReadFail> {
+    let data = read_json_object(path)?;
+    let parse = |d: &[u8]| serde_json::from_slice::<BackendsFile>(d);
+    let bad = |e: serde_json::Error| fail(false, format!("{path}: {}", json_error(&e)));
+    let mut parsed = parse(&data).map_err(bad)?;
+    if let Ok(mut raw) = serde_json::from_slice::<Value>(&data)
+        && fold_keys(&mut raw, Ty::Obj(Obj::BackendsFile))
+    {
+        let folded = serde_json::to_vec(&raw).expect("a Value serializes");
+        parsed = parse(&folded).map_err(bad)?;
+    }
+    let as_policy = Policy {
+        policy_version: VERSION,
+        backends: parsed.backends.clone(),
+        ..Default::default()
+    };
+    let file = File {
+        path: path.to_owned(),
+        layer: LAYER_USER_BACKENDS.to_owned(),
+        problems: validate(&as_policy, false),
+        policy: as_policy,
+        unknown: unknown_keys_of(&data, Obj::BackendsFile),
+    };
+    Ok((file, parsed))
+}
+
+/// Puts the user's backends file over the merged policy: each backend named
+/// there replaces the whole entry of that name, and `default` becomes
+/// `llm.backend` unless the system layer chose one. A failure to read it is an
+/// error like any policy file's (the fail-safe path), a missing file is not.
+fn apply_backends(out: &mut Loaded, o: &LoadOptions) -> Result<(), PolicyError> {
+    let Some(path) = backends_path(&o.user_config_dir) else {
+        return Ok(());
+    };
+    let (mut file, parsed) = match read_backends_inner(&path) {
+        Ok(x) => x,
+        Err(e) if e.not_found => return Ok(()),
+        Err(e) => return Err(e.err),
+    };
+    for k in &file.unknown {
+        out.warnings
+            .push(format!("{path}: unknown key {} ignored", quote_string(k)));
+    }
+    out.policy.backends.extend(parsed.backends);
+    if !parsed.default.is_empty() {
+        let system_chose = out.files.iter().any(|f| {
+            f.layer == LAYER_SYSTEM && f.policy.llm.as_ref().is_some_and(|l| !l.backend.is_empty())
+        });
+        match out.policy.llm.as_mut() {
+            Some(_) if system_chose => out.warnings.push(format!(
+                "{path}: default ignored: the system policy sets llm.backend"
+            )),
+            Some(l) => {
+                if !out.policy.backends.contains_key(&parsed.default) {
+                    file.problems.push(format!(
+                        "default {} is not defined in backends",
+                        quote_string(&parsed.default)
+                    ));
+                }
+                l.backend = parsed.default;
+            }
+            None => {}
+        }
+    }
+    out.files.push(file);
+    Ok(())
 }
 
 /// The type of a JSON value in the policy schema, for [`unknown_keys`].
@@ -321,6 +418,7 @@ enum Obj {
     Backend,
     DenyStreak,
     Log,
+    BackendsFile,
 }
 
 /// The JSON keys of each struct (its serde names), with their types.
@@ -393,6 +491,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("allow_exceptions", Leaf),
         ],
         Obj::Transcript => &[("max_messages", Leaf), ("max_bytes", Leaf)],
+        Obj::BackendsFile => &[("default", Leaf), ("backends", Map(Obj::Backend))],
         Obj::Backend => &[
             ("type", Leaf),
             ("model", Leaf),
@@ -489,10 +588,14 @@ fn walk_unknown(raw: &Value, ty: Ty, path: &str, out: &mut Vec<String>) {
 /// Unknown keys of a policy file, as dotted paths ("rules[0].match.foo"),
 /// sorted within each object.
 pub(crate) fn unknown_keys(data: &[u8]) -> Vec<String> {
+    unknown_keys_of(data, Obj::Policy)
+}
+
+fn unknown_keys_of(data: &[u8], root: Obj) -> Vec<String> {
     let Ok(raw) = serde_json::from_slice::<Value>(data) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    walk_unknown(&raw, Ty::Obj(Obj::Policy), "", &mut out);
+    walk_unknown(&raw, Ty::Obj(root), "", &mut out);
     out
 }

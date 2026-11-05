@@ -1190,3 +1190,231 @@ fn only_the_system_layer_can_set_an_api_key_in_a_policy() {
     );
     assert!(l.warnings.iter().all(|w| !w.contains("evil-key")));
 }
+
+// --- the user's backends file -----------------------------------------------------
+
+const BACKENDS: &str = r#"{
+  "default": "local",
+  "backends": {
+    "anthropic": {"type": "anthropic", "model": "claude-haiku-5-5", "api_key": "sk-ant-SECRET-0123456789"},
+    "local": {"type": "openai", "model": "qwen3", "base_url": "http://localhost:8080/v1", "api_key": "x"}
+  }
+}"#;
+
+const SYS: &str = r#"{"policy_version":1}"#;
+
+/// `layers` plus the user's backends file (the user dir is made if need be).
+fn with_backends(
+    system: &str,
+    user: &str,
+    project: &str,
+    backends: &str,
+) -> (TempDir, LoadOptions) {
+    let (d, mut o) = layers(system, user, project);
+    if matches!(o.user_config_dir, UserConfig::None) {
+        o.user_config_dir = UserConfig::Dir(d.path().join("cfg").to_string_lossy().into_owned());
+    }
+    let UserConfig::Dir(cfg) = &o.user_config_dir else {
+        unreachable!()
+    };
+    write(
+        &Path::new(cfg).join("callguard").join("backends.json"),
+        backends,
+    );
+    (d, o)
+}
+
+#[test]
+fn a_missing_backends_file_is_silent() {
+    let (d, mut o) = layers(SYS, "", "");
+    o.user_config_dir = UserConfig::Dir(d.path().join("nocfg").to_string_lossy().into_owned());
+    let l = load(&o).unwrap();
+    assert!(l.warnings.is_empty() && l.files.len() == 1, "{l:?}");
+    assert_eq!(l.policy.backends.len(), 1);
+}
+
+#[test]
+fn backends_replace_whole_entries_add_new_names_and_set_the_default() {
+    let (_d, o) = with_backends(SYS, "", "", BACKENDS);
+    let l = load(&o).unwrap();
+    assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+    assert_eq!(l.problems(), Vec::<String>::new());
+    let a = &l.policy.backends["anthropic"];
+    // The whole entry: nothing of the built-in entry is kept.
+    assert_eq!(a.api_key.expose(), "sk-ant-SECRET-0123456789");
+    assert!(a.api_key_env.is_empty() && a.base_url.is_empty() && a.data_classes.is_empty());
+    let local = &l.policy.backends["local"];
+    assert_eq!(
+        (local.r#type.as_str(), local.model.as_str()),
+        ("openai", "qwen3")
+    );
+    assert_eq!(llm(&l.policy).backend, "local");
+    let f = l.files.last().unwrap();
+    assert_eq!(f.layer, LAYER_USER_BACKENDS);
+    assert!(f.path.ends_with("backends.json"), "{}", f.path);
+}
+
+#[test]
+fn without_a_default_the_backend_choice_stays() {
+    let (_d, o) = with_backends(SYS, "", "", r#"{"backends":{"x":{"type":"fake"}}}"#);
+    let l = load(&o).unwrap();
+    assert_eq!(llm(&l.policy).backend, "anthropic");
+    assert!(l.policy.backends.contains_key("x") && l.policy.backends.contains_key("anthropic"));
+}
+
+#[test]
+fn the_system_policys_llm_backend_beats_the_backends_default() {
+    let sys = r#"{"policy_version":1,"backends":{"corp":{"type":"openai","base_url":"http://corp/v1"}},"llm":{"backend":"corp"}}"#;
+    let (_d, o) = with_backends(sys, "", "", BACKENDS);
+    let l = load(&o).unwrap();
+    assert_eq!(llm(&l.policy).backend, "corp");
+    assert!(
+        l.warnings
+            .iter()
+            .any(|w| w.contains("default ignored") && w.contains("backends.json")),
+        "{:?}",
+        l.warnings
+    );
+    // The backends are still added.
+    assert!(l.policy.backends.contains_key("local"));
+}
+
+#[test]
+fn a_final_system_policy_ignores_the_backends_file_even_a_broken_one() {
+    let sys = r#"{"policy_version":1,"final":true}"#;
+    for content in [BACKENDS, "{ not json"] {
+        let (_d, o) = with_backends(sys, "", "", content);
+        let l = load(&o).unwrap();
+        assert_eq!(llm(&l.policy).backend, "anthropic");
+        assert!(!l.policy.backends.contains_key("local"));
+        assert!(l.files.iter().all(|f| f.layer != LAYER_USER_BACKENDS));
+        assert!(l.warnings.is_empty(), "{:?}", l.warnings);
+    }
+}
+
+#[test]
+fn the_backends_file_is_read_only_from_the_users_config_dir() {
+    let (d, o) = layers(SYS, "", SYS);
+    // Beside the project policy, in the project root and in the system dir.
+    let proj = d.path().join("proj");
+    for dir in [
+        proj.join(".callguard"),
+        proj.clone(),
+        d.path().to_path_buf(),
+    ] {
+        write(&dir.join("backends.json"), BACKENDS);
+        write(&dir.join("callguard").join("backends.json"), BACKENDS);
+    }
+    let l = load(&o).unwrap();
+    assert!(!l.policy.backends.contains_key("local"));
+    assert!(l.files.iter().all(|f| f.layer != LAYER_USER_BACKENDS));
+    // --no-user-policy: the config dir is not consulted at all.
+    let (_d2, o2) = with_backends(SYS, "", "", BACKENDS);
+    let o2 = LoadOptions {
+        user_config_dir: UserConfig::None,
+        ..o2
+    };
+    assert!(!load(&o2).unwrap().policy.backends.contains_key("local"));
+}
+
+#[test]
+fn user_and_project_policies_still_cannot_define_backends_or_keys() {
+    let evil = r#"{"policy_version":1,"backends":{"anthropic":{"type":"anthropic","api_key":"evil"}},"llm":{"backend":"anthropic"}}"#;
+    let (_d, o) = with_backends(SYS, evil, evil, BACKENDS);
+    let l = load(&o).unwrap();
+    assert_eq!(
+        l.policy.backends["anthropic"].api_key.expose(),
+        "sk-ant-SECRET-0123456789"
+    );
+    assert!(l.warnings.iter().any(|w| w.contains("backends ignored")));
+}
+
+#[test]
+fn a_broken_backends_file_is_an_error_naming_the_file_and_never_quoting_a_key() {
+    for (content, want) in [
+        ("{ not json", "backends.json"),
+        ("[]", "backends.json"),
+        (
+            r#"{"backends":{"b":{"type":"openai","max_tokens":"sk-ant-SECRET-0123456789"}}}"#,
+            "wrong type",
+        ),
+        (
+            r#"{"backends":{"b":{"type":"openai","api_key":["sk-ant-SECRET-0123456789"]}}}"#,
+            "api_key must be a string",
+        ),
+        (
+            r#"{"default":"sk-ant-SECRET-0123456789","backends":7}"#,
+            "wrong type",
+        ),
+    ] {
+        let (_d, o) = with_backends(SYS, "", "", content);
+        let e = load(&o).unwrap_err().to_string();
+        assert!(
+            e.contains("backends.json") && e.contains(want),
+            "{content}: {e}"
+        );
+        assert!(!e.contains("SECRET"), "{content}: {e}");
+    }
+    // A directory where the file should be.
+    let (_d, o) = layers(SYS, SYS, "");
+    let UserConfig::Dir(cfg) = &o.user_config_dir else {
+        unreachable!()
+    };
+    fs::create_dir_all(Path::new(cfg).join("callguard").join("backends.json")).unwrap();
+    let e = load(&o).unwrap_err().to_string();
+    assert!(
+        e.contains("backends.json") && e.contains("not a regular file"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_backends_entry_is_checked_like_a_policy_backend() {
+    let (_d, o) = with_backends(
+        SYS,
+        "",
+        "",
+        r#"{"backends":{"e":{"type":"exec"},"u":{"type":"nope","api_key":"sk-ant-SECRET-0123456789"}}}"#,
+    );
+    let l = load(&o).unwrap();
+    let p = l.problems().join("\n");
+    assert!(
+        p.contains("backends.json") && p.contains("backends.e: exec backend needs command"),
+        "{p}"
+    );
+    assert!(
+        p.contains("backends.u: unknown type") && !p.contains("SECRET"),
+        "{p}"
+    );
+}
+
+#[test]
+fn unknown_keys_in_the_backends_file_warn_and_keys_fold_case() {
+    let (_d, o) = with_backends(
+        SYS,
+        "",
+        "",
+        r#"{"Default":"local","backends":{"local":{"type":"openai","base_url":"http://l/v1","Api_Key":"k","bogus":1}},"extra":true}"#,
+    );
+    let l = load(&o).unwrap();
+    let w = l.warnings.join("\n");
+    assert!(
+        w.contains("unknown key \"extra\"") && w.contains("unknown key \"backends.local.bogus\""),
+        "{w}"
+    );
+    assert!(w.contains("unknown key \"Default\""), "{w}");
+    assert_eq!(llm(&l.policy).backend, "local");
+    assert_eq!(l.policy.backends["local"].api_key.expose(), "k");
+}
+
+#[test]
+fn a_backends_key_appears_in_no_debug_json_or_rev_of_the_loaded_policy() {
+    let (_d, o) = with_backends(SYS, "", "", BACKENDS);
+    let l = load(&o).unwrap();
+    let json = crate::json_text::to_string(&l.policy).unwrap();
+    for text in [format!("{l:?}"), json, rev(&l.policy)] {
+        assert!(!text.contains("SECRET"), "{text}");
+    }
+    let (_d2, o2) = with_backends(SYS, "", "", &BACKENDS.replace("SECRET", "OTHER"));
+    assert_eq!(rev(&l.policy), rev(&load(&o2).unwrap().policy));
+}

@@ -3163,3 +3163,53 @@ fn clean_skipped_failed_and_shadow_reviews() {
     assert!(matches!(e.review_handback(&r2), Review::Failed(_)));
     assert!(spy.seen.lock().unwrap().is_none());
 }
+
+fn engine_with_backends(content: &str) -> Result<(tempfile::TempDir, Engine), EngineError> {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let sys = d.join("sys.json");
+    fs::write(&sys, r#"{"policy_version":1}"#).unwrap();
+    let cfg = d.join("config").join("callguard");
+    fs::create_dir_all(&cfg).unwrap();
+    fs::write(cfg.join("backends.json"), content).unwrap();
+    let e = Engine::load(LoadOptions {
+        system_policy: Some(path_str(&sys)),
+        user_config_dir: UserConfig::Dir(path_str(&d.join("config"))),
+        options: Options {
+            log: LogTarget::Off,
+            no_host_meta: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
+    Ok((dir, e))
+}
+
+#[test]
+fn a_bad_backends_file_fails_the_engine_load_and_names_the_file_not_the_key() {
+    for content in [
+        "{ not json",
+        r#"{"default":"nowhere","backends":{"a":{"type":"openai","api_key":"sk-ant-SECRET"}}}"#,
+        r#"{"backends":{"a":{"type":"bogus","api_key":"sk-ant-SECRET"}}}"#,
+    ] {
+        let Err(err) = engine_with_backends(content) else {
+            panic!("{content} loaded")
+        };
+        assert!(
+            err.0.contains("backends.json") || err.0.contains("nowhere"),
+            "{err}"
+        );
+        assert!(!err.0.contains("SECRET"), "{err}");
+    }
+}
+
+#[test]
+fn the_backends_file_chooses_the_judges_backend_and_the_key_stays_out_of_its_debug_and_rev() {
+    let (_d, e) = engine_with_backends(
+        r#"{"default":"mine","backends":{"mine":{"type":"fake","fake_mode":"allow","api_key":"sk-ant-SECRET-LOG","data_classes":["open","private"]}}}"#,
+    )
+    .unwrap();
+    assert_eq!(e.policy().llm.as_ref().unwrap().backend, "mine");
+    assert!(!format!("{:?}", e.policy()).contains("SECRET"));
+    assert!(!e.policy_rev().contains("SECRET"));
+}

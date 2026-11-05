@@ -9,6 +9,11 @@ pub(crate) const MODE_SHADOW: &str = "shadow";
 pub(crate) const LAYER_SYSTEM: &str = "system";
 pub(crate) const LAYER_USER: &str = "user";
 pub const LAYER_PROJECT: &str = "project";
+/// The user's backends file, listed among the files read.
+pub const LAYER_USER_BACKENDS: &str = "user-backends";
+
+/// The backends file's name in the user's callguard config directory.
+pub const BACKENDS_FILE: &str = "backends.json";
 
 /// The ids of the built-in layer's rules (`rules`). Only the system layer can
 /// list them in `disable_builtin`.
