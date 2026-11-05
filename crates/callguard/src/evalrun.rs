@@ -2,7 +2,7 @@
 //! Positive means flagged (ask or deny).
 
 use std::io::{self, Write};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -183,37 +183,26 @@ pub fn run(
     };
     let stopped = || stop.is_some_and(|s| s());
 
-    let mut next = 0;
+    let mut first = 0;
     if !cases.is_empty() && !stopped() {
         one(0);
-        next = 1;
+        first = 1;
     }
-    // The dispatcher hands one case at a time to whichever worker is free.
-    let (tx, rx) = mpsc::sync_channel::<usize>(0);
-    let rx = Arc::new(Mutex::new(rx));
+    // Each worker takes the next case until none is left or `stop` says so.
+    let next = AtomicUsize::new(first);
     let one = &one;
     std::thread::scope(|s| {
         for _ in 0..concurrency {
-            let rx = Arc::clone(&rx);
-            s.spawn(move || {
-                loop {
-                    let next = rx.lock().unwrap_or_else(|p| p.into_inner()).recv();
-                    match next {
-                        Ok(i) => one(i), // each case writes its own slot
-                        Err(_) => break,
+            s.spawn(|| {
+                while !stopped() {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    if i >= cases.len() {
+                        break;
                     }
+                    one(i); // each case writes its own slot
                 }
             });
         }
-        // If every worker died the receiver is gone and the send fails.
-        drop(rx);
-        while next < cases.len() && !stopped() {
-            if tx.send(next).is_err() {
-                break;
-            }
-            next += 1;
-        }
-        drop(tx);
     });
 
     let mut ran: Vec<&Case> = Vec::new();
@@ -234,12 +223,15 @@ pub fn run(
 struct Acc {
     s: Stats,
     lat: Vec<Duration>,
+    /// Cases decided exactly as expected.
+    exact: i64,
 }
 
 impl Acc {
     fn add(&mut self, c: &Case, o: &Outcome) {
         self.s.n += 1;
         self.lat.push(o.latency);
+        self.exact += i64::from(o.got == c.expected);
         let (exp, got) = (c.expected != Decision::Allow, o.got != Decision::Allow);
         match (exp, got) {
             (true, true) => self.s.tp += 1,
@@ -249,12 +241,12 @@ impl Acc {
         }
     }
 
-    fn finish(&mut self, exact: i64) -> Stats {
+    fn finish(&mut self) -> Stats {
         let mut s = self.s.clone();
         s.precision = ratio(s.tp, s.tp + s.fp);
         s.recall = ratio(s.tp, s.tp + s.fn_);
         s.fpr = ratio(s.fp, s.fp + s.tn);
-        s.accuracy = ratio(exact, s.n);
+        s.accuracy = ratio(self.exact, s.n);
         self.lat.sort();
         s.p50_ms = pct(&self.lat, 50);
         s.p95_ms = pct(&self.lat, 95);
@@ -277,34 +269,25 @@ fn pct(sorted: &[Duration], p: usize) -> f64 {
 
 fn score(cases: &[&Case], outs: &[Outcome]) -> Report {
     let mut all = Acc::default();
-    let mut per: Vec<(String, Acc)> = Vec::new(); // in order of first appearance
-    let mut exact: Vec<(String, i64)> = Vec::new();
+    let mut per: Vec<Acc> = Vec::new(); // in order of first appearance
     let mut rep = Report::default();
-    let mut all_exact = 0;
     for (c, o) in cases.iter().zip(outs) {
-        let idx = match per.iter().position(|(b, _)| *b == c.bucket) {
+        let idx = match per.iter().position(|a| a.s.bucket == c.bucket) {
             Some(i) => i,
             None => {
-                per.push((
-                    c.bucket.clone(),
-                    Acc {
-                        s: Stats {
-                            bucket: c.bucket.clone(),
-                            ..Default::default()
-                        },
-                        lat: Vec::new(),
+                per.push(Acc {
+                    s: Stats {
+                        bucket: c.bucket.clone(),
+                        ..Default::default()
                     },
-                ));
-                exact.push((c.bucket.clone(), 0));
+                    ..Default::default()
+                });
                 per.len() - 1
             }
         };
-        per[idx].1.add(c, o);
+        per[idx].add(c, o);
         all.add(c, o);
-        if o.got == c.expected {
-            exact[idx].1 += 1;
-            all_exact += 1;
-        } else {
+        if o.got != c.expected {
             rep.mismatches.push(Mismatch {
                 id: c.id.clone(),
                 bucket: c.bucket.clone(),
@@ -316,24 +299,15 @@ fn score(cases: &[&Case], outs: &[Outcome]) -> Report {
         }
     }
     all.s.bucket = "all".into();
-    rep.overall = all.finish(all_exact);
+    rep.overall = all.finish();
     // Known buckets first in design order, then any others as encountered.
-    let order: Vec<String> = BUCKETS
-        .iter()
-        .map(|b| (*b).to_owned())
-        .chain(per.iter().map(|(b, _)| b.clone()))
-        .collect();
-    let mut seen: Vec<&str> = Vec::new();
-    for b in &order {
-        if seen.contains(&b.as_str()) {
-            continue;
-        }
-        if let Some(i) = per.iter().position(|(name, _)| name == b) {
-            seen.push(b);
-            let ex = exact[i].1;
-            rep.buckets.push(per[i].1.finish(ex));
-        }
-    }
+    per.sort_by_key(|a| {
+        BUCKETS
+            .iter()
+            .position(|b| *b == a.s.bucket)
+            .unwrap_or(BUCKETS.len())
+    });
+    rep.buckets = per.iter_mut().map(Acc::finish).collect();
     rep
 }
 
