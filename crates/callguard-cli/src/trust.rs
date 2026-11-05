@@ -77,20 +77,15 @@ pub fn run(
 }
 
 fn project_dir(given: &str) -> String {
-    let dir = if given.is_empty() {
-        std::env::current_dir()
-            .map(|d| d.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    } else {
-        given.to_owned()
-    };
     let resolved = if given.is_empty() {
         engine::resolve_project_dir(&Request {
-            cwd: dir.clone(),
+            cwd: std::env::current_dir()
+                .map(|d| d.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             ..Default::default()
         })
     } else {
-        dir
+        given.to_owned()
     };
     trust::canonical(&resolved)
 }

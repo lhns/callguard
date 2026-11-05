@@ -420,8 +420,8 @@ fn line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
 
 /// `{"meta":{key: value}}` as one escaped JSON line.
 fn meta_line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
-    let inner = line(key, v);
-    json_text::escape(&format!("{{\"meta\":{inner}}}"))
+    // `line` escapes already.
+    format!("{{\"meta\":{}}}", line(key, v))
 }
 
 /// The rendered user message: session info, transcript, the pending call.

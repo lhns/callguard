@@ -142,23 +142,14 @@ impl Spec {
                 .all(|t| matches!(t, Tok::Lit(_)))
     }
 
-    /// Whether `argv` matches. With `norm`, the program names (rule and argv)
-    /// are compared by base name, without `.exe`, folded when `caseless`.
-    /// `prefix` accepts trailing argv tokens after the last spec token (the
-    /// raw-text fallback). A runaway match (`work` steps) counts as `on_limit`.
-    pub fn matches(
-        &self,
-        argv: &[String],
-        norm: Option<bool>,
-        prefix: bool,
-        on_limit: bool,
-        work: &mut usize,
-    ) -> bool {
+    /// Whether `argv` matches. A runaway match (`work` steps) counts as a
+    /// match unless `mode` is [`Mode::Allow`].
+    pub fn matches(&self, argv: &[String], mode: Mode, work: &mut usize) -> bool {
         if argv.is_empty() {
             return false;
         }
         let (mut a0, mut t0) = (None, None);
-        if let Some(caseless) = norm {
+        if let Mode::Call { caseless } | Mode::Raw { caseless } = mode {
             a0 = Some(prog_name(&argv[0], caseless));
             if let Tok::Lit(l) = &self.toks[0] {
                 t0 = Some(Tok::Lit(prog_name(l, caseless)));
@@ -169,16 +160,34 @@ impl Spec {
             args: argv,
             a0,
             t0,
-            prefix,
-            strict: norm.is_none() && !prefix,
+            prefix: matches!(mode, Mode::Raw { .. }),
+            strict: matches!(mode, Mode::Allow),
             only_trailing: self.trailing_only(),
             failed: HashSet::new(),
             work,
             exhausted: false,
         };
         let r = m.go(0, 0);
-        if m.exhausted { on_limit } else { r }
+        if m.exhausted {
+            !matches!(mode, Mode::Allow)
+        } else {
+            r
+        }
     }
+}
+
+/// How a spec is matched against an argv.
+#[derive(Debug, Clone, Copy)]
+pub enum Mode {
+    /// An allow rule: program names compare literally and a final glob token
+    /// must end the argv.
+    Allow,
+    /// A deny or ask rule on nah's parse: the program names (rule and argv) are
+    /// compared by base name, without `.exe`, folded when `caseless`.
+    Call { caseless: bool },
+    /// A deny or ask rule on raw text: as `Call`, and trailing argv tokens
+    /// after the last spec token are accepted.
+    Raw { caseless: bool },
 }
 
 struct Matcher<'a> {
@@ -392,11 +401,11 @@ pub(super) const WORK_LIMIT: usize = 200_000;
 /// normalised call, or the call with git's global options removed.
 pub(super) fn matches_call(spec: &Spec, argv: &[String], caseless: bool) -> bool {
     let mut work = WORK_LIMIT;
-    if spec.matches(argv, Some(caseless), false, true, &mut work) {
+    if spec.matches(argv, Mode::Call { caseless }, &mut work) {
         return true;
     }
     match strip_git_globals(argv, caseless) {
-        Some(stripped) => spec.matches(&stripped, Some(caseless), false, true, &mut work),
+        Some(stripped) => spec.matches(&stripped, Mode::Call { caseless }, &mut work),
         None => false,
     }
 }
@@ -456,11 +465,11 @@ pub(super) fn matches_raw(spec: &Spec, command: &str, caseless: bool) -> bool {
                 break;
             }
             let argv = &seg[s..];
-            if spec.matches(argv, Some(caseless), true, true, &mut work) {
+            if spec.matches(argv, Mode::Raw { caseless }, &mut work) {
                 return true;
             }
             if let Some(stripped) = strip_git_globals(argv, caseless)
-                && spec.matches(&stripped, Some(caseless), true, true, &mut work)
+                && spec.matches(&stripped, Mode::Raw { caseless }, &mut work)
             {
                 return true;
             }

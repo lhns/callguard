@@ -80,9 +80,8 @@ fn ctx(
     for state in shipped_guard_states() {
         let name = state.name().to_owned();
         let want = overrides.get(&name).copied().unwrap_or(state.enabled());
-        let explicit_off = !want && !state.enabled();
-        // A default-on guard turned off by policy is explicit too.
-        let explicit_off = explicit_off || (!want && overrides.contains_key(&name));
+        // Off by default, or turned off by policy: explicit either way.
+        let explicit_off = !want && (!state.enabled() || overrides.contains_key(&name));
         states.push(
             ShippedGuardState::with_explicit_disable(name, want, explicit_off)
                 .map_err(|e| failed(&e))?,

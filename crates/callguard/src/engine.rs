@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::panic::{self, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -970,22 +970,18 @@ pub fn resolve_project_dir(req: &Request) -> String {
     if req.cwd.is_empty() {
         return String::new();
     }
-    let mut dir = PathBuf::from(&req.cwd);
-    loop {
+    // Each directory up to the root; "." for a bare relative name.
+    for dir in Path::new(&req.cwd).ancestors() {
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
         if std::fs::metadata(dir.join(".git")).is_ok() {
             return dir.to_string_lossy().into_owned();
         }
-        // The parent, "." for a bare name, itself at the root.
-        let parent: PathBuf = match dir.parent() {
-            Some(p) if p.as_os_str().is_empty() => PathBuf::from("."),
-            Some(p) => p.to_path_buf(),
-            None => dir.clone(),
-        };
-        if parent == dir {
-            return req.cwd.clone();
-        }
-        dir = parent;
     }
+    req.cwd.clone()
 }
 
 /// Where the decision log goes for `pol` and `opts` ("" = no log). The error

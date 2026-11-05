@@ -729,13 +729,13 @@ impl Permissions {
         let literal = |argv: &[String]| {
             specs.iter().find(|(_, s)| {
                 let mut work = spec::WORK_LIMIT;
-                s.matches(argv, None, false, false, &mut work)
+                s.matches(argv, spec::Mode::Allow, &mut work)
             })
         };
-        let want = self.env.fold(&self.env.normalize(&call.cwd, ""));
         if call.cwd.is_empty() {
             return None;
         }
+        let want = self.env.fold(&self.env.normalize(&call.cwd, ""));
         let mut first = None;
         for c in &n.calls {
             let argv = c.argv.as_ref().filter(|a| !a.is_empty())?;

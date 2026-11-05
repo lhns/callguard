@@ -136,8 +136,7 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
         let eng = Engine::load(load_opts(!with_facts, backend))
             .map_err(|e| format!("loading policy: {e}"))?;
         let decide = |r: &Request| eng.decide(r);
-        let stop_meter = meter.clone();
-        let stop = move || stop_meter.as_ref().is_some_and(|m| m.stop());
+        let stop = || meter.as_ref().is_some_and(|m| m.stop());
         let stop_fn: Option<&(dyn Fn() -> bool + Sync)> = meter.as_ref().map(|_| &stop as _);
         let mut rep = evalrun::run(&cases, &decide, concurrency, stop_fn);
         if let Some(m) = &meter {

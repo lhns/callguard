@@ -98,9 +98,7 @@ fn spec_matches(rule: &str, command: &str) -> bool {
     let mut work = spec::WORK_LIMIT;
     s.matches(
         &spec::shell_words(command).unwrap(),
-        Some(false),
-        false,
-        false,
+        spec::Mode::Call { caseless: false },
         &mut work,
     )
 }
@@ -1555,9 +1553,9 @@ fn runaway_matching_counts_as_a_match_for_deny_and_not_for_allow() {
     let rule = Spec::parse("a * * * * * * z").unwrap();
     let args: Vec<String> = std::iter::repeat_n("a".to_owned(), 400).collect();
     let mut work = 2_000;
-    assert!(rule.matches(&args, None, false, true, &mut work));
+    assert!(rule.matches(&args, spec::Mode::Call { caseless: false }, &mut work));
     let mut work = 2_000;
-    assert!(!rule.matches(&args, None, false, false, &mut work));
+    assert!(!rule.matches(&args, spec::Mode::Allow, &mut work));
 }
 
 // --- found by review ---------------------------------------------------------------
