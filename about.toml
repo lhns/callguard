@@ -13,13 +13,6 @@ accepted = [
     "Unicode-DFS-2016",
     "Zlib",
     "CDLA-Permissive-2.0",
-    # OPEN QUESTION FOR THE OWNER: the malachite crates (malachite, -base, -bigint,
-    # -nz, -q) are LGPL-3.0-only and are linked statically into the binary, through
-    # nah-effinterp -> effinterp-engine -> rustpython-parser. Listed here so the
-    # notices name them; whether shipping them in a binary under Apache-2.0 is
-    # acceptable (LGPL asks that a user can relink with a changed library) is a
-    # legal call this file does not make.
-    "LGPL-3.0-only",
 ]
 # The release targets; a crate only used on another platform is left out.
 targets = [

@@ -27,16 +27,16 @@ getrandom = "0.3"
 tempfile = "3"
 # nah is publish = false, so a git pin: our fork, which is nah v1.7.0 plus
 # decide_with_budget (the fork carries the patch). Only callguard-nah depends on it.
-nah-cli = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
-nah-proto = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
-nah-observe = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
+nah-cli = { git = "https://github.com/lhns/nah", rev = "d9b6963a148912b655c533890ad34a5a5e85bbe3" }
+nah-proto = { git = "https://github.com/lhns/nah", rev = "d9b6963a148912b655c533890ad34a5a5e85bbe3" }
+nah-observe = { git = "https://github.com/lhns/nah", rev = "d9b6963a148912b655c533890ad34a5a5e85bbe3" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
 # nah's own `[patch.crates-io]` does not carry over to its dependents.
 [patch.crates-io]
-gosyn = { git = "https://github.com/lhns/nah", rev = "c35eb6efa5d41477d18c5b193ed5fa5c07352e4c" }
+gosyn = { git = "https://github.com/lhns/nah", rev = "d9b6963a148912b655c533890ad34a5a5e85bbe3" }
 
 # Release binaries (release.yml). Not `panic = "abort"`: the crash design relies
 # on unwinding (a panic in the child is a crash the parent turns into a verdict).

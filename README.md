@@ -150,4 +150,4 @@ The ignored tests run the real nah; they need a release build to be fast. Four t
 
 ## License
 
-Apache-2.0, see [LICENSE](LICENSE). The binary includes nah (MIT, Copyright (c) 2026 Manuel Schipper) and other crates; their notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), generated with `cargo about generate about.hbs -o THIRD-PARTY-NOTICES.md` (config in `about.toml`) and shipped in every release archive. Five of those crates (`malachite*`, reached through nah) are LGPL-3.0-only; see the comment in `about.toml`.
+Apache-2.0, see [LICENSE](LICENSE). The binary includes nah (MIT, Copyright (c) 2026 Manuel Schipper) and other crates; their notices are in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), generated with `cargo about generate about.hbs -o THIRD-PARTY-NOTICES.md` (config in `about.toml`) and shipped in every release archive.

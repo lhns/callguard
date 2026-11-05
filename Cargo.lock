@@ -3,18 +3,6 @@
 version = 4
 
 [[package]]
-name = "ahash"
-version = "0.8.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
-dependencies = [
- "cfg-if",
- "once_cell",
- "version_check",
- "zerocopy",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -376,7 +364,7 @@ checksum = "d8b9f2e4c67f833b660cdb0a3523065869fb35570177239812ed4c905aeff87b"
 dependencies = [
  "bitflags",
  "crossterm_winapi",
- "derive_more 2.1.1",
+ "derive_more",
  "document-features",
  "mio",
  "parking_lot",
@@ -453,32 +441,11 @@ checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "derive_more"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a9b99b9cbbe49445b21764dc0625032a89b145a2642e67603e1c936f5458d05"
-dependencies = [
- "derive_more-impl 1.0.0",
-]
-
-[[package]]
-name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
 dependencies = [
- "derive_more-impl 2.1.1",
-]
-
-[[package]]
-name = "derive_more-impl"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb7330aeadfbe296029522e6c40f315320aba36fc43a5b3632f3795348f3bd22"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
- "unicode-xid",
+ "derive_more-impl",
 ]
 
 [[package]]
@@ -534,7 +501,7 @@ checksum = "fd8e701084c37e7ef62d3f9e453b618130cbc0ef3573847785952a3ac3f746bf"
 [[package]]
 name = "effinterp-engine"
 version = "0.1.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "blake3",
  "effinterp-model-schema",
@@ -565,7 +532,7 @@ dependencies = [
 [[package]]
 name = "effinterp-matcher"
 version = "0.1.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "effinterp-proto",
  "effinterp-trace",
@@ -576,7 +543,7 @@ dependencies = [
 [[package]]
 name = "effinterp-model-schema"
 version = "0.1.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "blake3",
  "effinterp-proto",
@@ -587,7 +554,7 @@ dependencies = [
 [[package]]
 name = "effinterp-proto"
 version = "0.1.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "blake3",
  "serde",
@@ -598,7 +565,7 @@ dependencies = [
 [[package]]
 name = "effinterp-trace"
 version = "0.1.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "effinterp-proto",
 ]
@@ -719,21 +686,12 @@ dependencies = [
 [[package]]
 name = "gosyn"
 version = "0.2.14"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "anyhow",
  "strum 0.27.2",
  "thiserror",
  "unic-ucd-category",
-]
-
-[[package]]
-name = "hashbrown"
-version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
-dependencies = [
- "ahash",
 ]
 
 [[package]]
@@ -1244,64 +1202,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "malachite"
-version = "0.4.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fbdf9cb251732db30a7200ebb6ae5d22fe8e11397364416617d2c2cf0c51cb5"
-dependencies = [
- "malachite-base",
- "malachite-nz",
- "malachite-q",
-]
-
-[[package]]
-name = "malachite-base"
-version = "0.4.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ea0ed76adf7defc1a92240b5c36d5368cfe9251640dcce5bd2d0b7c1fd87aeb"
-dependencies = [
- "hashbrown 0.14.5",
- "itertools 0.11.0",
- "libm",
- "ryu",
-]
-
-[[package]]
-name = "malachite-bigint"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d149aaa2965d70381709d9df4c7ee1fc0de1c614a4efc2ee356f5e43d68749f8"
-dependencies = [
- "derive_more 1.0.0",
- "malachite",
- "num-integer",
- "num-traits",
- "paste",
-]
-
-[[package]]
-name = "malachite-nz"
-version = "0.4.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34a79feebb2bc9aa7762047c8e5495269a367da6b5a90a99882a0aeeac1841f7"
-dependencies = [
- "itertools 0.11.0",
- "libm",
- "malachite-base",
-]
-
-[[package]]
-name = "malachite-q"
-version = "0.4.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50f235d5747b1256b47620f5640c2a17a88c7569eebdf27cd9cb130e1a619191"
-dependencies = [
- "itertools 0.11.0",
- "malachite-base",
- "malachite-nz",
-]
-
-[[package]]
 name = "matches"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1334,7 +1234,7 @@ checksum = "743fb55ba31b18fb1ecef6bdc9aa2743314978ac084044301a7eee33fb99a20d"
 [[package]]
 name = "nah-cli"
 version = "1.7.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "clap",
  "getrandom 0.4.3",
@@ -1358,7 +1258,7 @@ dependencies = [
 [[package]]
 name = "nah-effinterp"
 version = "1.7.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "blake3",
  "effinterp-engine",
@@ -1375,7 +1275,7 @@ dependencies = [
 [[package]]
 name = "nah-extensions"
 version = "1.7.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "nah-proto",
  "serde",
@@ -1390,7 +1290,7 @@ dependencies = [
 [[package]]
 name = "nah-observe"
 version = "1.7.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "libc",
  "nah-proto",
@@ -1402,7 +1302,7 @@ dependencies = [
 [[package]]
 name = "nah-policy"
 version = "1.7.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "effinterp-matcher",
  "effinterp-proto",
@@ -1412,7 +1312,7 @@ dependencies = [
 [[package]]
 name = "nah-proto"
 version = "1.7.0"
-source = "git+https://github.com/lhns/nah?rev=c35eb6efa5d41477d18c5b193ed5fa5c07352e4c#c35eb6efa5d41477d18c5b193ed5fa5c07352e4c"
+source = "git+https://github.com/lhns/nah?rev=d9b6963a148912b655c533890ad34a5a5e85bbe3#d9b6963a148912b655c533890ad34a5a5e85bbe3"
 dependencies = [
  "effinterp-proto",
  "icu_properties",
@@ -1784,12 +1684,6 @@ dependencies = [
  "smallvec",
  "windows-link",
 ]
-
-[[package]]
-name = "paste"
-version = "1.0.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "percent-encoding"
@@ -2218,7 +2112,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cdaf8ee5c1473b993b398c174641d3aa9da847af36e8d5eb8291930b72f31a5"
 dependencies = [
  "is-macro",
- "malachite-bigint",
+ "num-bigint",
  "rustpython-parser-core",
  "static_assertions",
 ]
@@ -2234,7 +2128,7 @@ dependencies = [
  "itertools 0.11.0",
  "lalrpop-util",
  "log",
- "malachite-bigint",
+ "num-bigint",
  "num-traits",
  "phf 0.11.3",
  "phf_codegen",
@@ -2902,12 +2796,6 @@ name = "unicode-width"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
-
-[[package]]
-name = "unicode-xid"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
 name = "unicode_names2"
