@@ -81,19 +81,14 @@ fn collapse_substitutions(s: &str) -> String {
     out
 }
 
-/// The names in a slash path, `.` dropped and `..` resolved.
+/// The names in a slash path, `.` dropped and `..` resolved (not above the
+/// root).
 fn segments(p: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for seg in p.split('/') {
-        match seg {
-            "" | "." => {}
-            ".." => {
-                out.pop();
-            }
-            s => out.push(s.to_owned()),
-        }
-    }
-    out
+    path_clean(&format!("/{p}"))
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The drive letter and the segments below it of a Windows spelling of a
@@ -335,17 +330,16 @@ impl Scan<'_> {
             return Some("a volume");
         }
         let mut p = base.to_owned();
-        for pass in 0..2 {
-            if let Some((letter, segs)) = drive_parts(&p, env.windows) {
-                if segs.len() <= 1 {
-                    return Some("a drive or a directory directly on it");
-                }
-                p = format!("{letter}:/{}", segs.join("/"));
-                break;
+        let mut drive = drive_parts(&p, env.windows);
+        if drive.is_none() {
+            p = env.normalize(&p, self.cwd);
+            drive = drive_parts(&p, env.windows);
+        }
+        if let Some((letter, segs)) = drive {
+            if segs.len() <= 1 {
+                return Some("a drive or a directory directly on it");
             }
-            if pass == 0 {
-                p = env.normalize(&p, self.cwd);
-            }
+            p = format!("{letter}:/{}", segs.join("/"));
         }
         if !env.is_abs(&p) {
             let c = path_clean(&p);

@@ -262,7 +262,9 @@ impl Set {
         nah: Option<&NahResult>,
         stops: &dyn Fn(&Call) -> bool,
     ) -> Option<Matched> {
-        let read_only = || self.read_only(call, nah, stops);
+        // Parsed at most once, however many rules ask.
+        let cell = std::cell::OnceCell::new();
+        let read_only = || *cell.get_or_init(|| self.read_only(call, nah, stops));
         let mut best: Option<&Compiled> = None;
         for c in &self.rules {
             if !c.matches(call, &read_only) {
