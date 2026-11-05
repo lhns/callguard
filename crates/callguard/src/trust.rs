@@ -58,8 +58,7 @@ pub fn canonical(dir: &str) -> String {
     let real = std::fs::canonicalize(dir)
         .or_else(|_| std::path::absolute(dir))
         .unwrap_or_else(|_| PathBuf::from(dir));
-    let s = real.to_string_lossy().replace('\\', "/");
-    s.strip_prefix("//?/").unwrap_or(&s).to_owned()
+    crate::rules::plain_path(&real)
 }
 
 fn same_project(a: &str, b: &str) -> bool {

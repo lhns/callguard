@@ -396,18 +396,24 @@ pub(crate) fn resolve_real(p: &str) -> Option<String> {
     for name in rest.iter().rev() {
         out.push(name);
     }
-    let s = out.to_string_lossy();
-    // A backslash separates only on Windows; in a Unix file name it is a letter.
+    Some(plain_path(&out))
+}
+
+/// `p` as a string in slash form without the Windows `//?/` prefix (a share
+/// `//?/UNC/h/s` is `//h/s`). A backslash separates only on Windows; in a Unix
+/// file name it is a letter.
+pub(crate) fn plain_path(p: &std::path::Path) -> String {
+    let s = p.to_string_lossy();
     let s = if cfg!(windows) {
         s.replace('\\', "/")
     } else {
         s.into_owned()
     };
-    Some(if let Some(unc) = s.strip_prefix("//?/UNC/") {
+    if let Some(unc) = s.strip_prefix("//?/UNC/") {
         format!("//{unc}") // a network share
     } else {
         s.strip_prefix("//?/").unwrap_or(&s).to_owned()
-    })
+    }
 }
 
 /// Windows names `//?/C:/x` and `//./C:/x` the file `C:/x`, `//?/UNC/h/s` the

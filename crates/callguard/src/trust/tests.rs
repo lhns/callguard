@@ -147,3 +147,10 @@ fn confirm_takes_only_y_or_yes() {
         assert_eq!(String::from_utf8(out).unwrap(), "Trust these rules? [y/N] ");
     }
 }
+
+/// A backslash is a letter in a Unix directory name, not a separator.
+#[cfg(unix)]
+#[test]
+fn a_backslash_name_is_not_the_nested_directory() {
+    assert_ne!(canonical(r"/a\b"), canonical("/a/b"));
+}
