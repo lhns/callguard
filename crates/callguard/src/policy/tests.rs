@@ -836,3 +836,19 @@ fn a_fifo_policy_fails_instead_of_hanging() {
     });
     assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true));
 }
+
+#[test]
+fn a_short_nah_timeout_alone_clamps_the_budget() {
+    let (_d, o) = layers(r#"{"policy_version":1,"nah":{"timeout_ms":1000}}"#, "", "");
+    let l = load(&o).unwrap();
+    assert!(l.problems().is_empty(), "{:?}", l.problems());
+    let n = l.policy.nah.unwrap();
+    assert_eq!((n.timeout_ms, n.budget_ms), (1000, 1000));
+    // A budget the layer sets stays, and is still checked against the timeout.
+    let (_d, o) = layers(
+        r#"{"policy_version":1,"nah":{"timeout_ms":1000,"budget_ms":500}}"#,
+        "",
+        "",
+    );
+    assert_eq!(load(&o).unwrap().policy.nah.unwrap().budget_ms, 500);
+}

@@ -1067,6 +1067,10 @@ pub fn merge_system(base: &Policy, sys: &Policy) -> Policy {
         }
         if sn.budget_ms > 0 {
             n.budget_ms = sn.budget_ms;
+        } else {
+            // A short hard deadline alone must not leave the default budget
+            // above it, which would make the policy invalid.
+            n.budget_ms = n.budget_ms.min(n.timeout_ms);
         }
         if !sn.mode.is_empty() {
             n.mode = sn.mode.clone();
