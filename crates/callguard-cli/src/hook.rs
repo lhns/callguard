@@ -4,7 +4,7 @@
 
 use std::io::{Read, Write};
 
-use callguard::engine::{self, Engine};
+use callguard::engine::Engine;
 use callguard::fallback::fallback_verdict;
 use callguard::hook::{self, Options};
 use callguard::schema::{Request, Verdict};
@@ -99,12 +99,7 @@ pub fn run(
     // The engine is built per request, because the project policy layer
     // depends on the request's project directory.
     let d = move |req: &Request| -> Verdict {
-        let lo = engine::LoadOptions {
-            system_policy: policy_path.clone(),
-            project_dir: engine::resolve_project_dir(req),
-            user_config_dir: if no_user { "-".into() } else { String::new() },
-            options: engine_child::options(&log_path, &test_engine),
-        };
+        let lo = engine_child::load_options(req, &policy_path, no_user, &log_path, &test_engine);
         match Engine::load(lo) {
             Ok(eng) => eng.decide(req),
             Err(e) => fallback_verdict(Some(req), &format!("policy: {e}")),

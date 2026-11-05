@@ -4,7 +4,7 @@
 
 use std::io::{Read, Write};
 
-use callguard::engine::{self, Engine};
+use callguard::engine::Engine;
 use callguard::fallback::fallback_verdict;
 use callguard::io_util::{MAX_INPUT, read_capped};
 use callguard::json_text;
@@ -92,16 +92,13 @@ pub fn run(
         return fail(&req, stdout, "request has no tool.name");
     }
 
-    let lo = engine::LoadOptions {
-        system_policy: f.str("policy"),
-        project_dir: engine::resolve_project_dir(&req),
-        user_config_dir: if f.bool("no-user-policy") {
-            "-".into()
-        } else {
-            String::new()
-        },
-        options: engine_child::options(&f.str("log"), &f.str("test-engine")),
-    };
+    let lo = engine_child::load_options(
+        &req,
+        &f.str("policy"),
+        f.bool("no-user-policy"),
+        &f.str("log"),
+        &f.str("test-engine"),
+    );
     let eng = match Engine::load(lo) {
         Ok(e) => e,
         Err(e) => return fail(&req, stdout, &format!("policy: {e}")),
