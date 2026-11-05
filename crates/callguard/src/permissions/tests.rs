@@ -275,6 +275,18 @@ fn deny_matches_normalised_calls() {
         ),
         ("/usr/bin/git push x", &["/usr/bin/git", "push", "x"]),
         ("git.exe push", &["git.exe", "push"]),
+        (
+            "git --config-env a=b push origin main",
+            &["git", "--config-env", "a=b", "push", "origin", "main"],
+        ),
+        (
+            "git --super-prefix x push",
+            &["git", "--super-prefix", "x", "push"],
+        ),
+        (
+            "git --attr-source HEAD push",
+            &["git", "--attr-source", "HEAD", "push"],
+        ),
     ];
     for (cmd, a) in cases {
         let n = nah_of(&[a]);

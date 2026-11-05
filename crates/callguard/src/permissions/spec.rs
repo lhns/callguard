@@ -309,7 +309,8 @@ pub(super) fn strip_git_globals(argv: &[String], caseless: bool) -> Option<Vec<S
     while let Some(a) = argv.get(i) {
         let a = a.as_str();
         match a {
-            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => i += 2,
+            "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--config-env"
+            | "--super-prefix" | "--attr-source" => i += 2,
             "--no-pager"
             | "-p"
             | "--paginate"
