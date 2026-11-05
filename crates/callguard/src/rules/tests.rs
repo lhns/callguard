@@ -262,6 +262,27 @@ fn a_drive_relative_path_is_unresolvable() {
 }
 
 #[test]
+fn windows_device_and_share_prefixes_name_the_plain_path() {
+    let w = win();
+    for (raw, want) in [
+        (r"\\?\C:\Users\u\.ssh\id_x", "C:/Users/u/.ssh/id_x"),
+        (r"\\.\c:\x", "c:/x"),
+        (r"\\?\UNC\localhost\C$\x\y", "C:/x/y"),
+        (r"\\localhost\C$\Users\u\.ssh\id_x", "C:/Users/u/.ssh/id_x"),
+        (r"\\LocalHost\d$", "d:/"),
+        (r"//?/unc/host/share/x", "/host/share/x"),
+        (r"\\?\UNC\host\share\x", "/host/share/x"),
+        // A real share stays a share, a device that is no drive stays as it was.
+        (r"\\host\share\x", "/host/share/x"),
+        (r"\\localhost\share\x", "/localhost/share/x"),
+        (r"\\.\PhysicalDrive0", "/PhysicalDrive0"),
+    ] {
+        assert_eq!(w.normalize(raw, "C:/w"), want, "{raw}");
+    }
+    assert_eq!(unix().normalize(r"//?/C:/x", "/w"), "/?/C:/x", "only Windows reads them");
+}
+
+#[test]
 fn new_call() {
     let unix = unix();
     let c = Call::new(

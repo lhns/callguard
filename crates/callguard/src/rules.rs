@@ -480,6 +480,37 @@ fn quote_meta(s: &str) -> String {
     out
 }
 
+/// Windows names `//?/C:/x` and `//./C:/x` the file `C:/x`, `//?/UNC/h/s` the
+/// share `//h/s`, and `//localhost/C$/x` the file `C:/x` again. Returns the
+/// path in its plain form so anchored globs see what the file system sees;
+/// other device names stay as they are.
+fn plain_windows_path(p: String) -> String {
+    let drive = |s: &str| {
+        let b = s.as_bytes();
+        b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+    };
+    let mut p = p;
+    if let Some(rest) = ["//?/", "//./", "/??/"].iter().find_map(|x| p.strip_prefix(x)) {
+        if drive(rest) {
+            return rest.to_owned();
+        }
+        match rest.get(..4) {
+            Some(unc) if unc.eq_ignore_ascii_case("unc/") => p = format!("//{}", &rest[4..]),
+            _ => return p,
+        }
+    }
+    // The local machine's administrative share of a drive: `//localhost/C$/x`.
+    let share = p.strip_prefix("//").and_then(|r| {
+        let (host, tail) = r.split_once('/')?;
+        let local = host.eq_ignore_ascii_case("localhost") || host == "127.0.0.1";
+        let (letter, rest) = tail.split_once('/').unwrap_or((tail, ""));
+        let b = letter.as_bytes();
+        (local && b.len() == 2 && b[0].is_ascii_alphabetic() && b[1] == b'$')
+            .then(|| format!("{}:/{rest}", b[0] as char))
+    });
+    share.unwrap_or(p)
+}
+
 impl Env {
     /// Describes the running host.
     pub fn host() -> Env {
@@ -533,6 +564,9 @@ impl Env {
         let mut p = self.slash(p);
         if !self.home.is_empty() && (p == "~" || p.starts_with("~/")) {
             p = format!("{}{}", self.slash(&self.home), &p[1..]);
+        }
+        if self.windows {
+            p = plain_windows_path(p);
         }
         if !self.is_abs(&p) && !cwd.is_empty() {
             p = format!("{}/{p}", self.slash(cwd));
