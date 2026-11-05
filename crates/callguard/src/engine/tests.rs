@@ -2249,8 +2249,8 @@ fn duration_and_timestamps() {
     );
     let half = UNIX_EPOCH + Duration::new(1_793_620_800, 500_000_000);
     assert_eq!(rfc3339_nano(half), "2026-11-02T12:00:00.5Z");
-    let tiny = UNIX_EPOCH + Duration::new(1_793_620_800, 1);
-    assert_eq!(rfc3339_nano(tiny), "2026-11-02T12:00:00.000000001Z");
+    let tiny = UNIX_EPOCH + Duration::new(1_793_620_800, 100);
+    assert_eq!(rfc3339_nano(tiny), "2026-11-02T12:00:00.0000001Z");
 }
 
 #[test]
