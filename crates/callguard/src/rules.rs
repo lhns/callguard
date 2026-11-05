@@ -513,6 +513,19 @@ impl Env {
                 && b[0].is_ascii_alphabetic())
     }
 
+    /// Whether `raw` is `C:rel`, a path relative to the current directory of
+    /// drive C. Only the process knows that directory, so such a path is in no
+    /// project and has no real location; deny and ask rules still match its
+    /// text.
+    pub(crate) fn drive_relative(&self, raw: &str) -> bool {
+        let b = raw.as_bytes();
+        self.windows
+            && b.len() >= 2
+            && b[0].is_ascii_alphabetic()
+            && b[1] == b':'
+            && !matches!(b.get(2), Some(b'/' | b'\\'))
+    }
+
     /// An absolute, slash-normalized path for `p` relative to `cwd`: expands
     /// `~`, makes `p` absolute against `cwd` and cleans it. A relative `p` with
     /// no `cwd` stays relative.
@@ -870,8 +883,12 @@ impl Call {
         }
         if !raw_path.is_empty() {
             c.path = env.clean_names(&env.normalize(&raw_path, &input.cwd));
-            c.real_path = env.real(&c.path);
-            if let Some((dir, real_dir)) = project.as_ref().filter(|_| !c.project_ignored) {
+            let resolvable = !env.drive_relative(&raw_path);
+            c.real_path = env.real(&c.path).filter(|_| resolvable);
+            if let Some((dir, real_dir)) = project
+                .as_ref()
+                .filter(|_| !c.project_ignored && resolvable)
+            {
                 c.in_project = env.in_dir(&c.path, dir);
                 c.real_in_project = match (&c.real_path, real_dir) {
                     (Some(p), Some(d)) => env.in_dir(p, d),

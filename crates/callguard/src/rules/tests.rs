@@ -236,15 +236,28 @@ fn globs() {
 fn a_glob_crosses_a_newline_in_a_path() {
     let unix = unix();
     for (glob, path) in [
-        ("/p/.opencode/plugins/**", "/p/.opencode/plugins/a
-b.js"),
-        ("**/.claude/skills/**", "/p/.claude/skills/a
-b/SKILL.md"),
-        ("/p/*.js", "/p/a
-b.js"),
+        ("/p/.opencode/plugins/**", "/p/.opencode/plugins/a\nb.js"),
+        ("**/.claude/skills/**", "/p/.claude/skills/a\nb/SKILL.md"),
+        ("/p/*.js", "/p/a\nb.js"),
     ] {
         let re = unix.compile_glob(glob).unwrap();
         assert!(re.is_match(path), "glob {glob:?} vs {path:?} ({re})");
+    }
+}
+
+#[test]
+fn a_drive_relative_path_is_unresolvable() {
+    let w = win();
+    let mk = |p: &str| Call::new(at("Write", file_input(p), "C:/w/p", "C:/w/p"), &w);
+    let c = mk(r"C:\w\p\a.txt");
+    assert!(c.in_project && c.real_in_project && c.real_path.is_some(), "{c:?}");
+    for p in [r"C:..\..\evil.txt", r"C:evil.txt", "D:", r"c:sub\x"] {
+        let c = mk(p);
+        assert!(
+            !c.in_project && !c.real_in_project && c.real_path.is_none(),
+            "{p}: {c:?}"
+        );
+        assert!(!c.path.is_empty(), "{p}: deny and ask keep the lexical text");
     }
 }
 

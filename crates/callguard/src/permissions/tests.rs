@@ -1611,3 +1611,38 @@ fn deny_and_ask_read_the_raw_text_both_ways() {
     assert!(d.check(&bash("r\\\nm x"), None).is_some());
     assert!(d.check(&bash("ls"), None).is_none());
 }
+
+#[test]
+fn a_drive_relative_path_is_never_allowed() {
+    let e = Env {
+        home: "C:\\Users\\u".into(),
+        windows: true,
+        fold_case: false,
+        host: false,
+    };
+    let p = policy::Permissions {
+        deny: vec!["Edit(/secret/**)".into()],
+        allow: vec!["Edit(/x/**)".into()],
+        ..Default::default()
+    };
+    let (perms, _) = Permissions::compile(&p, &e).unwrap();
+    let perms = perms.with_resolver(Box::new(|e, p| Some(paths::to_posix(e, p))));
+    let at = |path: &str| {
+        Call::new(
+            CallInput {
+                tool: "Edit".into(),
+                input: Some(
+                    RawValue::from_string(serde_json::json!({ "file_path": path }).to_string())
+                        .unwrap(),
+                ),
+                cwd: "C:\\w\\p".into(),
+                project_dir: "C:\\w\\p".into(),
+                ..Default::default()
+            },
+            &e,
+        )
+    };
+    assert_eq!(hit(&perms, &at("C:\\w\\p\\x\\a")), Some("allow"));
+    assert_eq!(hit(&perms, &at("C:..\\..\\x\\a")), None, "C:rel is no path of ours");
+    assert_eq!(hit(&perms, &at("C:..\\..\\secret\\a")), Some("deny"));
+}
