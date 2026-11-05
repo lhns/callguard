@@ -609,7 +609,7 @@ impl Permissions {
             if allow && (paths::is_network(&self.env, r) || self.env.drive_relative(r)) {
                 return false;
             }
-            let norm = self.env.normalize(r, &call.cwd);
+            let norm = self.env.clean_names(&self.env.normalize(r, &call.cwd));
             let requested = spec.matches(&paths::to_posix(&self.env, &norm), &ctx, allow);
             let resolved = (self.resolver)(&self.env, &norm).filter(|_| !self.env.drive_relative(r));
             let real = resolved

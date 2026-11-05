@@ -1673,3 +1673,38 @@ fn a_drive_relative_path_is_never_allowed() {
     assert_eq!(hit(&perms, &at("C:..\\..\\x\\a")), None, "C:rel is no path of ours");
     assert_eq!(hit(&perms, &at("C:..\\..\\secret\\a")), Some("deny"));
 }
+
+/// Windows reads `.env.` and `.env::$DATA` as `.env`: a path rule sees the
+/// name the file system does. (`clean_names` only acts on a Windows host.)
+#[cfg(windows)]
+#[test]
+fn a_path_rule_sees_the_name_windows_reads() {
+    let e = Env {
+        home: "C:\\Users\\u".into(),
+        windows: true,
+        fold_case: false,
+        host: false,
+    };
+    let p = policy::Permissions {
+        deny: vec!["Edit(**/.env)".into()],
+        ..Default::default()
+    };
+    let (perms, _) = Permissions::compile(&p, &e).unwrap();
+    let perms = perms.with_resolver(Box::new(|e, p| Some(paths::to_posix(e, p))));
+    for name in [".env.", ".env ", ".env::$DATA", "sub\\.env."] {
+        let c = Call::new(
+            CallInput {
+                tool: "Edit".into(),
+                input: Some(
+                    RawValue::from_string(serde_json::json!({ "file_path": name }).to_string())
+                        .unwrap(),
+                ),
+                cwd: "C:\\w\\p".into(),
+                project_dir: "C:\\w\\p".into(),
+                ..Default::default()
+            },
+            &e,
+        );
+        assert_eq!(hit(&perms, &c), Some("deny"), "{name}");
+    }
+}
