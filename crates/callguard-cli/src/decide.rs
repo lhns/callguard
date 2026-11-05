@@ -21,7 +21,8 @@ Flags:
   --log PATH          decision log path, or - to disable
   --unattended        no human can answer a prompt
   --add-dir PATH      a directory besides the project that counts as inside it
-                      (repeatable)
+                      (repeatable; ~/ is the home directory, a relative path is
+                      relative to this process's directory)
 ";
 
 pub fn run(

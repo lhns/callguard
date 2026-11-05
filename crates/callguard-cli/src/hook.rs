@@ -27,7 +27,9 @@ Flags:
   --review-in-auto      claude only: also review sub-agent reports in
                         permission_mode auto (Claude reviews them itself there)
   --add-dir PATH        a directory besides the project that counts as inside
-                        it (repeatable; not the home directory or a root)
+                        it (repeatable; not the home directory or a root; ~/ is the
+                        home directory, a relative path is relative to this
+                        process's directory)
 
 claude also answers InstructionsLoaded events (register the hook for them
 too; it prints nothing): the loaded file paths are recorded per session in

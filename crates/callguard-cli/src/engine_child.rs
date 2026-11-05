@@ -48,7 +48,8 @@ pub fn load_options(
 }
 
 /// The values of `--add-dir`, relative ones made absolute from this process's
-/// directory (the request's own `cwd` moves with the agent). An empty one stays
+/// directory (the request's own `cwd` moves with the agent); a leading `~/`
+/// is the home directory. An empty one stays
 /// empty, and the engine refuses it with a warning.
 pub fn add_dirs(given: Vec<String>) -> Vec<String> {
     given
@@ -57,6 +58,13 @@ pub fn add_dirs(given: Vec<String>) -> Vec<String> {
             if d.trim().is_empty() {
                 return d;
             }
+            // `--add-dir=~/x` reaches us unexpanded (no shell, or `=` form).
+            let env = callguard::rules::Env::host();
+            let d = if (d == "~" || d.starts_with("~/")) && !env.home.is_empty() {
+                format!("{}{}", env.home.trim_end_matches(['/', '\\']), &d[1..])
+            } else {
+                d
+            };
             std::path::absolute(&d).map_or(d, |p| p.to_string_lossy().into_owned())
         })
         .collect()
@@ -98,5 +106,14 @@ mod tests {
         assert_eq!((got[1].as_str(), got[2].as_str()), ("", "  "));
         let abs = std::env::temp_dir().to_string_lossy().into_owned();
         assert_eq!(add_dirs(vec![abs.clone()]), [abs]);
+        // A leading `~/` is the home directory, not a directory named `~`.
+        let home = callguard::rules::Env::host().home;
+        if !home.is_empty() {
+            let got = add_dirs(vec!["~/x".into()]);
+            assert!(
+                got[0].replace('\\', "/").ends_with("/x") && !got[0].contains('~'),
+                "{got:?}"
+            );
+        }
     }
 }
