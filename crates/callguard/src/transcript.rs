@@ -158,6 +158,7 @@ struct Block {
 ///
 /// Thinking and tool_result content are dropped, so tool output never reaches
 /// the judge; a tool_result only yields an outcome label.
+#[cfg(test)]
 pub fn read_claude_jsonl(
     path: &str,
     max_messages: usize,
