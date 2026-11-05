@@ -48,13 +48,21 @@ pub fn local_filter_names(
         Err(e) if crate::hostmeta::ExitFailure::code_of(&e) == Some(1) => return Ok(Vec::new()),
         Err(e) => return Err(format!("cannot list git filter drivers: {e}")),
     };
-    let text = String::from_utf8_lossy(&out);
-    let mut fields = text.split('\0');
+    parse_names(&out)
+}
+
+/// The driver names in the output of `git config --show-scope --name-only -z`.
+/// A name that is not UTF-8 cannot be written as a `-c` override, so it is
+/// refused instead of lossily becoming another key.
+fn parse_names(out: &[u8]) -> Result<Vec<String>, String> {
+    let mut fields = out.split(|b| *b == 0);
     let mut names = BTreeSet::new();
     while let (Some(scope), Some(key)) = (fields.next(), fields.next()) {
-        if scope != "local" && scope != "worktree" {
+        if scope != b"local" && scope != b"worktree" {
             continue;
         }
+        let key = std::str::from_utf8(key)
+            .map_err(|_| "a git filter driver name is not UTF-8 and cannot be overridden")?;
         // filter.<name>.<var>; the name may hold dots.
         let Some(rest) = key.strip_prefix("filter.") else {
             continue;

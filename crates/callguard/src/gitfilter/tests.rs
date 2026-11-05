@@ -305,3 +305,13 @@ fn a_repo_without_a_gitlink_has_none() {
         |_: &[String], _: &str, _: &[&str], _: Instant| Err(std::io::Error::other("no git"));
     assert!(has_gitlinks(&failing, "/x", soon()).is_err());
 }
+
+#[test]
+fn a_driver_name_that_is_not_utf8_is_refused() {
+    let ok = parse_names(b"local\0filter.a.b.clean\0global\0filter.g.clean\0").unwrap();
+    assert_eq!(ok, ["a.b"], "only repository scopes, dots kept");
+    let err = parse_names(b"local\0filter.\xff.clean\0").unwrap_err();
+    assert!(err.contains("not UTF-8"), "{err}");
+    // A global one is not the repository's to plant.
+    assert!(parse_names(b"global\0filter.\xff.clean\0").unwrap().is_empty());
+}
