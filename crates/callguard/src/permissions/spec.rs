@@ -334,9 +334,73 @@ pub(super) fn strip_git_globals(argv: &[String], caseless: bool) -> Option<Vec<S
 /// match, an allow match as none.
 pub(super) const WORK_LIMIT: usize = 200_000;
 
+/// Common PowerShell aliases and the cmdlet each stands for (both lower case).
+const PS_ALIASES: &[(&str, &[&str])] = &[
+    ("get-childitem", &["gci", "ls", "dir"]),
+    ("remove-item", &["ri", "rm", "rmdir", "del", "erase", "rd"]),
+    ("get-content", &["gc", "cat", "type"]),
+    ("set-content", &["sc"]),
+    ("copy-item", &["cp", "copy", "cpi"]),
+    ("move-item", &["mv", "move", "mi"]),
+    ("set-location", &["cd", "chdir", "sl"]),
+    ("get-location", &["pwd", "gl"]),
+    ("write-output", &["echo", "write"]),
+    ("invoke-webrequest", &["iwr", "curl", "wget"]),
+    ("invoke-restmethod", &["irm"]),
+    ("invoke-expression", &["iex"]),
+    ("start-process", &["start", "saps"]),
+    ("get-process", &["ps", "gps"]),
+    ("stop-process", &["kill", "spps"]),
+    ("select-string", &["sls"]),
+    ("new-item", &["ni"]),
+    ("rename-item", &["ren", "rni"]),
+    ("add-content", &["ac"]),
+    ("clear-content", &["clc"]),
+];
+
+/// A command word of a PowerShell call or rule as the cmdlet it stands for:
+/// base name, lower case, alias replaced.
+fn ps_word(word: &str) -> String {
+    let name = prog_name(word, true);
+    PS_ALIASES
+        .iter()
+        .find(|(_, aliases)| aliases.contains(&name.as_str()))
+        .map_or(name, |(cmdlet, _)| (*cmdlet).to_owned())
+}
+
+/// A PowerShell rule for matching: every token lower case, the command
+/// canonical. (PowerShell is case-insensitive throughout.)
+pub(super) fn ps_spec(spec: &Spec) -> Spec {
+    let mut toks: Vec<Tok> = spec
+        .toks
+        .iter()
+        .map(|t| match t {
+            Tok::Lit(s) => Tok::Lit(s.to_lowercase()),
+            Tok::Glob(s) => Tok::Glob(s.to_lowercase()),
+            Tok::Any => Tok::Any,
+        })
+        .collect();
+    if let Some(Tok::Lit(first)) = toks.first_mut() {
+        *first = ps_word(first);
+    }
+    Spec { toks }
+}
+
+/// A PowerShell argv for matching against [`ps_spec`].
+fn ps_argv(argv: &[String]) -> Vec<String> {
+    argv.iter()
+        .enumerate()
+        .map(|(i, w)| if i == 0 { ps_word(w) } else { w.to_lowercase() })
+        .collect()
+}
+
 /// Deny and ask on one nah call with known argv: the rule matches the
-/// normalised call, or the call with git's global options removed.
-pub(super) fn matches_call(spec: &Spec, argv: &[String], caseless: bool) -> bool {
+/// normalised call, or the call with git's global options removed. `ps`: a
+/// PowerShell rule (see [`ps_spec`]).
+pub(super) fn matches_call(spec: &Spec, argv: &[String], caseless: bool, ps: bool) -> bool {
+    if ps {
+        return matches_call(&ps_spec(spec), &ps_argv(argv), true, false);
+    }
     let mut work = WORK_LIMIT;
     if spec.matches(argv, Mode::Call { caseless }, &mut work) {
         return true;
@@ -387,7 +451,19 @@ pub(super) fn raw_segments(command: &str, drop_backslash: bool) -> Vec<Vec<Strin
 /// The raw-text fallback: the rule's tokens appear consecutively at any
 /// position of any segment, the first by base name. A rule with `Bash`'s
 /// shape "every command" is the caller's business.
-pub(super) fn matches_raw(spec: &Spec, command: &str, caseless: bool) -> bool {
+pub(super) fn matches_raw(spec: &Spec, command: &str, caseless: bool, ps: bool) -> bool {
+    if ps {
+        // PowerShell escapes with a backtick (`Remove`-Item`): try the text
+        // with and without them.
+        let spec = ps_spec(spec);
+        return [command.to_owned(), command.replace('`', "")]
+            .iter()
+            .any(|c| matches_raw_words(&spec, c, true, true));
+    }
+    matches_raw_words(spec, command, caseless, false)
+}
+
+fn matches_raw_words(spec: &Spec, command: &str, caseless: bool, ps: bool) -> bool {
     let mut work = WORK_LIMIT * 5;
     // A backslash escapes in a POSIX shell and separates in a Windows path:
     // try the command both ways.
@@ -401,7 +477,13 @@ pub(super) fn matches_raw(spec: &Spec, command: &str, caseless: bool) -> bool {
             if leading_any && s > 0 {
                 break;
             }
-            let argv = &seg[s..];
+            let lowered;
+            let argv = if ps {
+                lowered = ps_argv(&seg[s..]);
+                &lowered[..]
+            } else {
+                &seg[s..]
+            };
             if spec.matches(argv, Mode::Raw { caseless }, &mut work) {
                 return true;
             }

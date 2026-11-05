@@ -182,7 +182,11 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
     match &rule {
         Rule::Shell {
             powershell: true, ..
-        } => return blocked("PowerShell allow rules are not honoured"),
+        } => {
+            return blocked(
+                "PowerShell allow rules are not honoured: nah does not analyse PowerShell, so there is no second parse to agree with",
+            );
+        }
         Rule::Shell { spec: None, .. } => return blocked("a bare Bash rule allows every command"),
         Rule::Shell { spec: Some(s), .. } => {
             let Tok::Lit(first) = s.first() else {

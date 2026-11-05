@@ -427,9 +427,9 @@ impl Permissions {
             Rule::Shell { powershell, spec } => {
                 call.kind == KIND_SHELL
                     && (!powershell || call.tool == "PowerShell")
-                    && spec
-                        .as_ref()
-                        .is_none_or(|s| s.is_blanket() || self.shell_match(s, call, nah))
+                    && spec.as_ref().is_none_or(|s| {
+                        s.is_blanket() || self.shell_match(s, *powershell, call, nah)
+                    })
             }
             Rule::Path { write, spec, carve } => {
                 call.kind == if *write { KIND_WRITE } else { KIND_READ }
@@ -479,12 +479,18 @@ impl Permissions {
 
     /// A shell rule for deny or ask: any command nah found, else the raw text
     /// when the parse has a hole.
-    fn shell_match(&self, spec: &Spec, call: &Call, nah: Option<&NahResult>) -> bool {
+    fn shell_match(
+        &self,
+        spec: &Spec,
+        powershell: bool,
+        call: &Call,
+        nah: Option<&NahResult>,
+    ) -> bool {
         let caseless = self.env.caseless();
         if let Some(n) = nah {
             for c in &n.calls {
                 if let Some(argv) = c.argv.as_ref().filter(|a| !a.is_empty())
-                    && spec::matches_call(spec, argv, caseless)
+                    && spec::matches_call(spec, argv, caseless, powershell)
                 {
                     return true;
                 }
@@ -493,7 +499,7 @@ impl Permissions {
         parse_has_hole(call, nah)
             && call
                 .commands()
-                .any(|cmd| spec::matches_raw(spec, cmd, caseless))
+                .any(|cmd| spec::matches_raw(spec, cmd, caseless, powershell))
     }
 
     fn ctx(&self, call: &Call) -> Ctx {

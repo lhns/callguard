@@ -1779,7 +1779,8 @@ fn other_bare_names_match_the_tool_exactly() {
 
 #[test]
 fn raw_fallback_tokens() {
-    let m = |rule: &str, cmd: &str| spec::matches_raw(&Spec::parse(rule).unwrap(), cmd, false);
+    let m =
+        |rule: &str, cmd: &str| spec::matches_raw(&Spec::parse(rule).unwrap(), cmd, false, false);
     assert!(m("git push:*", "git push"));
     assert!(m("git push:*", "echo hi && /usr/bin/git push -f"));
     assert!(m("git push:*", "x=1 git push"));
@@ -2950,4 +2951,123 @@ fn an_unattached_bang_is_not_compiled() {
     assert!(parse("Read(*.env) except Edit(!sample.env)").is_err());
     // A path that merely contains the word stays a path.
     assert!(matches!(parse("Read(a) except b)"), Ok(Rule::Path { .. })));
+}
+
+// --- PowerShell aliases and case --------------------------------------------------
+
+fn ps(cmd: &str) -> Call {
+    call(
+        "PowerShell",
+        &serde_json::json!({ "command": cmd }).to_string(),
+    )
+}
+
+#[test]
+fn powershell_rules_canonicalize_aliases_and_ignore_case() {
+    // Claude's docs: PowerShell(Get-ChildItem *) matches gci, ls and dir.
+    let d = deny(&["PowerShell(Get-ChildItem *)"]);
+    for cmd in [
+        "Get-ChildItem x",
+        "gci x",
+        "ls x",
+        "dir x",
+        "GCI x",
+        "get-childitem -Recurse x",
+        "GET-CHILDITEM x",
+        "echo hi; ls x",
+        "a | gci x",
+    ] {
+        assert_eq!(hit(&d, &ps(cmd)), Some("deny"), "{cmd}");
+    }
+    assert_eq!(hit(&d, &ps("Remove-Item x")), None);
+    assert_eq!(hit(&d, &ps("lsx y")), None);
+    // Only PowerShell rules: a Bash rule has no aliases.
+    let b = deny(&["Bash(Get-ChildItem *)"]);
+    assert_eq!(hit(&b, &ps("gci x")), None);
+    // And a rule written with an alias reaches the cmdlet.
+    let a = deny(&["PowerShell(rm *)"]);
+    assert_eq!(hit(&a, &ps("Remove-Item x")), Some("deny"));
+    assert_eq!(hit(&a, &ps("del x")), Some("deny"));
+}
+
+#[test]
+fn the_remove_item_deny_catches_every_spelling() {
+    for list in [0, 1] {
+        let rule = "PowerShell(Remove-Item *)";
+        let p = if list == 0 {
+            deny(&[rule])
+        } else {
+            set(&[], &[rule], &[])
+        };
+        for cmd in [
+            "ri x",
+            "REMOVE-ITEM x",
+            "rm x",
+            "a; ri x",
+            "rmdir x",
+            "del x",
+            "erase x",
+            "rd x",
+            "Remove`-Item x",
+            "& ri x",
+            "ls | ForEach-Object { ri $_ }",
+        ] {
+            assert!(p.check(&ps(cmd), None).is_some(), "{cmd}");
+        }
+    }
+}
+
+#[test]
+fn the_alias_table_holds_the_common_aliases() {
+    let table: &[(&str, &[&str])] = &[
+        ("Get-ChildItem", &["gci", "ls", "dir"]),
+        ("Remove-Item", &["ri", "rm", "rmdir", "del", "erase", "rd"]),
+        ("Get-Content", &["gc", "cat", "type"]),
+        ("Set-Content", &["sc"]),
+        ("Copy-Item", &["cp", "copy", "cpi"]),
+        ("Move-Item", &["mv", "move", "mi"]),
+        ("Set-Location", &["cd", "chdir", "sl"]),
+        ("Get-Location", &["pwd", "gl"]),
+        ("Write-Output", &["echo", "write"]),
+        ("Invoke-WebRequest", &["iwr", "curl", "wget"]),
+        ("Invoke-RestMethod", &["irm"]),
+        ("Invoke-Expression", &["iex"]),
+        ("Start-Process", &["start", "saps"]),
+        ("Get-Process", &["ps", "gps"]),
+        ("Stop-Process", &["kill", "spps"]),
+        ("Select-String", &["sls"]),
+        ("New-Item", &["ni"]),
+        ("Rename-Item", &["ren", "rni"]),
+        ("Add-Content", &["ac"]),
+        ("Clear-Content", &["clc"]),
+    ];
+    for (cmdlet, aliases) in table {
+        let d = deny(&[&format!("PowerShell({cmdlet} *)")]);
+        for a in *aliases {
+            assert_eq!(hit(&d, &ps(&format!("{a} x"))), Some("deny"), "{a}");
+            assert_eq!(
+                hit(&d, &ps(&format!("{} x", a.to_uppercase()))),
+                Some("deny"),
+                "{a}"
+            );
+        }
+    }
+}
+
+#[test]
+fn powershell_allow_rules_stay_refused() {
+    // nah does not analyse the PowerShell tool (`Unmodeled unsupported-tool`,
+    // no calls), so there is nothing to agree with.
+    assert!(vet_allow("PowerShell(Get-ChildItem *)", None).is_err());
+    assert!(vet_allow("PowerShell(git status)", None).is_err());
+}
+
+#[test]
+fn powershell_aliases_also_work_on_a_parsed_call() {
+    let d = deny(&["PowerShell(Remove-Item *)"]);
+    let n = nah_of(&[&["RI", "x"]]);
+    assert_eq!(
+        d.check(&ps("RI x"), Some(&n)).map(|h| h.rule),
+        Some("PowerShell(Remove-Item *)".into())
+    );
 }
