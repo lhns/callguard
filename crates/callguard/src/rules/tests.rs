@@ -233,6 +233,22 @@ fn globs() {
 }
 
 #[test]
+fn a_glob_crosses_a_newline_in_a_path() {
+    let unix = unix();
+    for (glob, path) in [
+        ("/p/.opencode/plugins/**", "/p/.opencode/plugins/a
+b.js"),
+        ("**/.claude/skills/**", "/p/.claude/skills/a
+b/SKILL.md"),
+        ("/p/*.js", "/p/a
+b.js"),
+    ] {
+        let re = unix.compile_glob(glob).unwrap();
+        assert!(re.is_match(path), "glob {glob:?} vs {path:?} ({re})");
+    }
+}
+
+#[test]
 fn new_call() {
     let unix = unix();
     let c = Call::new(

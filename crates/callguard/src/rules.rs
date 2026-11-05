@@ -631,7 +631,8 @@ impl Env {
         if !self.home.is_empty() && g.starts_with("~/") {
             g = format!("{}{}", self.slash(&self.home), &g[1..]);
         }
-        let mut b = String::new();
+        // `(?s)`: a file name may hold a newline, which `.` would not cross.
+        let mut b = String::from("(?s)");
         if self.caseless() {
             b.push_str("(?i)");
         }
