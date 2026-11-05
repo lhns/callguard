@@ -140,14 +140,10 @@ fn apply_context(req: &mut Request, opt: &Options) -> Result<(), String> {
             })?;
         let m: Option<BTreeMap<String, String>> =
             serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", opt.context_file))?;
-        merge_context(req, m.unwrap_or_default());
+        req.context.extend(m.unwrap_or_default());
     }
-    merge_context(req, opt.context.clone());
+    req.context.extend(opt.context.clone());
     Ok(())
-}
-
-fn merge_context(req: &mut Request, m: BTreeMap<String, String>) {
-    req.context.extend(m);
 }
 
 /// A request with the schema fields set.
@@ -230,6 +226,22 @@ struct ClaudeDecision<'a> {
     permission_decision_reason: &'a str,
 }
 
+/// Runs `adapter`, which gets `err_out`. A panic is exit 2, the one non-zero
+/// exit that blocks the call for Claude and Hermes.
+fn blocking_on_panic(err_out: &mut dyn Write, adapter: impl FnOnce(&mut dyn Write) -> i32) -> i32 {
+    match catch_unwind(AssertUnwindSafe(|| adapter(&mut *err_out))) {
+        Ok(code) => code,
+        Err(p) => {
+            let _ = writeln!(
+                err_out,
+                "callguard: internal error: {}; blocking the call",
+                panic_message(p.as_ref())
+            );
+            2
+        }
+    }
+}
+
 /// The Claude Code PreToolUse hook. Returns the process exit code.
 ///
 /// Claude treats any non-zero exit other than 2 as a non-blocking error and
@@ -242,19 +254,7 @@ pub fn claude(
     opt: &Options,
     d: Decider,
 ) -> i32 {
-    match catch_unwind(AssertUnwindSafe(|| {
-        claude_inner(input, &mut *out, &mut *err_out, opt, d)
-    })) {
-        Ok(code) => code,
-        Err(p) => {
-            let _ = writeln!(
-                err_out,
-                "callguard: internal error: {}; blocking the call",
-                panic_message(p.as_ref())
-            );
-            2
-        }
-    }
+    blocking_on_panic(err_out, |e| claude_inner(input, &mut *out, e, opt, d))
 }
 
 fn claude_inner(
@@ -384,19 +384,7 @@ pub fn hermes(
     opt: &Options,
     d: Decider,
 ) -> i32 {
-    match catch_unwind(AssertUnwindSafe(|| {
-        hermes_inner(input, &mut *out, &mut *err_out, opt, d)
-    })) {
-        Ok(code) => code,
-        Err(p) => {
-            let _ = writeln!(
-                err_out,
-                "callguard: internal error: {}; blocking the call",
-                panic_message(p.as_ref())
-            );
-            2
-        }
-    }
+    blocking_on_panic(err_out, |e| hermes_inner(input, &mut *out, e, opt, d))
 }
 
 fn hermes_inner(
