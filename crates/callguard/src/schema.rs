@@ -124,6 +124,28 @@ pub struct Request {
     pub meta: Option<Meta>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facts: Option<Facts>,
+    /// The host's parsed, consolidated instruction text (CLAUDE.md and the
+    /// like). The engine discovers nothing itself. The judge gets at most the
+    /// last 8 KiB, labelled as unverified host context.
+    #[serde(
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "nullable"
+    )]
+    pub instructions: String,
+    /// Host annotations on earlier tool results. The judge gets at most 2,000
+    /// characters per call, and only for calls it sees in its transcript.
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "nullable")]
+    pub notes: Vec<Note>,
+}
+
+/// A host annotation on the result of an earlier tool call.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Note {
+    #[serde(deserialize_with = "nullable")]
+    pub tool_use_id: String,
+    #[serde(deserialize_with = "nullable")]
+    pub text: String,
 }
 
 impl Request {
@@ -148,6 +170,8 @@ impl Request {
                 "permission_mode",
                 "meta",
                 "facts",
+                "instructions",
+                "notes",
             ],
             &[("tool", &["name", "input"])],
         )
@@ -525,6 +549,26 @@ mod tests {
         };
         assert_eq!(
             serde_json::to_string(&req).unwrap(),
+            r#"{"tool":{"name":"Bash"}}"#
+        );
+    }
+
+    #[test]
+    fn instructions_and_notes_round_trip_and_are_omitted_when_empty() {
+        let r = Request::from_json(
+            br#"{"tool":{"name":"Bash"},"Instructions":"be good","notes":[{"tool_use_id":"t1","text":"x"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(r.instructions, "be good");
+        assert_eq!(r.notes.len(), 1);
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
+            r#"{"tool":{"name":"Bash"},"instructions":"be good","notes":[{"tool_use_id":"t1","text":"x"}]}"#
+        );
+        let r = Request::from_json(br#"{"tool":{"name":"Bash"},"instructions":null,"notes":null}"#)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_string(&r).unwrap(),
             r#"{"tool":{"name":"Bash"}}"#
         );
     }

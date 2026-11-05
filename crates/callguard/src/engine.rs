@@ -836,8 +836,12 @@ impl Inner {
             context: req.context.clone(),
             unattended: req.unattended,
             transcript: msgs,
+            notes: req.notes.clone(),
             ..Default::default()
         };
+        if llm.instructions != Some(false) {
+            input.instructions = req.instructions.clone();
+        }
         let mut meta = req.meta.clone();
         if let Some(probe) = &self.probe
             && !req.cwd.is_empty()

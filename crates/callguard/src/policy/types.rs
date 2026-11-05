@@ -262,6 +262,10 @@ pub struct Llm {
         deserialize_with = "nullable"
     )]
     pub backend: String,
+    /// `false` keeps the host's instruction text from the judge. Default true;
+    /// system and user layers only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<bool>,
     /// Default 3000.
     #[serde(skip_serializing_if = "is_zero", deserialize_with = "nullable")]
     pub timeout_ms: i64,

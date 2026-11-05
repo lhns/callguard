@@ -1091,6 +1091,29 @@ fn a_bang_in_an_allow_list_is_dropped_with_a_warning() {
 }
 
 #[test]
+fn llm_instructions_is_set_by_system_or_user_and_only_off() {
+    let ins = |l: &Loaded| llm(&l.policy).instructions;
+    let sys = r#"{"policy_version":1,"llm":{"instructions":false}}"#;
+    let l = load(&layers(sys, "", "").1).unwrap();
+    assert_eq!(ins(&l), Some(false), "system");
+    let user_off = r#"{"policy_version":1,"llm":{"instructions":false}}"#;
+    let l = load(&layers(r#"{"policy_version":1}"#, user_off, "").1).unwrap();
+    assert_eq!(ins(&l), Some(false), "user switches it off");
+    let user_on = r#"{"policy_version":1,"llm":{"instructions":true}}"#;
+    let l = load(&layers(sys, user_on, "").1).unwrap();
+    assert_eq!(ins(&l), Some(false), "user cannot switch it back on");
+    let l = load(&layers(r#"{"policy_version":1}"#, "", user_off).1).unwrap();
+    assert_eq!(ins(&l), None, "project layer");
+    assert!(
+        l.warnings
+            .iter()
+            .any(|w| w.contains("llm.instructions ignored")),
+        "{:?}",
+        l.warnings
+    );
+}
+
+#[test]
 fn a_project_pair_leaves_the_system_rule_whole() {
     let sys = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"]}}"#;
     let proj = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)","Read(!.env)"]}}"#;

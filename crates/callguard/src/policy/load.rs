@@ -244,6 +244,14 @@ fn apply(
             "{path}: llm.block ignored: it goes into the judge's prompt, so a project file may not set it"
         ));
     }
+    if layer == LAYER_PROJECT
+        && let Some(l) = layer_policy.llm.as_mut()
+        && l.instructions.take().is_some()
+    {
+        out.warnings.push(format!(
+            "{path}: llm.instructions ignored: only the system and user policies may set it"
+        ));
+    }
     if layer == LAYER_SYSTEM {
         out.policy = merge_system(&out.policy, &layer_policy);
     } else {
@@ -365,6 +373,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("enabled", Leaf),
             ("mode", Leaf),
             ("backend", Leaf),
+            ("instructions", Leaf),
             ("timeout_ms", Leaf),
             ("min_confidence", Leaf),
             ("transcript", O(Obj::Transcript)),

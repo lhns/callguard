@@ -102,6 +102,9 @@ fn merge_llm(mut b: Llm, s: &Llm) -> Llm {
     if s.timeout_ms > 0 {
         b.timeout_ms = s.timeout_ms;
     }
+    if s.instructions.is_some() {
+        b.instructions = s.instructions;
+    }
     if s.min_confidence.is_some() {
         b.min_confidence = s.min_confidence;
     }
@@ -223,6 +226,10 @@ pub(crate) fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy
         }
         if !l.allow_exceptions.is_empty() {
             dropped("llm.allow_exceptions", ONLY);
+        }
+        // A user may switch the host's instructions off, never back on.
+        if l.instructions == Some(false) {
+            cp.instructions = Some(false);
         }
         cp.block.extend(l.block.iter().cloned());
         if let Some(c) = l.min_confidence {

@@ -2925,3 +2925,26 @@ fn a_permission_rule_on_a_file_keeps_a_read_only_command_from_the_allow() {
         "read-only-command"
     );
 }
+
+#[test]
+fn host_instructions_and_notes_reach_the_judge_unless_switched_off() {
+    let seen = |instructions: Option<bool>| {
+        let p = test_policy(|p| p.llm.as_mut().unwrap().instructions = instructions);
+        let (e, v) = new_test_engine(p, Options::default(), Some(answer("allow", 0.95)));
+        let mut req = bash("go test");
+        req.instructions = "Use pnpm.".into();
+        req.notes = vec![crate::schema::Note {
+            tool_use_id: "toolu_1".into(),
+            text: "fine".into(),
+        }];
+        e.decide(&req);
+        v.last()
+    };
+    for on in [None, Some(true)] {
+        let i = seen(on);
+        assert!(i.instructions == "Use pnpm." && i.notes.len() == 1, "{i:?}");
+    }
+    let i = seen(Some(false));
+    assert!(i.instructions.is_empty(), "instructions: false");
+    assert_eq!(i.notes.len(), 1, "notes are not instructions");
+}
