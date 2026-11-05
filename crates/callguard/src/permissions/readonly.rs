@@ -511,6 +511,7 @@ impl Cx<'_> {
             || arg.split(['/', '\\', ':']).any(|part| part == "..")
             || paths::is_network(env, arg)
             || env.drive_relative(arg)
+            || self.device(arg)
         {
             return false;
         }
@@ -523,6 +524,12 @@ impl Cx<'_> {
                     .is_some_and(|r| self.call.roots.contains_real(env, &r))
                 && !(self.flagged)(&p)
         })
+    }
+
+    /// Whether `arg` has a Windows device name (`CON`, `NUL`, `COM1`, any case,
+    /// with or without an extension) as a path segment: reading one can hang.
+    fn device(&self, arg: &str) -> bool {
+        self.env.windows && arg.split(['/', '\\']).any(is_device_name)
     }
 
     /// Whether a deny or ask rule would stop a read of `word`, taken as a file
@@ -590,7 +597,9 @@ impl Cx<'_> {
                     Args::Mixed => p.pos.iter().all(|a| {
                         let words = [Some(*a), a.split_once(':').map(|(_, rest)| rest)];
                         words.into_iter().flatten().all(|w| {
-                            !self.flagged_word(w) && (!looks_like_path(w) || self.inside(w))
+                            !self.flagged_word(w)
+                                && !self.device(w)
+                                && (!looks_like_path(w) || self.inside(w))
                         })
                     }),
                     Args::Free | Args::Find => unreachable!("handled above"),
@@ -616,6 +625,24 @@ impl Cx<'_> {
         }
         true
     }
+}
+
+/// Whether a path segment is a Windows device name: the part before the first
+/// dot, without trailing spaces, is `CON`, `PRN`, `AUX`, `NUL`, `CONIN$`,
+/// `CONOUT$`, `COM1`-`COM9` or `LPT1`-`LPT9`.
+pub(super) fn is_device_name(segment: &str) -> bool {
+    let stem = segment
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end()
+        .to_ascii_uppercase();
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 
 /// Whether a `git` word may be a file or directory rather than a revision or

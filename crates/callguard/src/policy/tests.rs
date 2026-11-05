@@ -485,7 +485,7 @@ fn rev_matches_the_golden_files() {
 fn default_policy_rev_is_pinned() {
     assert_eq!(
         rev(&default()),
-        "sha256:dcd0cbbf20a8920d552ab2fe13f5e5043b7b50675a0e129f215ed88686463999"
+        "sha256:8992ba6487581ed697bbfbe0d07f842f623433e9fbe7bd2246f988ab63de789a"
     );
 }
 

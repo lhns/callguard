@@ -256,8 +256,12 @@ impl Scan<'_> {
         // `?*`, `.[!.]*`) reaches everything directly under its parent; a
         // literal `.` or `..` has no glob character and is handled as a path.
         let (parent, last) = t.rsplit_once('/').unwrap_or(("", t));
-        let globby = last.chars().any(|c| matches!(c, '*' | '?' | '[' | ']' | '!'))
-            && last.chars().all(|c| matches!(c, '*' | '?' | '[' | ']' | '!' | '.'));
+        let globby = last
+            .chars()
+            .any(|c| matches!(c, '*' | '?' | '[' | ']' | '!'))
+            && last
+                .chars()
+                .all(|c| matches!(c, '*' | '?' | '[' | ']' | '!' | '.'));
         let base = if globby {
             if !t.contains('/') {
                 "."

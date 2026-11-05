@@ -3104,3 +3104,18 @@ fn a_hand_written_carve_obeys_the_same_limits_as_the_list_form() {
     assert_eq!(hit(&d, &read("/w/p/ok.env")), None);
     assert_eq!(hit(&d, &read("/w/p/x.env")), Some("deny"));
 }
+
+#[test]
+fn windows_device_names_are_not_read_only_paths() {
+    for yes in [
+        "CON", "con", "NUL", "nul.txt", "Aux.log", "PRN", "COM1", "com9.x", "LPT3", "CON .txt",
+        "CONIN$",
+    ] {
+        assert!(readonly::is_device_name(yes), "{yes}");
+    }
+    for no in [
+        "CONF", "COM0", "COM10", "LPT", "console", "a.con", "", "NULL",
+    ] {
+        assert!(!readonly::is_device_name(no), "{no}");
+    }
+}

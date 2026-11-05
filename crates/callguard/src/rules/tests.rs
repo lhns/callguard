@@ -3390,10 +3390,11 @@ fn the_default_docs_rule_allows_plain_urls_of_its_hosts_only() {
         "https://doc.rust-lang.org/std/#x",
         "https://developer.mozilla.org/en-US/docs/Web",
         "https://pkg.go.dev/fmt",
-        "http://docs.rs/serde",
     ] {
         assert_eq!(id(&[url]), docs, "{url}");
     }
+    // https only.
+    assert_eq!(id(&["http://docs.rs/serde"]), None);
     // Every URL of the call must be one.
     assert_eq!(
         id(&["https://docs.rs/a", "https://docs.python.org/b"]),

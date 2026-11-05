@@ -51,7 +51,7 @@ Verdicts: **same** (behaves as Claude), **stricter** (callguard asks or denies w
 | Reads inside the working directories | same | Rule `read-in-project`. |
 | First read outside the working directories | looser | Claude prompts; callguard sends it to the judge, which may allow it. |
 | Network paths (UNC, `/net`) | looser | Claude prompts even with an allow rule or a hook `allow`. callguard's read-only commands and allow rules refuse UNC paths, so they reach the judge, which may allow. Not special-cased in file tools. |
-| Preapproved documentation sites | same | Rule `docs-fetch` with callguard's own list of about 30 hosts, not Claude's; turned off with the default rules. |
+| Preapproved documentation sites | same | Rule `docs-fetch` with callguard's own list of about 30 hosts, not Claude's, `https://` only; turned off with the default rules. Some listed hosts (docs.rs, pkg.go.dev, go.dev) show third-party content, so a page can carry text aimed at the judge; the rule skips only the review of the fetch. |
 
 ## Trust and dropped rules
 

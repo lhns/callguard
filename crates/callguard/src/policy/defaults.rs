@@ -157,6 +157,7 @@ pub(crate) fn default_rules() -> Vec<Rule> {
             "fetching a page of a well-known documentation site needs no review",
             Match {
                 tool: strings(&["WebFetch", "webfetch", "web_extract"]),
+                url: "(?i)^https://".into(),
                 host: strings(DOCS_HOSTS),
                 ..Default::default()
             },
@@ -243,11 +244,13 @@ pub(crate) fn default_rules() -> Vec<Rule> {
     ]
 }
 
-/// Hosts of the `docs-fetch` rule: documentation of languages, frameworks and
-/// tools, exact names only. None hosts pages that anyone can upload (no code
-/// hosting, pastes, wikis, forums or package registries). Pages of a package's
-/// own docs (docs.rs, pkg.go.dev) are written by its authors, so text aimed at
-/// a classifier in one still reaches `classifier-injection`.
+/// Hosts of the `docs-fetch` rule (https only): documentation of languages,
+/// frameworks and tools, exact names only. Not every page there is written by
+/// the site's owners: docs.rs, pkg.go.dev and go.dev show content of third
+/// parties (a package's own docs and README), so a page can carry text meant
+/// for the judge. The rule only skips the review of the fetch; the text is
+/// still checked when it comes back (`classifier-injection`). No code hosting,
+/// pastes, wikis or forums are listed.
 pub const DOCS_HOSTS: &[&str] = &[
     "docs.python.org",
     "docs.rs",
