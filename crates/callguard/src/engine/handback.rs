@@ -70,16 +70,11 @@ impl Inner {
         if !self.pol.llm_enabled() {
             return Ran::new(Review::Skipped);
         }
-        let b: Arc<dyn Backend> = match &self.opts.backend {
-            Some(b) => Arc::clone(b),
-            None => {
-                let Some(cfg) = self.pol.backends.get(&llm.backend) else {
-                    return Ran::new(Review::Skipped);
-                };
-                match backend::from_config(cfg) {
-                    Ok(b) => Arc::from(b),
-                    Err(e) => return Ran::failed(format!("backend unavailable: {e}"), ""),
-                }
+        let b = match self.backend(&llm.backend) {
+            Ok(b) => b,
+            Err(NoBackend::Missing) => return Ran::new(Review::Skipped),
+            Err(NoBackend::Unavailable(e)) => {
+                return Ran::failed(format!("backend unavailable: {e}"), "");
             }
         };
         let name = b.name();

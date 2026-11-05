@@ -776,34 +776,20 @@ impl Inner {
             out
         };
 
-        let b: Arc<dyn Backend> = match &self.opts.backend {
-            Some(b) => Arc::clone(b),
-            None => {
-                let Some(cfg) = self.pol.backends.get(&llm.backend) else {
-                    return fail(
-                        "backend",
-                        "",
-                        &format!(
-                            "llm backend {} is not configured",
-                            quote_string(&llm.backend)
-                        ),
-                        Vec::new(),
-                    );
+        let b = match self.backend(&llm.backend) {
+            Ok(b) => b,
+            Err(e) => {
+                let cause = match e {
+                    NoBackend::Missing => format!(
+                        "llm backend {} is not configured",
+                        quote_string(&llm.backend)
+                    ),
+                    NoBackend::Unavailable(e) => format!(
+                        "llm backend {} unavailable: {e}",
+                        quote_string(&llm.backend)
+                    ),
                 };
-                match backend::from_config(cfg) {
-                    Ok(b) => Arc::from(b),
-                    Err(e) => {
-                        return fail(
-                            "backend",
-                            "",
-                            &format!(
-                                "llm backend {} unavailable: {e}",
-                                quote_string(&llm.backend)
-                            ),
-                            Vec::new(),
-                        );
-                    }
-                }
+                return fail("backend", "", &cause, Vec::new());
             }
         };
         if let Some(dc) = req.context.get("data_class").filter(|d| !d.is_empty())
@@ -1091,6 +1077,26 @@ pub(crate) fn log_path(pol: &Policy, opts: &Options) -> Result<Option<String>, S
 }
 
 mod handback;
+
+/// Why the judge's backend cannot be had.
+enum NoBackend {
+    /// The policy names no such backend.
+    Missing,
+    Unavailable(String),
+}
+
+impl Inner {
+    /// The injected backend, else the policy's backend `name`.
+    fn backend(&self, name: &str) -> Result<Arc<dyn Backend>, NoBackend> {
+        if let Some(b) = &self.opts.backend {
+            return Ok(Arc::clone(b));
+        }
+        let cfg = self.pol.backends.get(name).ok_or(NoBackend::Missing)?;
+        backend::from_config(cfg)
+            .map(Arc::from)
+            .map_err(|e| NoBackend::Unavailable(e.to_string()))
+    }
+}
 
 #[cfg(test)]
 mod tests;
