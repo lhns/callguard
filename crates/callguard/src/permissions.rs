@@ -47,6 +47,7 @@
 //!   only a bare `Edit`; a relative path with no working directory matches
 //!   no path rule.
 
+mod carve;
 mod lexer;
 mod params;
 mod paths;
@@ -85,6 +86,14 @@ pub enum Rule {
     Path {
         write: bool,
         spec: Option<PathSpec>,
+        /// Paths carved out by `!` rules of the same layer (see [`carve`]).
+        carve: Vec<PathSpec>,
+    },
+    /// `Read(!pattern)` as written, before [`carve::attach`] joins it to the
+    /// rules it carves. Only a deny or ask list may hold it.
+    Negation {
+        write: bool,
+        spec: PathSpec,
     },
     /// `WebFetch`, `WebFetch(domain:host)`.
     Fetch {
@@ -150,6 +159,28 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
         return Err("contains a control or bidirectional character".into());
     }
     let text = text.trim();
+    if let Some((head, carves)) = carve::split(text) {
+        let Rule::Path {
+            write,
+            spec: Some(spec),
+            ..
+        } = parse(head)?
+        else {
+            return Err("only a path rule can have a `!` carve-out".into());
+        };
+        let mut carve = Vec::new();
+        for c in carves {
+            match parse(c)? {
+                Rule::Negation { write: w, spec } if w == write => carve.push(spec),
+                _ => return Err("a carve-out must be a `!` rule of the same tool family".into()),
+            }
+        }
+        return Ok(Rule::Path {
+            write,
+            spec: Some(spec),
+            carve,
+        });
+    }
     let (name, spec) = match text.split_once('(') {
         Some((n, rest)) => match rest.strip_suffix(')') {
             Some(s) => (n.trim(), Some(s)),
@@ -179,9 +210,19 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
             powershell: name == "PowerShell",
             spec: s.map(Spec::parse).transpose()?,
         }),
+        (n, Some(s))
+            if (write_family.contains(&n) || read_family.contains(&n))
+                && s.trim_start().starts_with('!') =>
+        {
+            Ok(Rule::Negation {
+                write: write_family.contains(&n),
+                spec: PathSpec::parse(&s.trim_start()[1..])?,
+            })
+        }
         (n, s) if write_family.contains(&n) || read_family.contains(&n) => Ok(Rule::Path {
             write: write_family.contains(&n),
             spec: s.map(PathSpec::parse).transpose()?,
+            carve: Vec::new(),
         }),
         ("WebFetch", s) => Ok(Rule::Fetch {
             domain: s.map(Domain::parse).transpose()?,
@@ -249,6 +290,8 @@ fn parse_skill(spec: &str) -> Result<Rule, String> {
 mod vet;
 pub use vet::*;
 
+pub(crate) use carve::attach as attach_carveouts;
+
 // --- The compiled set ----------------------------------------------------------------
 
 struct Entry {
@@ -312,6 +355,12 @@ impl Permissions {
                         quote_string(text)
                     ))
                 })?;
+                if matches!(rule, Rule::Negation { .. }) {
+                    return Err(RulesError(format!(
+                        "permissions.{key}[{i}] {}: a `!` rule is joined to the rules before it when the policy is loaded",
+                        quote_string(text)
+                    )));
+                }
                 dst.push(Entry {
                     text: text.trim().to_owned(),
                     rule,
@@ -382,12 +431,14 @@ impl Permissions {
                         .as_ref()
                         .is_none_or(|s| s.is_blanket() || self.shell_match(s, call, nah))
             }
-            Rule::Path { write, spec } => {
+            Rule::Path { write, spec, carve } => {
                 call.kind == if *write { KIND_WRITE } else { KIND_READ }
                     && spec
                         .as_ref()
-                        .is_none_or(|s| self.path_match(s, call, false))
+                        .is_none_or(|s| self.path_match(s, carve, call, false))
             }
+            // Joined to its rules at load; one that was not has no meaning.
+            Rule::Negation { .. } => false,
             Rule::Fetch { domain } => {
                 WEBFETCH_TOOLS.contains(&call.tool.as_str())
                     && domain.as_ref().is_none_or(|d| {
@@ -458,7 +509,7 @@ impl Permissions {
 
     /// A path rule. Deny and ask match if any path value, requested or
     /// resolved, matches. Allow needs one value, and both forms must match.
-    fn path_match(&self, spec: &PathSpec, call: &Call, allow: bool) -> bool {
+    fn path_match(&self, spec: &PathSpec, carve: &[PathSpec], call: &Call, allow: bool) -> bool {
         let raw = &call.raw_paths;
         if raw.is_empty() || (allow && raw.len() != 1) {
             return false;
@@ -467,6 +518,9 @@ impl Permissions {
             return false;
         }
         let ctx = self.ctx(call);
+        let covers = |p: &str| {
+            spec.matches(p, &ctx, allow) && !carve.iter().any(|c| c.matches(p, &ctx, false))
+        };
         // `Edit(**/hooks/*)` names no protected name, but may reach one.
         let guarded = allow && !names_protected(spec);
         let root = ctx.project.as_deref().or(ctx.cwd.as_deref());
@@ -486,10 +540,10 @@ impl Permissions {
             {
                 return false;
             }
-            let requested = spec.matches(&posix, &ctx, allow);
-            let real = resolved
-                .as_ref()
-                .is_some_and(|p| spec.matches(p, &ctx, allow));
+            // Each form on its own: a link whose name is carved out but whose
+            // target is not still matches.
+            let requested = covers(&posix);
+            let real = resolved.as_ref().is_some_and(|p| covers(p));
             let hit = if allow {
                 requested && real
             } else {
@@ -504,7 +558,7 @@ impl Permissions {
             && call
                 .pattern_paths
                 .iter()
-                .any(|(p, _)| spec.matches(&paths::to_posix(&self.env, p), &ctx, false))
+                .any(|(p, _)| covers(&paths::to_posix(&self.env, p)))
     }
 
     // --- allow ---
@@ -520,11 +574,11 @@ impl Permissions {
         self.allow
             .iter()
             .find(|e| match &e.rule {
-                Rule::Path { write, spec } => {
+                Rule::Path { write, spec, .. } => {
                     call.kind == if *write { KIND_WRITE } else { KIND_READ }
                         && spec
                             .as_ref()
-                            .is_some_and(|s| self.path_match(s, call, true))
+                            .is_some_and(|s| self.path_match(s, &[], call, true))
                 }
                 Rule::Fetch { domain: Some(d) } => {
                     WEBFETCH_TOOLS.contains(&call.tool.as_str()) && {
@@ -551,6 +605,7 @@ impl Permissions {
                 | Rule::Fetch { domain: None }
                 | Rule::Agent(_)
                 | Rule::Param { .. }
+                | Rule::Negation { .. }
                 | Rule::Skill { .. } => false,
             })
             .map(|e| e.text.clone())

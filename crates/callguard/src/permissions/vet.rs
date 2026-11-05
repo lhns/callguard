@@ -209,6 +209,12 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
                 ));
             }
         }
+        Rule::Negation { .. } => {
+            return blocked("a `!` rule carves paths out of deny and ask rules only");
+        }
+        Rule::Path { carve, .. } if !carve.is_empty() => {
+            return blocked("a carve-out belongs to a deny or ask rule");
+        }
         Rule::Path { spec: None, .. } => return blocked("a bare file rule allows every path"),
         Rule::Path { spec: Some(s), .. } => {
             if s.is_blanket() {

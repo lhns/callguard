@@ -1027,3 +1027,65 @@ fn allow_rules_and_directories_are_trusted_together() {
     assert_eq!(l.policy.permissions.allow, ["Bash(git log *)"]);
     assert_eq!(l.policy.permissions.additional_directories, [a]);
 }
+
+#[test]
+fn a_bang_in_a_later_layer_cannot_cancel_an_earlier_layers_rule() {
+    // The system denies .env; the project tries to carve it out, and also
+    // repeats the rule with a carve-out of its own.
+    let sys = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"]}}"#;
+    let proj = r#"{"policy_version":1,"permissions":{"deny":["Read(!.env)","Read(.env)","Read(*.key)","Read(!a.key)"]}}"#;
+    let (_d, o) = layers(sys, "", proj);
+    let l = load(&o).unwrap();
+    assert!(l.problems().is_empty(), "{:?}", l.problems());
+    // The project's leading `!` carves nothing (and says so). Its later `!`
+    // reaches only its own rules; the system's stays whole.
+    assert_eq!(
+        l.policy.permissions.deny,
+        [
+            "Read(.env)",
+            "Read(.env) except Read(!a.key)",
+            "Read(*.key) except Read(!a.key)"
+        ]
+    );
+    assert!(
+        l.warnings.iter().any(|w| w.contains("carves nothing")),
+        "{:?}",
+        l.warnings
+    );
+    // The same rule carved in one layer and plain in another keeps both.
+    let sys = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)","Read(!.env)"]}}"#;
+    let proj = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"]}}"#;
+    let (_d, o) = layers(sys, "", proj);
+    let l = load(&o).unwrap();
+    assert_eq!(
+        l.policy.permissions.deny,
+        ["Read(.env) except Read(!.env)", "Read(.env)"]
+    );
+    // Carve-outs are part of the policy_rev.
+    let (_d, o) = layers(
+        r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"]}}"#,
+        "",
+        "",
+    );
+    let plain = rev(&load(&o).unwrap().policy);
+    let (_d, o) = layers(
+        r#"{"policy_version":1,"permissions":{"deny":["Read(.env)","Read(!.env)"]}}"#,
+        "",
+        "",
+    );
+    assert_ne!(rev(&load(&o).unwrap().policy), plain);
+}
+
+#[test]
+fn a_bang_in_an_allow_list_is_dropped_with_a_warning() {
+    let user = r#"{"policy_version":1,"permissions":{"allow":["Read(src/**)","Read(!src/x)"]}}"#;
+    let (_d, o) = layers(USER_EMPTY, user, "");
+    let l = load(&o).unwrap();
+    assert!(l.problems().is_empty(), "{:?}", l.problems());
+    assert_eq!(l.policy.permissions.allow, ["Read(src/**)"]);
+    assert!(
+        l.warnings.iter().any(|w| w.contains("Read(!src/x)")),
+        "{:?}",
+        l.warnings
+    );
+}

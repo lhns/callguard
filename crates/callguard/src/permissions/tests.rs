@@ -213,7 +213,7 @@ fn rule_forms() {
         "(x)",
         "Bash(git push",
         "Bash(command:rm *)",
-        "Read(!x)",
+        "Read(!)",
         "WebFetch(example.com)",
         "WebSearch(x)",
         "mcp__x(y)",
@@ -2784,4 +2784,170 @@ fn primary_fields_and_bad_parameter_rules_cannot_be_read() {
         ..Default::default()
     };
     assert!(Permissions::compile(&p, &env()).is_err());
+}
+
+// --- `!` negation ----------------------------------------------------------------
+
+/// One layer's list as the loader attaches it.
+fn attached(list: &[&str]) -> Vec<String> {
+    let l: Vec<String> = list.iter().map(|s| (*s).to_owned()).collect();
+    carve::attach(&l, "deny", "f.json").0
+}
+
+fn carved(list: &[&str]) -> Permissions {
+    let p = policy::Permissions {
+        deny: attached(list),
+        ..Default::default()
+    };
+    let (perms, _) = Permissions::compile(&p, &env()).unwrap();
+    perms.with_resolver(Box::new(|e, p| Some(paths::to_posix(e, p))))
+}
+
+#[test]
+fn a_bang_carves_paths_out_of_the_rules_before_it() {
+    // Claude's docs: Read(*.env) then Read(!sample.env).
+    let d = carved(&["Read(*.env)", "Read(!sample.env)"]);
+    assert_eq!(hit(&d, &read("/w/p/.env")), Some("deny"));
+    assert_eq!(hit(&d, &read("/w/p/a/b/prod.env")), Some("deny"));
+    assert_eq!(hit(&d, &read("/w/p/sample.env")), None);
+    assert_eq!(hit(&d, &read("/w/p/a/sample.env")), None);
+    // The rule keeps working for other families.
+    let d = carved(&["Read(*.env)", "Edit(*.env)", "Read(!sample.env)"]);
+    assert_eq!(hit(&d, &read("/w/p/sample.env")), None);
+    assert_eq!(hit(&d, &edit("/w/p/sample.env")), Some("deny"));
+    // A `!` listed first carves nothing; one listed after carves the rule.
+    let l: Vec<String> = vec!["Read(!sample.env)".into(), "Read(*.env)".into()];
+    let (out, warns) = carve::attach(&l, "deny", "f.json");
+    assert_eq!(out, ["Read(*.env)"]);
+    assert_eq!(warns.len(), 1, "{warns:?}");
+    assert!(warns[0].contains("carves nothing"), "{warns:?}");
+}
+
+#[test]
+fn a_bang_reaches_only_bare_and_dot_rules() {
+    // `./path` and `path` rules are carved; anchored ones are not.
+    for rule in ["Read(./*.env)", "Read(**/*.env)"] {
+        let d = carved(&[rule, "Read(!sample.env)"]);
+        assert_eq!(hit(&d, &read("/w/p/sample.env")), None, "{rule}");
+        assert_eq!(hit(&d, &read("/w/p/x.env")), Some("deny"), "{rule}");
+    }
+    for rule in ["Read(//w/p/*.env)", "Read(/*.env)", "Read(~/*.env)"] {
+        let l: Vec<String> = vec![rule.into(), "Read(!sample.env)".into()];
+        let (out, warns) = carve::attach(&l, "deny", "f.json");
+        assert_eq!(out, [rule], "{rule}: nothing to carve");
+        assert_eq!(warns.len(), 1, "{warns:?}");
+    }
+    // `!` followed by /, ~/ or // carves nothing and warns.
+    for neg in [
+        "Read(!/sample.env)",
+        "Read(!~/notes/public/**)",
+        "Read(!//w/p/sample.env)",
+    ] {
+        let l: Vec<String> = vec!["Read(*.env)".into(), neg.into()];
+        let (out, warns) = carve::attach(&l, "deny", "f.json");
+        assert_eq!(out, ["Read(*.env)"], "{neg}");
+        assert_eq!(warns.len(), 1, "{warns:?}");
+        assert!(warns[0].contains("carves nothing"), "{warns:?}");
+    }
+}
+
+#[test]
+fn a_bang_cannot_reopen_a_directory_a_rule_blocks_whole() {
+    // Claude's docs: Read(secrets/**) with Read(!secrets/public/**).
+    for rule in [
+        "Read(secrets/**)",
+        "Read(secrets/)",
+        "Read(./secrets/**)",
+        "Read(**)",
+    ] {
+        let l: Vec<String> = vec![rule.into(), "Read(!secrets/public/**)".into()];
+        let (out, warns) = carve::attach(&l, "deny", "f.json");
+        assert_eq!(out, [rule], "{rule}");
+        assert_eq!(warns.len(), 1, "{warns:?}");
+    }
+    let d = carved(&["Read(secrets/**)", "Read(!secrets/public/**)"]);
+    assert_eq!(hit(&d, &read("/w/p/secrets/public/a")), Some("deny"));
+    // A file pattern in the same directory is carvable.
+    let d = carved(&["Read(secrets/*)", "Read(!secrets/public.txt)"]);
+    assert_eq!(hit(&d, &read("/w/p/secrets/public.txt")), None);
+    assert_eq!(hit(&d, &read("/w/p/secrets/other.txt")), Some("deny"));
+}
+
+#[test]
+fn several_carve_outs_attach_to_every_earlier_rule_of_the_family() {
+    let l = vec![
+        "Read(*.env)".to_owned(),
+        "Read(*.key)".to_owned(),
+        "Read(!sample.env)".to_owned(),
+        "Read(!sample.key)".to_owned(),
+    ];
+    let (out, _) = carve::attach(&l, "deny", "f.json");
+    assert_eq!(
+        out,
+        [
+            "Read(*.env) except Read(!sample.env) except Read(!sample.key)",
+            "Read(*.key) except Read(!sample.env) except Read(!sample.key)"
+        ]
+    );
+    let d = carved(&["Read(*.env)", "Read(*.key)", "Read(!sample.env)"]);
+    assert_eq!(hit(&d, &read("/w/p/a.key")), Some("deny"));
+    assert_eq!(hit(&d, &read("/w/p/sample.env")), None);
+}
+
+#[test]
+fn a_carved_path_does_not_let_a_symlink_out() {
+    let p = policy::Permissions {
+        deny: attached(&["Read(*.env)", "Read(!sample.env)"]),
+        ..Default::default()
+    };
+    let (perms, _) = Permissions::compile(&p, &env()).unwrap();
+    // sample.env is a link to the real secret.env, and the reverse.
+    let perms = perms.with_resolver(Box::new(|_, p| {
+        Some(match p {
+            "/w/p/sample.env" => "/w/p/secret.env".to_owned(),
+            "/w/p/innocent.env" => "/w/p/sample.env".to_owned(),
+            other => other.to_owned(),
+        })
+    }));
+    assert_eq!(hit(&perms, &read("/w/p/sample.env")), Some("deny"));
+    // Requested is denied; the resolved name is carved but the request is not.
+    assert_eq!(hit(&perms, &read("/w/p/innocent.env")), Some("deny"));
+    // Both forms carved: not denied.
+    let perms2 = carved(&["Read(*.env)", "Read(!sample.env)"]);
+    assert_eq!(hit(&perms2, &read("/w/p/sample.env")), None);
+}
+
+#[test]
+fn a_carve_out_applies_to_the_read_only_commands_too() {
+    let d = carved(&["Read(*.env)", "Read(!sample.env)"]);
+    assert!(d.stops(&read("/w/p/.env")));
+    assert!(!d.stops(&read("/w/p/sample.env")));
+}
+
+#[test]
+fn allow_lists_drop_a_bang_with_a_reason() {
+    let (kept, warns) = vet_allow_list(
+        &["Read(src/**)".into(), "Read(!src/x)".into()],
+        "user",
+        "u.json",
+    );
+    assert_eq!(kept, ["Read(src/**)"]);
+    assert_eq!(warns.len(), 1, "{warns:?}");
+    assert!(warns[0].contains("Read(!src/x)"), "{warns:?}");
+}
+
+#[test]
+fn an_unattached_bang_is_not_compiled() {
+    let p = policy::Permissions {
+        deny: vec!["Read(*.env)".into(), "Read(!sample.env)".into()],
+        ..Default::default()
+    };
+    assert!(Permissions::compile(&p, &env()).is_err());
+    // But the file as written is readable.
+    assert!(parse("Read(!sample.env)").is_ok());
+    assert!(parse("Read(!)").is_err());
+    assert!(parse("Read(*.env) except Read(!sample.env)").is_ok());
+    assert!(parse("Read(*.env) except Edit(!sample.env)").is_err());
+    // A path that merely contains the word stays a path.
+    assert!(matches!(parse("Read(a) except b)"), Ok(Rule::Path { .. })));
 }

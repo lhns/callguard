@@ -195,6 +195,16 @@ fn apply(
     // Allow rules that would loosen the guard too far are dropped here, per
     // layer, before the merge (the file itself stays as written).
     let mut layer_policy = f.policy.clone();
+    // `!` rules join the rules before them in this layer's list now: after the
+    // merge nothing says which layer wrote a rule.
+    for (key, list) in [
+        ("deny", &mut layer_policy.permissions.deny),
+        ("ask", &mut layer_policy.permissions.ask),
+    ] {
+        let (joined, warns) = permissions::attach_carveouts(list, key, path);
+        *list = joined;
+        out.warnings.extend(warns);
+    }
     let allow = &f.policy.permissions.allow;
     let dirs = &f.policy.permissions.additional_directories;
     // A project's allow rules and additional directories count only once the
