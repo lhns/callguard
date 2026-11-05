@@ -71,7 +71,7 @@ Verdicts: **same** (behaves as Claude), **stricter** (callguard asks or denies w
 | `classifierContext` from PostToolUse | looser | Not read. The `notes` request field is the host-side counterpart and has no CLI verb (ADR 0009). |
 | Failure blocks, never allows | same | A fallback verdict is `ask`, or `deny` when unattended. |
 | Repeated-block fallback (3 in a row, 20 total) | same when set | `deny_streak` escalates judge denies to `ask` for interactive sessions; off by default and system-layer only. |
-| Subagent checks | same | The hook runs on a subagent's calls like any other, and `PostToolUse` on `Agent|Task` reviews the report (advisory: a warning in the parent's context, skipped in auto mode unless `--review-in-auto`). Both warn and never block. |
+| Subagent checks | same | The hook runs on a subagent's calls like any other (seen in a real session, 2.1.318), and `PostToolUse` on `Agent|Task` reviews the report (advisory: a warning in the parent's context, skipped in auto mode unless `--review-in-auto`). Both warn and never block. |
 | Read-only lookups sent to the classifier | stricter | The judge sees every call the deterministic layers leave to it. |
 
 ## Still looser or missing
