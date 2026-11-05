@@ -3057,6 +3057,16 @@ fn rm_root_sees_more_wrappers() {
         r"Remove-Item -Recurse C:\*",
         r"rd /s /q C:\",
         r"rmdir /s C:\",
+        "env -S 'rm -rf /'",
+        "env --split-string='rm -rf ~'",
+        "while true; do rm -rf /; done",
+        "until false; do rm -rf /; done",
+        "if true; then :; elif true; then rm -rf /; fi",
+        "rm --r /",
+        "rm --rec ~",
+        "rm --recurs $HOME",
+        "rm --no /",
+        "rm --no-pres /",
     ] {
         assert!(rm_root(cmd), "{cmd}");
     }

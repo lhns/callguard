@@ -1129,7 +1129,8 @@ fn wrapper(name: &str) -> Option<&'static [&'static str]> {
             "--other-user",
         ],
         "doas" => &["-u", "-C"],
-        "env" => &["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+        // `-S` takes the command as its value: it is not skipped.
+        "env" => &["-u", "-C", "--unset", "--chdir"],
         "nice" => &["-n", "--adjustment"],
         "ionice" => &["-c", "-n", "-p"],
         "timeout" => &["-s", "-k", "--signal", "--kill-after", "#1"],
@@ -1148,7 +1149,8 @@ fn wrapper(name: &str) -> Option<&'static [&'static str]> {
         ],
         "wsl" => &["-d", "--distribution", "-u", "--user", "--cd"],
         "command" | "nohup" | "setsid" | "busybox" | "sh" | "bash" | "zsh" | "dash" | "fish"
-        | "csh" | "tcsh" | "eval" | "{" | "!" | "if" | "then" | "else" | "do" => &[],
+        | "csh" | "tcsh" | "eval" | "{" | "!" | "if" | "then" | "elif" | "else" | "do" | "while"
+        | "until" => &[],
         _ => return None,
     })
 }
@@ -1206,7 +1208,13 @@ fn skip_wrapper(toks: &[&str], mut i: usize, valued: &[&str]) -> usize {
 pub fn rm_root(command: &str) -> bool {
     for seg in SEGMENT_SPLIT.split(command) {
         let unquoted = seg.replace(['"', '\''], "");
-        let toks: Vec<&str> = unquoted.split_whitespace().collect();
+        let toks: Vec<&str> = unquoted
+            .split_whitespace()
+            .flat_map(|t| match t.strip_prefix("--split-string=") {
+                Some(cmd) => vec!["--split-string", cmd],
+                None => vec![t],
+            })
+            .collect();
         let mut i = 0;
         while i < toks.len() {
             let name = command_name(toks[i]);
@@ -1240,10 +1248,11 @@ pub fn rm_root(command: &str) -> bool {
         let mut targets: Vec<String> = Vec::new();
         for t in &toks[i + 1..] {
             let lower = t.to_lowercase();
-            if *t == "--no-preserve-root" {
+            // GNU rm takes any unambiguous prefix of a long option.
+            if t.len() > 3 && "--no-preserve-root".starts_with(t) {
                 return true;
             }
-            if *t == "--recursive"
+            if (t.len() > 2 && "--recursive".starts_with(t))
                 || (t.len() > 1 && "-recurse".starts_with(&lower)) // PowerShell accepts -r, -rec, ...
                 || ((name == "rm" || name == "rmdir")
                     && UNIX_FLAGS.is_match(t)
