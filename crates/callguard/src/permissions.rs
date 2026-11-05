@@ -299,6 +299,27 @@ const RUN_COMMANDS: &[(&str, &str)] = &[
     ("dotnet", "run"),
 ];
 
+/// Hook, policy and VCS directories. Allow rules do not match inside them
+/// unless they name one outright, which only the system layer can do.
+const GUARDED_DIRS: [&str; 6] = [".git", ".claude", ".callguard", ".hermes", ".opencode", ".pi"];
+
+/// Whether the pattern spells out a guarded directory.
+fn names_guarded_dir(s: &PathSpec) -> bool {
+    s.rest
+        .split('/')
+        .any(|seg| GUARDED_DIRS.contains(&seg.to_lowercase().as_str()))
+}
+
+/// Whether the POSIX-form `path`, below `root` when it is inside, has a
+/// guarded directory in it. Parents of the project do not count.
+fn in_guarded_dir(path: &str, root: Option<&str>) -> bool {
+    let path = path.to_lowercase();
+    let below = root
+        .and_then(|r| path.strip_prefix(&format!("{}/", r.to_lowercase().trim_end_matches('/'))))
+        .unwrap_or(&path);
+    below.split('/').any(|seg| GUARDED_DIRS.contains(&seg))
+}
+
 /// Reads an allow rule and refuses the ones that loosen the guard too far.
 /// `layer` is the policy layer that wrote it; None applies only the limits
 /// every layer shares. The error is the reason, for the warning.
@@ -349,14 +370,7 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
             }
             // Hook, policy and VCS directories are never pre-approved by a
             // user or project rule; only the system layer may allow them.
-            if guarded_layer
-                && s.rest.split('/').any(|seg| {
-                    matches!(
-                        seg,
-                        ".git" | ".claude" | ".callguard" | ".hermes" | ".opencode" | ".pi"
-                    )
-                })
-            {
+            if guarded_layer && names_guarded_dir(s) {
                 return blocked(
                     "a user or project rule may not allow paths in hook, policy or VCS directories",
                 );
@@ -605,13 +619,25 @@ impl Permissions {
             return false;
         }
         let ctx = self.ctx(call);
+        // `Edit(**/hooks/*)` names no guarded directory, but may reach one.
+        let guarded = allow && !names_guarded_dir(spec);
+        let root = ctx.project.as_deref().or(ctx.cwd.as_deref());
         for r in &raw {
             if allow && (paths::is_network(&self.env, r) || self.env.drive_relative(r)) {
                 return false;
             }
             let norm = self.env.clean_names(&self.env.normalize(r, &call.cwd));
-            let requested = spec.matches(&paths::to_posix(&self.env, &norm), &ctx, allow);
+            let posix = paths::to_posix(&self.env, &norm);
             let resolved = (self.resolver)(&self.env, &norm).filter(|_| !self.env.drive_relative(r));
+            if guarded
+                && [Some(&posix), resolved.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|p| in_guarded_dir(p, root))
+            {
+                return false;
+            }
+            let requested = spec.matches(&posix, &ctx, allow);
             let real = resolved
                 .as_ref()
                 .is_some_and(|p| spec.matches(p, &ctx, allow));

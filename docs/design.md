@@ -164,7 +164,7 @@ A rule with no conditions is invalid.
 - **deny and ask** match if any sub-command matches. Where nah has no parse or a hole in it, they also try the raw text.
 - **allow** needs every sub-command to match, full coverage and agreement of nah's parse with callguard's own lexer (§4). `git status; rm x` does not match `Bash(git status:*)`.
 - An allow only skips the judge. It never overrides self-protection, nah or a deny.
-- Every layer drops blanket and interpreter allows with a warning (`Bash`, `Bash(*)`, `Bash(python:*)`, `Bash(node:*)`, `Bash(curl:*)`, ...), package-manager run wildcards (`npm run *`, `cargo run *`, `git config *`), `Agent`, `Task` and `Monitor` allows, and in the user and project layers allows for hook, policy and VCS directories. Claude's auto mode drops the same kinds.
+- Every layer drops blanket and interpreter allows with a warning (`Bash`, `Bash(*)`, `Bash(python:*)`, `Bash(node:*)`, `Bash(curl:*)`, ...), package-manager run wildcards (`npm run *`, `cargo run *`, `git config *`), `Agent`, `Task` and `Monitor` allows, and in the user and project layers allows for hook, policy and VCS directories (a wildcard allow also never matches a path inside one, whatever layer wrote it). Claude's auto mode drops the same kinds.
 - A deny or ask rule that cannot be read fails the policy; an allow rule that cannot be read is dropped.
 
 ### Layers and merge

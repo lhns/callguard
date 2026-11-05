@@ -829,6 +829,35 @@ fn hook_policy_and_vcs_directories_are_never_pre_approved_below_the_system_layer
 }
 
 #[test]
+fn a_wildcard_allow_never_reaches_a_guarded_directory() {
+    let a = allow(&["Edit(**/hooks/*)", "Edit(.g*/hooks/*)", "Edit(src/**)"]);
+    for p in [
+        "/w/p/.git/hooks/pre-commit",
+        "/w/p/.GIT/hooks/pre-commit",
+        "/w/p/sub/.Claude/hooks/x",
+        "/w/p/src/.pi/x",
+    ] {
+        assert_eq!(hit(&a, &edit(p)), None, "{p}");
+    }
+    assert_eq!(hit(&a, &edit("/w/p/lib/hooks/ok")), Some("allow"));
+    assert_eq!(hit(&a, &edit("/w/p/src/a.rs")), Some("allow"));
+    // The project's own parents do not count.
+    let a = allow(&["Edit(src/**)"]);
+    let c = Call::new(
+        CallInput {
+            tool: "Edit".into(),
+            input: Some(RawValue::from_string(r#"{"file_path":"src/a.rs"}"#.into()).unwrap()),
+            cwd: "/home/u/.claude/work/p".into(),
+            project_dir: "/home/u/.claude/work/p".into(),
+            ..Default::default()
+        },
+        &env(),
+    );
+    assert_eq!(hit(&a, &c), Some("allow"));
+    assert!(vet("Edit(.GIT/**)", Some("user")).is_err(), "any letter case");
+}
+
+#[test]
 fn agents_monitors_and_package_manager_runs_are_never_honoured() {
     for layer in [None, Some("system"), Some("user"), Some("project")] {
         for r in [
