@@ -475,6 +475,12 @@ fn read_file_inner(path: &str, layer: &str) -> Result<File, ReadFail> {
         not_found,
         err: PolicyError(msg),
     };
+    // A FIFO would block the read until something writes to it, past the
+    // deadline; so would any file that is not a plain one. (A missing path
+    // falls through to the read, which reports it.)
+    if std::fs::metadata(path).is_ok_and(|m| !m.is_file()) {
+        return Err(fail(false, format!("{path}: not a regular file")));
+    }
     let mut data = std::fs::read(path).map_err(|e| {
         fail(
             e.kind() == std::io::ErrorKind::NotFound,

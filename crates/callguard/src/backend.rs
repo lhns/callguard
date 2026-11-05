@@ -1437,7 +1437,11 @@ mod tests {
             let got = post_json(&agent, &from.url, &hdr, "{}".into(), soon(), "test");
             assert!(got.is_err(), "{name}: {got:?}");
             assert_eq!(from.requests().len(), 1, "{name}");
-            assert!(target.requests().is_empty(), "{name}: {:?}", target.requests());
+            assert!(
+                target.requests().is_empty(),
+                "{name}: {:?}",
+                target.requests()
+            );
         }
     }
 

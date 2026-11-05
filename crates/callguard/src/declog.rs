@@ -180,9 +180,25 @@ impl Logger {
         o.create(true).append(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+        refuse_fifo(&self.path)?;
         // One write: concurrent processes do not interleave lines.
         o.open(&self.path)?.write_all(line.as_bytes())
     }
+}
+
+/// Opening a FIFO blocks until another process opens its other end, past the
+/// hook's deadline. Other special files (`/dev/null`) are fine.
+fn refuse_fifo(path: &str) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileTypeExt;
+        if fs::metadata(path).is_ok_and(|m| m.file_type().is_fifo()) {
+            return Err(io::Error::other(format!("{path} is a FIFO")));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 /// Longest line the reader accepts, (4 MiB).
@@ -192,6 +208,7 @@ const MAX_LINE: usize = 4 << 20;
 /// oldest first. A missing file is no entries. Unparseable lines (a cut first
 /// line, a corrupt line) are skipped.
 pub fn read_tail(path: &str, session_id: &str) -> io::Result<Vec<Entry>> {
+    refuse_fifo(path)?;
     let mut f = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -516,5 +533,33 @@ mod tests {
             )),
             "/h/.local/state/callguard/decisions.jsonl"
         );
+    }
+
+    /// A FIFO as the log must fail at once, not hang the hook; `/dev/null`
+    /// still works.
+    #[cfg(unix)]
+    #[test]
+    fn a_fifo_log_is_refused_and_dev_null_is_not() {
+        let d = tempfile::tempdir().unwrap();
+        let fifo = d.path().join("log");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let path = fifo.to_string_lossy().into_owned();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let append = Logger::new(&path).append(&Entry::default()).is_err();
+            let _ = tx.send((append, read_tail(&path, "s").is_err()));
+        });
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok((true, true))
+        );
+        Logger::new("/dev/null").append(&Entry::default()).unwrap();
+        assert!(read_tail("/dev/null", "s").unwrap().is_empty());
     }
 }

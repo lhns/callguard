@@ -798,3 +798,41 @@ fn final_still_stops_the_merge_for_permissions() {
     let (_d, o) = layers(sys, user, "");
     assert_eq!(load(&o).unwrap().policy.permissions.deny, ["Bash(rm:*)"]);
 }
+
+#[test]
+fn a_policy_path_that_is_not_a_regular_file_is_an_error() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("policy.json");
+    fs::create_dir(&dir).unwrap();
+    let err = read_file(&dir.to_string_lossy(), LAYER_PROJECT).unwrap_err();
+    assert!(err.0.contains("not a regular file"), "{err:?}");
+    // A missing file is still a missing file.
+    let gone = d.path().join("none.json");
+    assert!(
+        !read_file(&gone.to_string_lossy(), LAYER_PROJECT)
+            .unwrap_err()
+            .0
+            .contains("regular")
+    );
+}
+
+/// A FIFO at the policy path must fail at once, not hang the hook.
+#[cfg(unix)]
+#[test]
+fn a_fifo_policy_fails_instead_of_hanging() {
+    let d = tempfile::tempdir().unwrap();
+    let fifo = d.path().join("policy.json");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let path = fifo.to_string_lossy().into_owned();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(read_file(&path, LAYER_PROJECT).is_err());
+    });
+    assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(5)), Ok(true));
+}
