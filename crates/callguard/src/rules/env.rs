@@ -108,7 +108,7 @@ pub struct Env {
 /// longer than either and still exists.
 const MAX_PATH_LEN: usize = if cfg!(windows) { 32767 } else { 8192 };
 
-fn path_too_long(p: &str) -> bool {
+pub(crate) fn path_too_long(p: &str) -> bool {
     if cfg!(windows) {
         p.encode_utf16().count() > MAX_PATH_LEN
     } else {
