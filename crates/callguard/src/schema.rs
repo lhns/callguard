@@ -429,7 +429,7 @@ mod tests {
         std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{p}: {e}"))
     }
 
-    /// The zero value that omitempty leaves out.
+    /// The zero value, which is left out when written.
     fn is_empty_value(v: &Value) -> bool {
         match v {
             Value::Null => true,

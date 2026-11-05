@@ -480,8 +480,7 @@ fn same_json(a: Option<&RawValue>, b: Option<&RawValue>) -> bool {
     }
 }
 
-/// Value equality on decoded JSON: every number
-/// is a float64, so `1` equals `1.0`.
+/// Value equality on decoded JSON, numbers by value: `1` equals `1.0`.
 fn json_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),

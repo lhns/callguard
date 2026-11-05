@@ -1136,8 +1136,8 @@ fn merge_llm(mut b: Llm, s: &Llm) -> Llm {
         }
         b.transcript = Some(t);
     }
-    // `null`/absent and `[]` differ here; both mean "not set" after
-    // omitempty round trips, and an explicit empty list never loosened anything.
+    // Absent, `null` and `[]` all mean "not set" (a written-out policy omits
+    // empty lists), and an explicit empty list never loosened anything.
     if !s.environment.is_empty() {
         b.environment = s.environment.clone();
     }
@@ -1482,8 +1482,7 @@ pub fn default_rules() -> Vec<Rule> {
 }
 
 // Command patterns of the default rules (RE2 syntax, compiled with
-// `rules::compile_regex`). Best effort, not a parser; they are public so tests
-// and docs can name them.
+// `rules::compile_regex`). Best effort, not a parser.
 
 macro_rules! net_tools_re {
     () => {

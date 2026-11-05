@@ -343,7 +343,7 @@ pub fn system_prompt(cfg: &Config) -> String {
         (SLOT_BLOCK, bullets(&block, "")),
         (SLOT_ALLOW, allow),
     ];
-    // One pass, like strings.Replacer: replacement text is never rescanned, so
+    // One pass: replacement text is never rescanned, so
     // a policy string that contains a marker stays as written.
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
