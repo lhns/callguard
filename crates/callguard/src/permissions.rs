@@ -424,15 +424,12 @@ impl Permissions {
         if !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str()) {
             return None;
         }
-        // A real, complete answer of nah for this call.
+        // A real answer of nah for this call, complete but for code it cannot read.
         let n = nah?;
-        if n.verdict != NahVerdict::Delegate
-            || n.coverage != "full"
-            || n.facts.as_ref().is_none_or(|f| !f.gaps.is_empty())
-            || n.calls.is_empty()
-        {
+        if n.verdict != NahVerdict::Delegate || n.calls.is_empty() {
             return None;
         }
+        let script_hidden = opaque_only(n)?;
         let specs: Vec<(&Entry, &Spec)> = self
             .allow
             .iter()
@@ -456,7 +453,14 @@ impl Permissions {
         let want = self.env.fold(&self.env.normalize(&call.cwd, ""));
         let mut first = None;
         for c in &n.calls {
-            let argv = c.argv.as_ref().filter(|a| !a.is_empty())?;
+            let argv = c.argv.as_ref()?;
+            // The child that stands for a script nah could not find.
+            if argv.is_empty() && script_hidden {
+                continue;
+            }
+            if argv.is_empty() {
+                return None;
+            }
             let cwd = c.cwd.as_deref().filter(|c| !c.is_empty())?;
             if self.env.fold(&self.env.normalize(cwd, "")) != want {
                 return None;
@@ -474,6 +478,36 @@ impl Permissions {
         }
         first.map(|e| e.text.clone())
     }
+}
+
+/// Gaps nah reports for a command that runs code of the repository, which it
+/// cannot read: `npm test`, `pytest`. An allow rule for the exact command may
+/// pass over them, as Claude Code does; a budget that ran out or a construct
+/// nah could not parse reports something else (or no answer at all).
+const OPAQUE_GAPS: [&str; 4] = [
+    "Unmodeled unresolved-package-script",
+    "Unmodeled unrecoverable-source",
+    "Unmodeled Process semantic-fields-unavailable",
+    "Unmodeled Filesystem access-semantics-partial",
+];
+
+/// The gap of a package script nah did not find; only then does it report a
+/// child with an empty argv.
+const SCRIPT_GAP: &str = "Unmodeled unresolved-package-script";
+
+/// Whether nah's answer is complete but for the opaque gaps. None if it is not;
+/// else whether an empty-argv child is the script nah could not find.
+fn opaque_only(n: &NahResult) -> Option<bool> {
+    let gaps = &n.facts.as_ref()?.gaps;
+    if !gaps.iter().all(|g| OPAQUE_GAPS.contains(&g.as_str())) {
+        return None;
+    }
+    match n.coverage.as_str() {
+        "full" => {}
+        "partial" if !gaps.is_empty() => {}
+        _ => return None,
+    }
+    Some(gaps.iter().any(|g| g == SCRIPT_GAP))
 }
 
 /// Whether nah's parse of `call` leaves something unseen, so that deny and ask

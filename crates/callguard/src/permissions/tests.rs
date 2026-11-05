@@ -552,6 +552,144 @@ fn several_commands_each_need_a_rule() {
     ));
 }
 
+/// nah's answer for a command that runs repository code: partial coverage and
+/// the given gaps.
+fn opaque_nah(calls: &[&[&str]], gaps: &[&str]) -> NahResult {
+    let mut n = nah_of(calls);
+    n.coverage = "partial".into();
+    n.facts = Some(Facts {
+        gaps: gaps.iter().map(|g| (*g).to_owned()).collect(),
+        ..Default::default()
+    });
+    n
+}
+
+/// What nah gave for `npm test` with no package.json to read.
+fn npm_test_nah() -> NahResult {
+    let mut n = opaque_nah(
+        &[&["npm", "test"]],
+        &[
+            "Unmodeled unrecoverable-source",
+            "Unmodeled unresolved-package-script",
+        ],
+    );
+    n.calls.push(NahCall {
+        argv: Some(Vec::new()),
+        via: "npm".into(),
+        ..Default::default()
+    });
+    n
+}
+
+#[test]
+fn an_exact_rule_passes_over_the_gaps_of_code_nah_cannot_read() {
+    let a = allow(&["Bash(npm test)", "Bash(pytest a)", "Bash(wc -l a)"]);
+    let h = a
+        .check(&bash("npm test"), Some(&npm_test_nah()))
+        .expect("npm test");
+    assert_eq!(
+        (h.decision, h.rule.as_str()),
+        (Decision::Allow, "Bash(npm test)")
+    );
+    let pytest = opaque_nah(
+        &[&["pytest", "a"]],
+        &[
+            "Unmodeled Process semantic-fields-unavailable",
+            "Unmodeled Filesystem access-semantics-partial",
+        ],
+    );
+    assert!(a.check(&bash("pytest a"), Some(&pytest)).is_some());
+    // A gap on a call that nah calls complete.
+    let mut wc = nah_of(&[&["wc", "-l", "a"]]);
+    wc.facts = Some(Facts {
+        gaps: vec!["Unmodeled Filesystem access-semantics-partial".into()],
+        ..Default::default()
+    });
+    assert!(a.check(&bash("wc -l a"), Some(&wc)).is_some());
+}
+
+#[test]
+fn only_the_opaque_gaps_pass_and_never_a_budget_or_a_parse_failure() {
+    let a = allow(&["Bash(npm test)"]);
+    let c = bash("npm test");
+    let opaque = "Unmodeled unresolved-package-script";
+    for other in [
+        "Limit execution-limit",
+        "Unmodeled parse-error",
+        "Unmodeled unresolved-build-target",
+        "Unmodeled dynamic-source",
+        "",
+    ] {
+        let n = opaque_nah(&[&["npm", "test"]], &[opaque, other]);
+        assert!(denied_by_allow(&a, &c, Some(&n)), "{other}");
+    }
+    // Partial coverage needs a gap that says why.
+    assert!(denied_by_allow(
+        &a,
+        &c,
+        Some(&opaque_nah(&[&["npm", "test"]], &[]))
+    ));
+    // No coverage at all, or a block.
+    for cov in ["none", "", "FULL"] {
+        let mut n = opaque_nah(&[&["npm", "test"]], &[opaque]);
+        n.coverage = cov.into();
+        assert!(denied_by_allow(&a, &c, Some(&n)), "{cov}");
+    }
+    let mut n = opaque_nah(&[&["npm", "test"]], &[opaque]);
+    n.verdict = NahVerdict::Block;
+    assert!(denied_by_allow(&a, &c, Some(&n)));
+    // An analysis that ran out of budget is an error, not a result.
+    assert!(denied_by_allow(&a, &c, None));
+}
+
+#[test]
+fn an_empty_argv_child_needs_the_missing_script_gap() {
+    let a = allow(&["Bash(pytest a)"]);
+    let c = bash("pytest a");
+    let gap = "Unmodeled Filesystem access-semantics-partial";
+    let mut n = opaque_nah(&[&["pytest", "a"]], &[gap]);
+    n.calls.push(NahCall {
+        argv: Some(Vec::new()),
+        ..Default::default()
+    });
+    assert!(denied_by_allow(&a, &c, Some(&n)));
+    // An unknown argv is never the script child.
+    let a = allow(&["Bash(npm test)"]);
+    let mut n = npm_test_nah();
+    n.calls[1].argv = None;
+    assert!(denied_by_allow(&a, &bash("npm test"), Some(&n)));
+    // The empty child alone is no command.
+    let mut n = npm_test_nah();
+    n.calls.remove(0);
+    assert!(denied_by_allow(&a, &bash("npm test"), Some(&n)));
+}
+
+#[test]
+fn an_opaque_command_still_needs_every_other_command_named_and_the_lexer() {
+    let a = allow(&["Bash(npm test)"]);
+    let gaps = &["Unmodeled unresolved-package-script"];
+    // A second command no rule names.
+    let n = opaque_nah(&[&["npm", "test"], &["curl", "x"]], gaps);
+    assert!(denied_by_allow(&a, &bash("npm test; curl x"), Some(&n)));
+    let n = opaque_nah(&[&["npm", "test"], &["rm", "a"]], gaps);
+    assert!(denied_by_allow(&a, &bash("npm test && rm a"), Some(&n)));
+    // The lexer vetoes what argv hides.
+    let n = opaque_nah(&[&["npm", "test"]], gaps);
+    for cmd in [
+        "FOO=1 npm test",
+        "npm test > a",
+        "npm test $X",
+        "npm test &",
+    ] {
+        assert!(denied_by_allow(&a, &bash(cmd), Some(&n)), "{cmd}");
+    }
+    // A shell wrapper is a different command.
+    let n = opaque_nah(&[&["bash", "-c", "npm test"], &["npm", "test"]], gaps);
+    assert!(denied_by_allow(&a, &bash("bash -c 'npm test'"), Some(&n)));
+    // The wildcard form of a run command is dropped before it gets here.
+    assert!(vet_allow("Bash(npm run *)", None).is_err());
+}
+
 #[test]
 fn the_lexer_has_a_veto() {
     let a = git_allow();
