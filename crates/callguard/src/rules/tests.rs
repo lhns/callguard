@@ -3622,3 +3622,146 @@ fn an_additional_directory_does_not_clear_a_broad_project() {
     );
     assert!(c.project_ignored && !c.in_project);
 }
+
+// --- the user's backends file ----------------------------------------------------
+
+#[test]
+fn writes_to_the_users_backends_file_are_denied_and_shell_mentions_ask() {
+    let (unix, win) = (unix(), win());
+    for (env, tool, path) in [
+        (&unix, "Write", "/home/u/.config/callguard/backends.json"),
+        (&unix, "Edit", "/home/u/.config/callguard/backends.json"),
+        (
+            &unix,
+            "Write",
+            "/home/u/Library/Application Support/callguard/backends.json",
+        ),
+        (&unix, "Write", "/w/p/../.config/callguard/backends.json"),
+        (
+            &win,
+            "Write",
+            r"C:\Users\u\AppData\Roaming\callguard\backends.json",
+        ),
+        (
+            &win,
+            "Edit",
+            r"C:\Users\u\AppData\Roaming\Callguard\Backends.JSON",
+        ),
+    ] {
+        let b = Builtin::new(env.clone(), &[], &[]).unwrap();
+        let h = b
+            .check(&Call::new(at(tool, file_input(path), "/w/p", "/w/p"), env))
+            .unwrap_or_else(|| panic!("{path}"));
+        assert_eq!(
+            (h.id.as_str(), h.decision),
+            ("self-protect-write", Decision::Deny),
+            "{path}"
+        );
+    }
+    let b = Builtin::new(unix.clone(), &[], &[]).unwrap();
+    // Other files of that name and directory are not touched by this.
+    for path in [
+        "/w/p/backends.json",
+        "/home/u/.config/callguard/other.json",
+        "/home/u/.config/other/backends.json",
+        "/w/p/callguard-backends.json",
+    ] {
+        let h = b.check(&Call::new(
+            at("Write", file_input(path), "/w/p", "/w/p"),
+            &unix,
+        ));
+        assert!(h.is_none(), "{path}: {h:?}");
+    }
+    for cmd in [
+        "echo '{}' > ~/.config/callguard/backends.json",
+        "cp evil.json ~/.config/callguard/backends.json",
+        "mv x.json ~/.config/callguard/backends.json",
+        "tee /home/u/.config/callguard/backends.json < x",
+        r#"echo {} > "/home/u/.config/callguard/backends.json""#,
+        "sed -i s/a/b/ ~/.config/callguard/backends.json",
+        "cat ~/.config/callguard/backends.json",
+        r"cat ~/.config/callguard/back\ends.json",
+        r#"cat ~/.config/callguard/backe""nds.json"#,
+    ] {
+        let h = b
+            .check(&Call::new(
+                at("Bash", bash_input(cmd), "/w/p", "/w/p"),
+                &unix,
+            ))
+            .unwrap_or_else(|| panic!("{cmd}"));
+        assert_eq!(
+            (h.id.as_str(), h.decision),
+            ("self-protect-shell", Decision::Ask),
+            "{cmd}"
+        );
+    }
+    let wb = Builtin::new(win.clone(), &[], &[]).unwrap();
+    for cmd in [
+        r"type C:\Users\u\AppData\Roaming\callguard\backends.json",
+        r"Get-Content $env:APPDATA\callguard\backends.json",
+        r"copy x.json %APPDATA%\callguard\backends.json",
+    ] {
+        let h = wb
+            .check(&Call::new(
+                at("PowerShell", bash_input(cmd), "C:/w/p", "C:/w/p"),
+                &win,
+            ))
+            .unwrap_or_else(|| panic!("{cmd}"));
+        assert_eq!(h.id, "self-protect-shell", "{cmd}");
+    }
+    for cmd in [
+        "cat backends.json",
+        "ls ~/.config/callguard-x",
+        "cat ~/.config/other/backends.json",
+    ] {
+        let h = b.check(&Call::new(
+            at("Bash", bash_input(cmd), "/w/p", "/w/p"),
+            &unix,
+        ));
+        assert!(h.is_none(), "{cmd}: {h:?}");
+    }
+}
+
+#[test]
+fn reading_the_users_backends_file_asks_and_the_guard_cannot_be_disabled() {
+    let (unix, win) = (unix(), win());
+    for (env, tool, path) in [
+        (&unix, "Read", "/home/u/.config/callguard/backends.json"),
+        (&unix, "Read", "~/.config/callguard/backends.json"),
+        (
+            &win,
+            "Read",
+            r"C:\Users\u\AppData\Roaming\callguard\backends.json",
+        ),
+        (
+            &win,
+            "Read",
+            "C:/Users/u/AppData/Roaming/callguard/Backends.json",
+        ),
+    ] {
+        // Naming every disableable built-in does not reach this guard.
+        let b = Builtin::new(
+            env.clone(),
+            &[
+                "self-protect-write".to_owned(),
+                "self-protect-shell".to_owned(),
+            ],
+            &[],
+        )
+        .unwrap();
+        let h = b
+            .check(&Call::new(at(tool, file_input(path), "/w/p", "/w/p"), env))
+            .unwrap_or_else(|| panic!("{path}"));
+        assert_eq!(
+            (h.id.as_str(), h.decision),
+            ("self-protect-read", Decision::Ask),
+            "{path}"
+        );
+    }
+    let b = Builtin::new(unix.clone(), &[], &[]).unwrap();
+    let h = b.check(&Call::new(
+        at("Read", file_input("/w/p/backends.json"), "/w/p", "/w/p"),
+        &unix,
+    ));
+    assert!(h.is_none(), "{h:?}");
+}

@@ -11,7 +11,7 @@ pub struct Hit {
 }
 
 /// The files that carry hook and policy configuration.
-const PROTECTED_GLOBS: [&str; 11] = [
+const PROTECTED_GLOBS: [&str; 12] = [
     "**/.claude/settings.json",
     "**/.claude/settings.local.json",
     "**/.callguard/**",
@@ -25,14 +25,19 @@ const PROTECTED_GLOBS: [&str; 11] = [
     // The Claude instruction bridge's state: an agent that could add a path
     // there would pick which .md files go to the judge provider.
     "**/callguard/instructions/**",
+    // The user's backends file holds API keys and can send the judge anywhere.
+    "**/callguard/backends.json",
 ];
+
+/// Files whose content is secret: a read of them asks, whatever else allows it.
+const SECRET_READ_GLOBS: [&str; 1] = ["**/callguard/backends.json"];
 
 /// Finds those paths in a slash-normalized command line. A glob in the file
 /// name (`.claude/*.json`) counts as naming them.
 static PROTECTED_SHELL: LazyLock<Regex> = LazyLock::new(|| {
     builtin_regex(concat!(
         r"(?i)\.claude/(?:settings|[^/\s]*[*?\[])|\.callguard\b|/etc/callguard|programdata/callguard",
-        r"|\.hermes/(?:config\.yaml|shell-hooks-allowlist\.json|[^/\s]*[*?\[])|\.config/opencode/plugins|\.opencode/plugins|\.pi/(?:agent/)?extensions|callguard/instructions"
+        r"|\.hermes/(?:config\.yaml|shell-hooks-allowlist\.json|[^/\s]*[*?\[])|\.config/opencode/plugins|\.opencode/plugins|\.pi/(?:agent/)?extensions|callguard/instructions|callguard/backends\.json"
     ))
 });
 
@@ -367,6 +372,8 @@ pub(crate) struct Builtin {
     disabled: Vec<String>,
     /// Write targets.
     protected: Vec<Regex>,
+    /// Read targets that ask.
+    secret: Vec<Regex>,
     /// Extra files as they may appear in a command, folded.
     extra: Vec<String>,
 }
@@ -386,6 +393,10 @@ impl Builtin {
         for g in &globs {
             protected.push(env.compile_glob(g)?);
         }
+        let secret = SECRET_READ_GLOBS
+            .iter()
+            .map(|g| env.compile_glob(g))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut folded_extra = Vec::new();
         for p in extra {
             // Cleaned like the paths of a call, so a `..` in the setting still matches.
@@ -410,6 +421,7 @@ impl Builtin {
             env,
             disabled: disabled.to_vec(),
             protected,
+            secret,
             extra: folded_extra,
         })
     }
@@ -433,6 +445,20 @@ impl Builtin {
         // The trust record guard has no id: `disable_builtin` cannot name it.
         if let Some(hit) = trust_guard(c) {
             return Some(hit);
+        }
+        // Like the trust record guard, it has no id for `disable_builtin`.
+        if c.kind == KIND_READ
+            && c.paths()
+                .any(|p| self.secret.iter().any(|re| re.is_match(p)))
+        {
+            return Some(Hit {
+                id: "self-protect-read".into(),
+                decision: Decision::Ask,
+                reason: format!(
+                    "read of callguard's backends file, which holds API keys ({}); a human should confirm",
+                    c.path.as_deref().unwrap_or_default()
+                ),
+            });
         }
         let on = |id: &str| !self.disabled.iter().any(|d| d == id);
         let hit = |id: &str, decision: Decision, reason: String| {

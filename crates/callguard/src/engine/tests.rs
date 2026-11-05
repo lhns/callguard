@@ -3213,3 +3213,65 @@ fn the_backends_file_chooses_the_judges_backend_and_the_key_stays_out_of_its_deb
     assert!(!format!("{:?}", e.policy()).contains("SECRET"));
     assert!(!e.policy_rev().contains("SECRET"));
 }
+
+#[test]
+fn the_backends_file_inside_the_project_is_still_not_read_or_written_freely() {
+    let (dir, e) = engine_with_backends(r#"{"backends":{}}"#).unwrap();
+    let d = dir.path();
+    let file = path_str(&d.join("config").join("callguard").join("backends.json"));
+    let req = |tool: &str, input: serde_json::Value| Request {
+        harness: "claude".into(),
+        session_id: "s1".into(),
+        // The user's config dir lies inside the project, as when it is run from $HOME.
+        cwd: path_str(d),
+        project_dir: path_str(d),
+        tool: ToolCall {
+            name: tool.into(),
+            input: raw(&input.to_string()),
+        },
+        ..Default::default()
+    };
+    let slashed = file.replace(std::path::MAIN_SEPARATOR, "/");
+    for (tool, input, want, rule) in [
+        // read-in-project would allow these.
+        (
+            "Read",
+            serde_json::json!({ "file_path": file }),
+            Decision::Ask,
+            "self-protect-read",
+        ),
+        (
+            "Bash",
+            serde_json::json!({ "command": format!("cat {slashed}") }),
+            Decision::Ask,
+            "self-protect-shell",
+        ),
+        (
+            "Write",
+            serde_json::json!({ "file_path": file, "content": "{}" }),
+            Decision::Deny,
+            "self-protect-write",
+        ),
+        (
+            "Edit",
+            serde_json::json!({ "file_path": file, "old_string": "a", "new_string": "b" }),
+            Decision::Deny,
+            "self-protect-write",
+        ),
+        (
+            "Bash",
+            serde_json::json!({ "command": format!("cp x.json {slashed}") }),
+            Decision::Ask,
+            "self-protect-shell",
+        ),
+    ] {
+        let got = e.decide(&req(tool, input));
+        assert!(got.decision == want && got.rule == rule, "{tool}: {got:?}");
+    }
+    // Unattended, an ask becomes a deny.
+    let got = e.decide(&unattended(req(
+        "Read",
+        serde_json::json!({ "file_path": file }),
+    )));
+    assert_eq!(got.decision, Decision::Deny, "{got:?}");
+}
