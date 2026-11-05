@@ -374,5 +374,6 @@ impl Env {
                 caseless: self.caseless(),
             },
         )
+        .map_err(|e| RulesError(format!("glob {}: {e}", crate::policy::quote_string(glob))))
     }
 }

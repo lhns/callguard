@@ -224,6 +224,19 @@ fn globs() {
 }
 
 #[test]
+fn a_bad_glob_is_reported_as_written() {
+    let e = unix().compile_glob("~/[ab").unwrap_err().to_string();
+    assert!(e.contains(r#""~/[ab""#), "{e}");
+    assert!(!e.contains("/home/u"), "{e}");
+    let e = win().compile_glob(r"p\[ab").unwrap_err().to_string();
+    assert!(e.contains(r#""p\\[ab""#), "{e}");
+    assert!(e.contains("unclosed ["), "{e}");
+    // A pattern the regex engine refuses names the glob as written too.
+    let e = unix().compile_glob("~/[z-a]").unwrap_err().to_string();
+    assert!(e.starts_with(r#"glob "~/[z-a]": "#), "{e}");
+}
+
+#[test]
 fn a_glob_crosses_a_newline_in_a_path() {
     let unix = unix();
     for (glob, path) in [

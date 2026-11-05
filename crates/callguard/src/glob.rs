@@ -4,7 +4,6 @@
 
 use regex::Regex;
 
-use crate::policy::quote_string;
 use crate::rules::{RulesError, compile_regex};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,7 +22,8 @@ pub(crate) enum Dialect {
     PathRule { classes: bool },
 }
 
-/// Compiles `pattern` for `dialect`.
+/// Compiles `pattern` for `dialect`. The error gives only the reason: `pattern`
+/// may be expanded, and the caller knows the text the user wrote.
 pub(crate) fn compile(pattern: &str, dialect: Dialect) -> Result<Regex, RulesError> {
     match dialect {
         Dialect::Policy { caseless } => policy(pattern, caseless),
@@ -65,7 +65,7 @@ fn policy(g: &str, caseless: bool) -> Result<Regex, RulesError> {
             i += 1;
         } else if c == b'[' {
             let Some(end) = g[i..].find(']') else {
-                return Err(RulesError(format!("glob {}: unclosed [", quote_string(g))));
+                return Err(RulesError("unclosed [".to_owned()));
             };
             let class = &g[i + 1..i + end];
             let class = match class.strip_prefix('!') {
@@ -81,7 +81,7 @@ fn policy(g: &str, caseless: bool) -> Result<Regex, RulesError> {
         }
     }
     b.push('$');
-    compile_regex(&b).map_err(|e| RulesError(format!("glob {}: {e}", quote_string(g))))
+    compile_regex(&b)
 }
 
 fn path_rule(pattern: &str, classes: bool) -> Result<Regex, RulesError> {
@@ -114,7 +114,7 @@ fn path_rule(pattern: &str, classes: bool) -> Result<Regex, RulesError> {
         }
     }
     b.push('$');
-    regex::Regex::new(&b).map_err(|e| RulesError(format!("glob {}: {e}", quote_string(pattern))))
+    regex::Regex::new(&b).map_err(|e| RulesError(e.to_string()))
 }
 
 /// One path segment as regex text.
