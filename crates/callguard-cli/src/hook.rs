@@ -174,10 +174,8 @@ mod tests {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let code = run(&args, &mut payload.as_bytes(), &mut out, &mut err);
         let out = String::from_utf8(out).unwrap();
-        // Until the policy loader exists the decider panics, which the adapter
-        // turns into exit 2; once it exists the answer is an ask.
         assert!(
-            code == 2 || out.contains(r#""permissionDecision":"ask""#),
+            code == 0 && out.contains(r#""permissionDecision":"ask""#),
             "code={code} out={out:?}"
         );
     }
