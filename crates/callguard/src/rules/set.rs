@@ -1,0 +1,215 @@
+use super::*;
+
+// --- Policy rules -----------------------------------------------------------
+
+struct Compiled {
+    rule: policy::Rule,
+    /// `rule.decision`, parsed.
+    decision: Decision,
+    command: Option<Regex>,
+    url: Option<Regex>,
+    fields: BTreeMap<String, Regex>,
+    path: Vec<Regex>,
+    not_path: Vec<Regex>,
+}
+
+impl Compiled {
+    fn matches(&self, call: &Call) -> bool {
+        let m = &self.rule.r#match;
+        if !m.tool.is_empty() && !m.tool.contains(&call.tool) {
+            return false;
+        }
+        if !m.kind.is_empty() && !m.kind.contains(&call.kind) {
+            return false;
+        }
+        if !m.harness.is_empty() && !m.harness.contains(&call.harness) {
+            return false;
+        }
+        if m.unattended.is_some_and(|u| u != call.unattended) {
+            return false;
+        }
+        for (k, allowed) in &m.context {
+            if !call.context.get(k).is_some_and(|v| allowed.contains(v)) {
+                return false;
+            }
+        }
+        // A regex rule reads every spelling of the command (see
+        // `Call::command_joined`): deny and ask fire on any, allow needs all.
+        let allow = self.decision == Decision::Allow;
+        if let Some(re) = &self.command {
+            let hit = |c: &str| !c.is_empty() && re.is_match(c);
+            if call.command.is_empty()
+                || if allow {
+                    !call.commands().all(hit)
+                } else {
+                    !call.commands().any(hit)
+                }
+            {
+                return false;
+            }
+        }
+        // Like the command: deny and ask fire on any URL, allow needs all.
+        if let Some(re) = &self.url
+            && (call.urls.is_empty()
+                || if allow {
+                    !call.urls.iter().all(|u| re.is_match(u))
+                } else {
+                    !call.urls.iter().any(|u| re.is_match(u))
+                })
+        {
+            return false;
+        }
+        for (k, re) in &self.fields {
+            if k == "*" {
+                if !re.is_match(&call.whole) {
+                    return false;
+                }
+            } else if !call.fields.get(k).is_some_and(|v| re.is_match(v)) {
+                return false;
+            }
+        }
+        let Some(path) = &call.path else {
+            return m.in_project.is_none() && self.path.is_empty();
+        };
+        if m.in_project.is_none() && self.path.is_empty() && self.not_path.is_empty() {
+            return true;
+        }
+        if allow && call.pattern_escapes {
+            return false;
+        }
+        // The path conditions hold for the path as written, and for where it
+        // really is. Deny and ask need one of them (a link into a protected
+        // place fires), allow needs both, and a path that does not resolve
+        // cannot be allowed.
+        let lexical = self.path_ok(path, call.in_project);
+        let real = call
+            .real_path
+            .as_deref()
+            .is_some_and(|p| self.path_ok(p, call.real_in_project));
+        if allow {
+            lexical && real
+        } else {
+            lexical
+                || real
+                || call
+                    .pattern_paths
+                    .iter()
+                    .any(|(p, inside)| self.path_ok(p, *inside))
+        }
+    }
+
+    /// The path conditions for one form of a non-empty path.
+    fn path_ok(&self, path: &str, in_project: bool) -> bool {
+        self.rule
+            .r#match
+            .in_project
+            .is_none_or(|ip| ip == in_project)
+            && (self.path.is_empty() || self.path.iter().any(|re| re.is_match(path)))
+            && !self.not_path.iter().any(|re| re.is_match(path))
+    }
+}
+
+/// A compiled, ordered list of policy rules.
+pub struct Set {
+    rules: Vec<Compiled>,
+}
+
+impl std::fmt::Debug for Set {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Set")
+            .field("rules", &self.rules.len())
+            .finish()
+    }
+}
+
+fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
+    if r.id.is_empty() {
+        return Err("missing id".into());
+    }
+    let Some(decision) = Decision::parse(&r.decision) else {
+        return Err(format!(
+            "decision {} must be allow, ask or deny",
+            quote_string(&r.decision)
+        ));
+    };
+    let m = &r.r#match;
+    if m.is_empty() {
+        return Err("no match conditions".into());
+    }
+    let re = |pat: &str, what: String| compile_regex(pat).map_err(|e| format!("{what}: {e}"));
+    let mut c = Compiled {
+        rule: r.clone(),
+        decision,
+        command: None,
+        url: None,
+        fields: BTreeMap::new(),
+        path: Vec::new(),
+        not_path: Vec::new(),
+    };
+    if !m.command.is_empty() {
+        c.command = Some(re(&m.command, "match.command".into())?);
+    }
+    if !m.url.is_empty() {
+        c.url = Some(re(&m.url, "match.url".into())?);
+    }
+    for (k, v) in &m.field {
+        c.fields.insert(
+            k.clone(),
+            re(v, format!("match.field[{}]", quote_string(k)))?,
+        );
+    }
+    for g in &m.path {
+        c.path.push(
+            env.compile_glob(g)
+                .map_err(|e| format!("match.path: {e}"))?,
+        );
+    }
+    for g in &m.not_path {
+        c.not_path.push(
+            env.compile_glob(g)
+                .map_err(|e| format!("match.not_path: {e}"))?,
+        );
+    }
+    Ok(c)
+}
+
+/// The rule that decided a call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Matched {
+    pub id: String,
+    pub description: String,
+    pub decision: Decision,
+}
+
+impl Set {
+    /// Validates and compiles rules. The error names the offending rule.
+    pub fn compile(rules: &[policy::Rule], env: &Env) -> Result<Set, RulesError> {
+        let mut set = Vec::with_capacity(rules.len());
+        for r in rules {
+            set.push(
+                compile_rule(r, env)
+                    .map_err(|e| RulesError(format!("rule {}: {e}", quote_string(&r.id))))?,
+            );
+        }
+        Ok(Set { rules: set })
+    }
+
+    /// The matching rule that wins: deny over ask over allow, then list order.
+    /// (Named `match_call` because `match` is a keyword.)
+    pub(crate) fn match_call(&self, call: &Call) -> Option<Matched> {
+        let mut best: Option<&Compiled> = None;
+        for c in &self.rules {
+            if !c.matches(call) {
+                continue;
+            }
+            if best.is_none_or(|b| c.decision > b.decision) {
+                best = Some(c);
+            }
+        }
+        best.map(|c| Matched {
+            id: c.rule.id.clone(),
+            description: c.rule.description.clone(),
+            decision: c.decision,
+        })
+    }
+}
