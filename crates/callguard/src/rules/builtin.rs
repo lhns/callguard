@@ -63,7 +63,8 @@ static FORK_BOMB: LazyLock<Regex> =
 
 /// Cuts a command line at separators, subshells and command substitutions, so
 /// each piece starts at a command position.
-static SEGMENT_SPLIT: LazyLock<Regex> = LazyLock::new(|| builtin_regex("[;&|\\n\\r()`]+"));
+pub(crate) static SEGMENT_SPLIT: LazyLock<Regex> =
+    LazyLock::new(|| builtin_regex("[;&|\\n\\r()`]+"));
 static RM_DANGER: LazyLock<Regex> = LazyLock::new(|| {
     builtin_regex(
         r"(?i)^(?:/+\*?|~/?\*?|(?:\$home|\$\{home\}|\$env:(?:userprofile|home)|%userprofile%)/?\*?|(?:\./)?\.git/?|[a-z]:/?\*?)$",

@@ -983,19 +983,19 @@ pub fn resolve_project_dir(req: &Request) -> String {
 }
 
 /// The commands of a shell call, one argv each, for host probing: what nah
-/// unwrapped the call into, else what the independent lexer reads from the
-/// command. A command neither can spell gives no argv, so it is not probed
-/// (the judge then has no git status for it, which it reads as unknown).
+/// unwrapped the call into, and the rough words of the raw text, which still
+/// read `git push origin $BRANCH`, a call nah cannot spell. Probing only gives
+/// the judge more to read, so a wrong guess costs a git call, not a verdict.
 fn probe_argvs(call: &Call, nah_res: Option<&NahResult>) -> Vec<Vec<String>> {
-    match nah_res.filter(|r| !r.calls.is_empty()) {
-        Some(r) => r.calls.iter().filter_map(|c| c.argv.clone()).collect(),
-        None => call
-            .raw_commands
-            .iter()
-            .filter_map(|c| crate::permissions::lexer::split(c))
-            .flatten()
-            .collect(),
-    }
+    let parsed = nah_res
+        .into_iter()
+        .flat_map(|r| &r.calls)
+        .filter_map(|c| c.argv.clone());
+    let rough = call
+        .raw_commands
+        .iter()
+        .flat_map(|c| hostmeta::rough_argvs(c));
+    parsed.chain(rough).collect()
 }
 
 /// Where the decision log goes for `pol` and `opts` (None = no log). The error

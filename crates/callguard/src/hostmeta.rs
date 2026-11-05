@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::child::{kill, read_in_background, wait_until};
 use crate::permissions::prog_name;
-use crate::rules::builtin_regex;
+use crate::rules::{SEGMENT_SPLIT, builtin_regex};
 use crate::serde_util::{is_false, is_zero, nullable};
 
 /// Deadline for all probing of one call.
@@ -267,6 +267,20 @@ pub(crate) fn parse_status(porcelain: &str) -> GitStatus {
 
 static SCP_RE: LazyLock<Regex> =
     LazyLock::new(|| builtin_regex(r"^(?:[^@/\s]+@)?([^:/\s]+):(.+)$"));
+
+/// `command` cut at separators into whitespace-split words without their
+/// quotes. Best effort: no shell parse, for probing only.
+pub(crate) fn rough_argvs(command: &str) -> Vec<Vec<String>> {
+    SEGMENT_SPLIT
+        .split(command)
+        .map(|seg| {
+            seg.split_whitespace()
+                .map(|w| w.trim_matches(['"', '\'']).to_owned())
+                .collect::<Vec<_>>()
+        })
+        .filter(|argv| !argv.is_empty())
+        .collect()
+}
 
 /// The words after the first one in `argv` that names program `name`
 /// (wrappers such as `sudo` or `env` come before it).
@@ -626,9 +640,8 @@ mod tests {
         }
     }
 
-    /// The argvs of a command line as the independent lexer reads them.
     fn argvs(command: &str) -> Vec<Vec<String>> {
-        crate::permissions::lexer::split(command).unwrap_or_default()
+        rough_argvs(command)
     }
 
     fn soon() -> Instant {
@@ -657,7 +670,7 @@ mod tests {
     #[test]
     fn needs_status_cases() {
         let yes = [
-            "git reset --hard HEAD^",
+            "git reset --hard HEAD~1",
             "git checkout -- .",
             "git checkout .",
             "git restore f",
@@ -697,15 +710,20 @@ mod tests {
     }
 
     #[test]
-    fn a_command_the_lexer_refuses_is_not_probed() {
-        // `~` is refused by the lexer (it is `git reset --hard HEAD~1` that used
-        // to give a status); with no nah parse the command has no argv.
-        assert!(argvs("git reset --hard HEAD~1").is_empty());
-        let run = |_: &[String], _: &str, _: &[&str], _: Instant| -> io::Result<Vec<u8>> {
-            panic!("nothing to probe")
-        };
-        let cmds = argvs("git push origin $(git branch --show-current)");
-        assert_eq!(probe(&run, "/w", &cmds, None, soon()), None);
+    fn a_command_no_parser_can_spell_is_still_read() {
+        for cmd in [
+            "git push origin $BRANCH",
+            "git push origin $(git branch --show-current)",
+            r#"git push "origin" "$BRANCH""#,
+        ] {
+            let cmds = argvs(cmd);
+            assert!(needs_status(&cmds), "{cmd}");
+            let want = Destination {
+                raw: "origin".into(),
+                gh: false,
+            };
+            assert_eq!(destinations(&cmds), [want], "{cmd}");
+        }
     }
 
     #[test]

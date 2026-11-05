@@ -1993,21 +1993,23 @@ fn probed_commands(cmd: &str, calls: &[&[&'static str]]) -> String {
 
 #[test]
 fn the_probe_sees_the_commands_nah_unwrapped_the_call_into() {
-    // `bash -c 'git push'` hides the push from the lexer; nah sees it.
+    // What nah unwrapped comes first, then the rough words of the raw text.
     assert_eq!(
         probed_commands(
             "bash -c 'git push'",
             &[&["bash", "-c", "git push"], &["git", "push"]]
         ),
-        "bash -c git push ; git push"
+        "bash -c git push ; git push ; bash -c git push"
     );
-    // Without nah calls the lexer reads the command.
+    // Without nah calls the raw text still reads, whatever a parser makes of it.
     assert_eq!(
         probed_commands("git add . && git push", &[]),
         "git add . ; git push"
     );
-    // A command the lexer refuses and nah did not parse is not probed.
-    assert_eq!(probed_commands("git reset --hard HEAD~1", &[]), "");
+    assert_eq!(
+        probed_commands("git push origin $BRANCH", &[]),
+        "git push origin $BRANCH"
+    );
 }
 
 // --- fail-safe (needs the real judge and the fake backends) ---------------

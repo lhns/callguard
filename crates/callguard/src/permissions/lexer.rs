@@ -43,7 +43,7 @@ impl State {
 }
 
 /// The words of each command of `cmd`, or None to refuse the whole command.
-pub(crate) fn split(cmd: &str) -> Option<Vec<Vec<String>>> {
+pub(super) fn split(cmd: &str) -> Option<Vec<Vec<String>>> {
     let cmd = cmd.trim_matches([' ', '\t', '\n']);
     let c: Vec<char> = cmd.chars().collect();
     let mut st = State {
