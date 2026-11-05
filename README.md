@@ -40,16 +40,28 @@ Set `"mode": "shadow"` in the policy to run every layer and only log. A shadowed
 {
   "policy_version": 1,
   "mode": "shadow",
-  "llm": {"enabled": true, "backend": "anthropic", "timeout_ms": 9000},
-  "backends": {
-    "anthropic": {"type": "anthropic", "model": "claude-haiku-5-5", "api_key_env": "CALLGUARD_ANTHROPIC_API_KEY",
-                  "data_classes": ["open", "private"]}
-  },
+  "llm": {"enabled": true, "timeout_ms": 9000},
   "log": {"include_input": true}
 }
 ```
 
-Give the key its own variable, as here: with Claude Code, setting `ANTHROPIC_API_KEY` in the environment can change which key Claude Code itself uses. `include_input` stores commands as plain text in the log. Without a key, calls that would reach the judge are logged as fallbacks.
+Give the judge its key and endpoint in your own backends file. `callguard backends init` writes a template, prints its path and refuses to overwrite an existing file; replace the `PASTE-KEY-HERE` placeholders (a backend whose key is still the placeholder has no key):
+
+```json
+{
+  "default": "anthropic",
+  "backends": {
+    "anthropic": {"type": "anthropic", "model": "claude-haiku-5-5", "api_key": "sk-ant-...",
+                  "data_classes": ["open", "private"]},
+    "local":     {"type": "openai", "model": "qwen3", "base_url": "http://localhost:8080/v1", "api_key": "x",
+                  "data_classes": ["open", "private"]}
+  }
+}
+```
+
+The file is `$XDG_CONFIG_HOME/callguard/backends.json` (`~/.config/callguard/backends.json`) on Linux, `~/Library/Application Support/callguard/backends.json` on macOS and `%APPDATA%\callguard\backends.json` on Windows, and it is read from there only, never from a project or the working directory. On Linux and macOS `init` makes it readable by you alone (mode 0600); on Windows it keeps the per-user permissions of `%APPDATA%`. Each entry takes the fields of a policy backend plus `api_key`, and replaces the whole entry of the same name in the policy (list `data_classes` again, as above). `default` picks the judge's backend unless the system policy sets `llm.backend`; a system policy with `"final": true` ignores the file. A file that cannot be read or parsed is a policy error, so calls get the fail-safe verdict, and `callguard policy check` lists the file and prints keys as `(set)`.
+
+The alternative is `api_key_env`, a variable holding the key; `api_key` wins when both are set. A variable in the environment reaches every process the agent starts, so prefer the file. With Claude Code, setting `ANTHROPIC_API_KEY` in the environment can also change which key Claude Code itself uses; give a variable its own name, such as `CALLGUARD_ANTHROPIC_API_KEY`. `include_input` stores commands as plain text in the log. Without a key, calls that would reach the judge are logged as fallbacks. The agent runs as you and can read the file, so callguard asks before it is read and denies its edits ([ADR 0010](docs/adr/0010-per-user-backends-file.md)).
 
 ## Harness setup
 
@@ -209,7 +221,7 @@ Deny and ask also take:
 
 - **Modes**: `llm.mode` starts as `shadow`. Switch to `enforce` once the decision log and `callguard eval` justify it.
 - **Verdicts** name the prompt rule that matched (`rule`, for example `git-destructive` or `data-exfiltration`). HARD rules deny; SOFT rules ask unless the user's own words (or a "yes" to the agent's proposal right before it) named the risky specifics.
-- **Backends**: `anthropic` (default `claude-haiku-5-5`, exact model ids, `base_url` configurable), `openai` (any OpenAI-compatible server such as llama.cpp, vLLM, Ollama), `exec` (your own classifier command) and `fake` (tests). A request with `context.data_class` goes only to a backend that lists that class; otherwise the judge is skipped and the verdict falls back to ask/deny.
+- **Backends**: keys and endpoints go in [your backends file](#try-it-without-enforcing-anything) (`api_key`; `api_key_env` is the alternative in a policy). Types: `anthropic` (default `claude-haiku-5-5`, exact model ids, `base_url` configurable), `openai` (any OpenAI-compatible server such as llama.cpp, vLLM, Ollama), `exec` (your own classifier command) and `fake` (tests). A request with `context.data_class` goes only to a backend that lists that class; otherwise the judge is skipped and the verdict falls back to ask/deny.
 - **Input from the host**: a request may carry `instructions` (the host's consolidated CLAUDE.md-style text) and `notes` (`[{tool_use_id, text}]`, remarks on earlier results). The judge reads them as unverified context, at most the last 8 KiB and 2,000 characters per call. callguard discovers and parses nothing itself and has no CLI verb for notes ([ADR 0009](docs/adr/0009-host-supplied-instructions-and-notes.md)). `llm.instructions: false` (system or user layer) turns instructions off.
 - **Eval**: `callguard eval --backend <name>` scores the labelled set (benign, overeager, exfiltration, tainted, injection, judge) per bucket. The `fake` backend runs offline but cannot judge the `judge` bucket. Against Claude, `ANTHROPIC_API_KEY=… callguard eval --backend anthropic --facts both` runs the set with and without nah's facts and reports precision, recall, false-positive rate and tokens per case; it stops at `--max-usd` (default 1).
 
