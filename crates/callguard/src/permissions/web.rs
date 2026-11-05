@@ -100,7 +100,8 @@ pub(super) fn strict_host(url: &str) -> Option<String> {
 }
 
 /// Every host `url` could mean, for deny and ask. Over-approximates: user
-/// info, backslashes and stray whitespace each add candidates.
+/// info, backslashes, stray whitespace, `scheme:/host` with too few slashes,
+/// percent escapes and Unicode full stops each add candidates.
 pub(super) fn candidate_hosts(url: &str) -> Vec<String> {
     let squeezed: String = url
         .chars()
@@ -108,20 +109,62 @@ pub(super) fn candidate_hosts(url: &str) -> Vec<String> {
         .collect();
     let mut out: Vec<String> = Vec::new();
     for text in [url.trim(), squeezed.as_str()] {
-        let after = match text.find("://") {
+        let mut afters = vec![match text.find("://") {
             Some(k) => &text[k + 3..],
             None => text.strip_prefix("//").unwrap_or(text),
-        };
-        let end = after.find(['/', '?', '#']).unwrap_or(after.len());
-        for chunk in after[..end].split(['@', '\\']) {
-            let host = chunk.split(':').next().unwrap_or("");
-            let host = strip_dot(host.trim_matches('.')).to_ascii_lowercase();
-            if !host.is_empty() && !out.contains(&host) {
-                out.push(host);
+        }];
+        // `https:/evil.com/`: browsers and curl read it as `https://evil.com/`.
+        if let Some((scheme, rest)) = text.split_once(':')
+            && !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+        {
+            afters.push(rest.trim_start_matches(['/', '\\']));
+        }
+        for after in afters {
+            let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+            let auth = &after[..end];
+            let decoded = percent_decode(auth);
+            for auth in [auth, decoded.as_str()] {
+                for chunk in auth.split(['@', '\\']) {
+                    let host = chunk.split(':').next().unwrap_or("");
+                    let host: String = host
+                        .chars()
+                        .map(|c| if "\u{3002}\u{ff0e}\u{ff61}".contains(c) { '.' } else { c })
+                        .collect();
+                    let host = strip_dot(host.trim_matches('.')).to_ascii_lowercase();
+                    if !host.is_empty() && !out.contains(&host) {
+                        out.push(host);
+                    }
+                }
             }
         }
     }
     out
+}
+
+/// `%41` as `A`; a malformed escape stays as written.
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let byte = (b[i] == b'%')
+            .then(|| s.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok()))
+            .flatten();
+        match byte {
+            Some(v) => {
+                out.push(v);
+                i += 3;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// A parsed `mcp__server`, `mcp__server__tool` or `mcp__server__get_*`.

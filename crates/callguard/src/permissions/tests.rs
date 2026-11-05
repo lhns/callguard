@@ -908,6 +908,29 @@ fn a_mixed_urls_list_still_shows_its_hosts() {
 }
 
 #[test]
+fn a_deny_sees_the_host_through_odd_url_spellings() {
+    let d = deny(&["WebFetch(domain:evil.com)"]);
+    for u in [
+        "https:/evil.com/",
+        "https:evil.com/",
+        "https:///evil.com/",
+        "https://evil%2ecom/",
+        "https://%65vil.com/x",
+        "https://evil\u{3002}com/",
+        "https://evil\u{ff0e}com/",
+        "https://evil\u{ff61}com/",
+        "https://ok.com%40evil.com/",
+    ] {
+        assert_eq!(hit(&d, &fetch(u)), Some("deny"), "{u}");
+    }
+    assert_eq!(hit(&d, &fetch("https://ok.com/%zz")), None);
+    assert_eq!(hit(&d, &fetch("ok.com:8080/evil.com")), None);
+    // Allow stays strict.
+    let a = allow(&["WebFetch(domain:evil.com)"]);
+    assert_eq!(hit(&a, &fetch("https:/evil.com/")), None);
+}
+
+#[test]
 fn agents_monitors_and_package_manager_runs_are_never_honoured() {
     for layer in [None, Some("system"), Some("user"), Some("project")] {
         for r in [
