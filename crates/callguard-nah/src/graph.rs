@@ -76,7 +76,6 @@ fn command(call: &Value) -> Value {
         },
         "argv": known(call.get("arguments")),
         "cwd": known(call.get("cwd")),
-        "coverage": call.get("coverage"),
     })
 }
 
@@ -122,8 +121,6 @@ fn effect(fact: &Value, resources: &BTreeMap<u64, Value>) -> Value {
         }
     }
     json!({
-        "id": fact.get("id"),
-        "command": fact.get("call"),
         "kind": kind,
         "certainty": fact.get("certainty"),
         "modality": fact.get("modality"),
@@ -186,21 +183,12 @@ fn resource_summary(resource: &Value) -> Value {
     json!({
         "kind": identity.get("kind"),
         "name": name,
-        "selection": match resource.get("selection") {
-            Some(Value::String(selection)) => Value::String(selection.clone()),
-            Some(other) if !other.is_null() => Value::String(
-                other.as_object().and_then(|object| object.keys().next().cloned()).unwrap_or_default(),
-            ),
-            _ => Value::Null,
-        },
         "labels": simplify(resource.get("labels").cloned().unwrap_or_default()),
     })
 }
 
 fn gap(gap: &Value) -> Value {
     json!({
-        "command": gap.get("call"),
-        "phase": gap.get("phase"),
         "category": gap.get("category"),
         "domain": gap.get("domain"),
         "code": gap.get("code"),

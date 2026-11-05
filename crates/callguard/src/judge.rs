@@ -119,16 +119,15 @@ pub struct Config {
     pub min_confidence: f64,
 }
 
-/// A validated judge answer. `decision` is "allow", "ask" or "deny". `demoted`
-/// is true if `min_confidence` demoted an allow to ask. `input_cut` is true if
-/// the judge saw the tool input cut short (see [`cap_input`]).
+/// A validated judge answer. `decision` is "allow", "ask" or "deny"; an allow
+/// below `min_confidence` is already an ask. `input_cut` is true if the judge
+/// saw the tool input cut short (see [`cap_input`]).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct JudgeResult {
     pub decision: String,
     pub confidence: f64,
     pub rule: String,
     pub reason: String,
-    pub demoted: bool,
     pub input_cut: bool,
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -176,7 +175,6 @@ pub fn judge(
         confidence: res.confidence,
         rule: clip_runes(&res.rule, MAX_RULE_RUNES),
         reason: clip_runes(&res.reason, MAX_REASON_RUNES),
-        demoted: false,
         input_cut,
         input_tokens: res.input_tokens,
         output_tokens: res.output_tokens,
@@ -188,7 +186,6 @@ pub fn judge(
     }
     if out.decision == "allow" && out.confidence < cfg.min_confidence {
         out.decision = "ask".into();
-        out.demoted = true;
     }
     Ok(out)
 }
@@ -703,18 +700,14 @@ mod tests {
             ..Default::default()
         };
         let cases = [
-            ("allow", res("allow", 0.9), "allow", false),
-            ("low allow demoted", res("allow", 0.5), "ask", true),
-            ("low deny kept", res("deny", 0.1), "deny", false),
-            ("low ask kept", res("ask", 0.0), "ask", false),
+            ("allow", res("allow", 0.9), "allow"),
+            ("low allow demoted", res("allow", 0.5), "ask"),
+            ("low deny kept", res("deny", 0.1), "deny"),
+            ("low ask kept", res("ask", 0.0), "ask"),
         ];
-        for (name, r, want, demoted) in cases {
+        for (name, r, want) in cases {
             let got = run(&Stub::new(r), &cfg, input("ls")).unwrap();
-            assert_eq!(
-                (got.decision.as_str(), got.demoted),
-                (want, demoted),
-                "{name}"
-            );
+            assert_eq!(got.decision, want, "{name}");
         }
     }
 
