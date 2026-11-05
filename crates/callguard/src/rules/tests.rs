@@ -250,14 +250,20 @@ fn a_drive_relative_path_is_unresolvable() {
     let w = win();
     let mk = |p: &str| Call::new(at("Write", file_input(p), "C:/w/p", "C:/w/p"), &w);
     let c = mk(r"C:\w\p\a.txt");
-    assert!(c.in_project && c.real_in_project && c.real_path.is_some(), "{c:?}");
+    assert!(
+        c.in_project && c.real_in_project && c.real_path.is_some(),
+        "{c:?}"
+    );
     for p in [r"C:..\..\evil.txt", r"C:evil.txt", "D:", r"c:sub\x"] {
         let c = mk(p);
         assert!(
             !c.in_project && !c.real_in_project && c.real_path.is_none(),
             "{p}: {c:?}"
         );
-        assert!(!c.path.is_empty(), "{p}: deny and ask keep the lexical text");
+        assert!(
+            !c.path.is_empty(),
+            "{p}: deny and ask keep the lexical text"
+        );
     }
 }
 
@@ -279,7 +285,11 @@ fn windows_device_and_share_prefixes_name_the_plain_path() {
     ] {
         assert_eq!(w.normalize(raw, "C:/w"), want, "{raw}");
     }
-    assert_eq!(unix().normalize(r"//?/C:/x", "/w"), "/?/C:/x", "only Windows reads them");
+    assert_eq!(
+        unix().normalize(r"//?/C:/x", "/w"),
+        "/?/C:/x",
+        "only Windows reads them"
+    );
 }
 
 #[test]
@@ -307,7 +317,10 @@ fn a_read_tools_pattern_decides_like_a_path() {
     }
     let (_, id) = glob(r#"{"path":"/w/p","glob":"/home/u/.env"}"#);
     assert_eq!(id.as_deref(), Some("secret-read"));
-    let c = Call::new(at("Glob", raw(r#"{"pattern":"~/.ssh/*"}"#), "/w/p", "/w/p"), &unix);
+    let c = Call::new(
+        at("Glob", raw(r#"{"pattern":"~/.ssh/*"}"#), "/w/p", "/w/p"),
+        &unix,
+    );
     assert_eq!(c.pattern_paths, [("/home/u/.ssh".to_owned(), false)]);
 }
 
@@ -332,11 +345,24 @@ fn match_url_sees_a_urls_list_and_every_string_of_it() {
     ] {
         assert!(deny.match_call(&call(json)).is_some(), "{json}");
     }
-    assert!(deny.match_call(&call(r#"{"urls":["https://ok.com/",2]}"#)).is_none());
+    assert!(
+        deny.match_call(&call(r#"{"urls":["https://ok.com/",2]}"#))
+            .is_none()
+    );
     // Allow needs every URL to match.
     let allow = set(&unix, vec![rule("allow")]);
-    assert!(allow.match_call(&call(r#"{"urls":["https://evil.com/a","http://evil.com"]}"#)).is_some());
-    assert!(allow.match_call(&call(r#"{"urls":["https://evil.com/","https://ok.com/"]}"#)).is_none());
+    assert!(
+        allow
+            .match_call(&call(
+                r#"{"urls":["https://evil.com/a","http://evil.com"]}"#
+            ))
+            .is_some()
+    );
+    assert!(
+        allow
+            .match_call(&call(r#"{"urls":["https://evil.com/","https://ok.com/"]}"#))
+            .is_none()
+    );
 }
 
 #[test]
@@ -393,7 +419,10 @@ fn new_call() {
         input("WebFetch", r#"{"url":"https://x.test","n":3}"#),
         &unix,
     );
-    assert!(c.urls == ["https://x.test"] && c.fields["n"] == "3", "{c:?}");
+    assert!(
+        c.urls == ["https://x.test"] && c.fields["n"] == "3",
+        "{c:?}"
+    );
     // A RawValue cannot hold invalid
     // JSON (a request never carries it), so this is valid JSON that is no object.
     let c = Call::new(input("Bash", r#""not json""#), &unix);

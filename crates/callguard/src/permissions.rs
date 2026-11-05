@@ -271,7 +271,8 @@ fn family(name: &str) -> String {
 
 /// Tools whose subcommand decides what they do: the wildcard must come after it.
 const SUBCOMMAND_TOOLS: &[&str] = &[
-    "git", "gh", "docker", "podman", "kubectl", "npm", "yarn", "pnpm", "cargo", "go",
+    "git", "gh", "docker", "podman", "kubectl", "npm", "yarn", "pnpm", "cargo", "go", "uv",
+    "poetry", "dotnet", "pipenv",
 ];
 
 /// Commands that run repository code (or, `git config`, set a program git
@@ -304,7 +305,14 @@ const RUN_COMMANDS: &[(&str, &str)] = &[
 
 /// Hook, policy and VCS directories. Allow rules do not match inside them
 /// unless they name one outright, which only the system layer can do.
-const GUARDED_DIRS: [&str; 6] = [".git", ".claude", ".callguard", ".hermes", ".opencode", ".pi"];
+const GUARDED_DIRS: [&str; 6] = [
+    ".git",
+    ".claude",
+    ".callguard",
+    ".hermes",
+    ".opencode",
+    ".pi",
+];
 
 /// Whether the pattern spells out a guarded directory.
 fn names_guarded_dir(s: &PathSpec) -> bool {
@@ -631,7 +639,8 @@ impl Permissions {
             }
             let norm = self.env.clean_names(&self.env.normalize(r, &call.cwd));
             let posix = paths::to_posix(&self.env, &norm);
-            let resolved = (self.resolver)(&self.env, &norm).filter(|_| !self.env.drive_relative(r));
+            let resolved =
+                (self.resolver)(&self.env, &norm).filter(|_| !self.env.drive_relative(r));
             if guarded
                 && [Some(&posix), resolved.as_ref()]
                     .into_iter()

@@ -131,7 +131,13 @@ pub(super) fn candidate_hosts(url: &str) -> Vec<String> {
                     let host = chunk.split(':').next().unwrap_or("");
                     let host: String = host
                         .chars()
-                        .map(|c| if "\u{3002}\u{ff0e}\u{ff61}".contains(c) { '.' } else { c })
+                        .map(|c| {
+                            if "\u{3002}\u{ff0e}\u{ff61}".contains(c) {
+                                '.'
+                            } else {
+                                c
+                            }
+                        })
                         .collect();
                     let host = strip_dot(host.trim_matches('.')).to_ascii_lowercase();
                     if !host.is_empty() && !out.contains(&host) {
@@ -151,7 +157,10 @@ fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         let byte = (b[i] == b'%')
-            .then(|| s.get(i + 1..i + 3).and_then(|h| u8::from_str_radix(h, 16).ok()))
+            .then(|| {
+                s.get(i + 1..i + 3)
+                    .and_then(|h| u8::from_str_radix(h, 16).ok())
+            })
             .flatten();
         match byte {
             Some(v) => {

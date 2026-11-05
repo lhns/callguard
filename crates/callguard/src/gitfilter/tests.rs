@@ -313,5 +313,9 @@ fn a_driver_name_that_is_not_utf8_is_refused() {
     let err = parse_names(b"local\0filter.\xff.clean\0").unwrap_err();
     assert!(err.contains("not UTF-8"), "{err}");
     // A global one is not the repository's to plant.
-    assert!(parse_names(b"global\0filter.\xff.clean\0").unwrap().is_empty());
+    assert!(
+        parse_names(b"global\0filter.\xff.clean\0")
+            .unwrap()
+            .is_empty()
+    );
 }

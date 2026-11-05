@@ -854,7 +854,10 @@ fn a_wildcard_allow_never_reaches_a_guarded_directory() {
         &env(),
     );
     assert_eq!(hit(&a, &c), Some("allow"));
-    assert!(vet("Edit(.GIT/**)", Some("user")).is_err(), "any letter case");
+    assert!(
+        vet("Edit(.GIT/**)", Some("user")).is_err(),
+        "any letter case"
+    );
 }
 
 #[test]
@@ -888,7 +891,10 @@ fn a_brace_in_a_path_rule_cannot_be_read() {
         deny: vec!["Read(src/{a,b}.rs)".into()],
         ..Default::default()
     };
-    assert!(Permissions::compile(&p, &env()).is_err(), "a deny fails the policy");
+    assert!(
+        Permissions::compile(&p, &env()).is_err(),
+        "a deny fails the policy"
+    );
     let p = policy::Permissions {
         allow: vec!["Edit(src/{a,b}.rs)".into()],
         ..Default::default()
@@ -900,7 +906,10 @@ fn a_brace_in_a_path_rule_cannot_be_read() {
 #[test]
 fn a_mixed_urls_list_still_shows_its_hosts() {
     let d = deny(&["WebFetch(domain:evil.com)"]);
-    let c = call("web_extract", r#"{"urls":["https://ok.com/","https://evil.com/",1]}"#);
+    let c = call(
+        "web_extract",
+        r#"{"urls":["https://ok.com/","https://evil.com/",1]}"#,
+    );
     assert_eq!(hit(&d, &c), Some("deny"));
     let a = allow(&["WebFetch(domain:ok.com)"]);
     let c = call("web_extract", r#"{"urls":["https://ok.com/",1]}"#);
@@ -1158,7 +1167,11 @@ fn deny_and_ask_see_a_read_tools_pattern_prefix() {
     for (tool, input, want) in [
         ("Glob", r#"{"pattern":"~/.ssh/*"}"#, Some("deny")),
         ("Glob", r#"{"pattern":"/home/u/.ssh/id_*"}"#, Some("deny")),
-        ("Grep", r#"{"pattern":"x","glob":"/home/u/.ssh/**"}"#, Some("deny")),
+        (
+            "Grep",
+            r#"{"pattern":"x","glob":"/home/u/.ssh/**"}"#,
+            Some("deny"),
+        ),
         ("Glob", r#"{"pattern":"private/**/*.md"}"#, Some("ask")),
         ("Glob", r#"{"pattern":"src/**/*.rs"}"#, None),
         ("Glob", r#"{"pattern":"/home/u/*"}"#, None),
@@ -1549,6 +1562,10 @@ fn a_wildcard_may_not_hide_the_subcommand() {
         "Bash(git -C . *)",
         "Bash(npm --silent *)",
         "Bash(cargo +nightly *)",
+        "Bash(uv:*)",
+        "Bash(poetry:*)",
+        "Bash(dotnet:*)",
+        "Bash(pipenv:*)",
         "Bash(git -c * status)",
         "Edit(//?*/**)",
         "Edit(?*)",
@@ -1772,7 +1789,11 @@ fn a_drive_relative_path_is_never_allowed() {
         )
     };
     assert_eq!(hit(&perms, &at("C:\\w\\p\\x\\a")), Some("allow"));
-    assert_eq!(hit(&perms, &at("C:..\\..\\x\\a")), None, "C:rel is no path of ours");
+    assert_eq!(
+        hit(&perms, &at("C:..\\..\\x\\a")),
+        None,
+        "C:rel is no path of ours"
+    );
     assert_eq!(hit(&perms, &at("C:..\\..\\secret\\a")), Some("deny"));
 }
 

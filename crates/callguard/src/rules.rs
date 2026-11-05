@@ -490,7 +490,10 @@ fn plain_windows_path(p: String) -> String {
         b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
     };
     let mut p = p;
-    if let Some(rest) = ["//?/", "//./", "/??/"].iter().find_map(|x| p.strip_prefix(x)) {
+    if let Some(rest) = ["//?/", "//./", "/??/"]
+        .iter()
+        .find_map(|x| p.strip_prefix(x))
+    {
         if drive(rest) {
             return rest.to_owned();
         }
@@ -921,7 +924,11 @@ impl Call {
                 for (p, is_real) in [(Some(lexical), false), (real, true)] {
                     let Some(p) = p else { continue };
                     let inside = project.is_some_and(|(dir, real_dir)| {
-                        let root = if is_real { real_dir.as_ref() } else { Some(dir) };
+                        let root = if is_real {
+                            real_dir.as_ref()
+                        } else {
+                            Some(dir)
+                        };
                         root.is_some_and(|d| env.in_dir(&p, d))
                     });
                     if !self.pattern_paths.iter().any(|(q, _)| *q == p) {
@@ -1149,8 +1156,8 @@ fn wrapper(name: &str) -> Option<&'static [&'static str]> {
         ],
         "wsl" => &["-d", "--distribution", "-u", "--user", "--cd"],
         "command" | "nohup" | "setsid" | "busybox" | "sh" | "bash" | "zsh" | "dash" | "fish"
-        | "csh" | "tcsh" | "eval" | "{" | "!" | "if" | "then" | "elif" | "else" | "do" | "while"
-        | "until" => &[],
+        | "csh" | "tcsh" | "eval" | "{" | "!" | "if" | "then" | "elif" | "else" | "do"
+        | "while" | "until" => &[],
         _ => return None,
     })
 }
