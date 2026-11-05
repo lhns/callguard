@@ -5,7 +5,7 @@ use std::collections::HashSet;
 
 use crate::rules::{Env, path_clean};
 
-use super::spec::glob_with;
+use super::spec::glob_match;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Anchor {
@@ -52,6 +52,9 @@ impl PathSpec {
         }
         if s.starts_with('!') {
             return Err("`!` negation is not supported".into());
+        }
+        if s.contains('{') {
+            return Err("`{a,b}` alternatives are not supported; write one rule per path".into());
         }
         let (anchor, mut rest, dotted) = if let Some(r) = s.strip_prefix("//") {
             (Anchor::Abs, r.to_owned(), false)
@@ -132,7 +135,9 @@ impl PathSpec {
         };
         let pat: Vec<&str> = pat.split('/').collect();
         let path: Vec<&str> = path.split('/').collect();
-        match_segs(&pat, &path, 0, 0, &mut HashSet::new())
+        // Deny and ask read `[...]` as a class or as the letters; allow only as
+        // the letters, so a name like `[id].tsx` works and cannot widen.
+        match_segs(&pat, &path, 0, 0, !allow, &mut HashSet::new())
     }
 }
 
@@ -149,6 +154,7 @@ fn match_segs(
     path: &[&str],
     i: usize,
     j: usize,
+    classes: bool,
     failed: &mut HashSet<(usize, usize)>,
 ) -> bool {
     if i == pat.len() {
@@ -158,11 +164,13 @@ fn match_segs(
         return false;
     }
     let ok = if pat[i] == "**" {
-        (j..=path.len()).any(|k| match_segs(pat, path, i + 1, k, failed))
+        (j..=path.len()).any(|k| match_segs(pat, path, i + 1, k, classes, failed))
     } else {
+        let seg = pat[i].replace("**", "*");
         j < path.len()
-            && glob_with(&pat[i].replace("**", "*"), path[j], true)
-            && match_segs(pat, path, i + 1, j + 1, failed)
+            && (glob_match(&seg, path[j], true, false)
+                || (classes && glob_match(&seg, path[j], true, true)))
+            && match_segs(pat, path, i + 1, j + 1, classes, failed)
     };
     if !ok {
         failed.insert((i, j));

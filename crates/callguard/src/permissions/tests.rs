@@ -858,6 +858,46 @@ fn a_wildcard_allow_never_reaches_a_guarded_directory() {
 }
 
 #[test]
+fn a_character_class_in_a_path_rule_denies_wide_and_allows_literally() {
+    let d = deny(&["Read(src/[a-c]*.key)", "Read(/k/[!a]x)", "Read(/k/[^b]y)"]);
+    for (p, want) in [
+        ("/w/p/src/b1.key", Some("deny")),
+        ("/w/p/src/d1.key", None),
+        ("/w/p/src/[a-c]1.key", Some("deny")),
+        ("/w/p/k/bx", Some("deny")),
+        ("/w/p/k/ax", None),
+        ("/w/p/k/ay", Some("deny")),
+        ("/w/p/k/by", None),
+    ] {
+        assert_eq!(hit(&d, &read(p)), want, "{p}");
+    }
+    // `[id]` is also a file name (Next.js): allow takes it literally only.
+    let a = allow(&["Edit(src/[id].tsx)"]);
+    assert_eq!(hit(&a, &edit("/w/p/src/[id].tsx")), Some("allow"));
+    assert_eq!(hit(&a, &edit("/w/p/src/i.tsx")), None);
+    assert_eq!(hit(&a, &edit("/w/p/src/d.tsx")), None);
+    // An unclosed `[` is a letter.
+    let d = deny(&["Read(/k/[x)"]);
+    assert_eq!(hit(&d, &read("/w/p/k/[x")), Some("deny"));
+}
+
+#[test]
+fn a_brace_in_a_path_rule_cannot_be_read() {
+    assert!(PathSpec::parse("src/{a,b}.rs").is_err());
+    let p = policy::Permissions {
+        deny: vec!["Read(src/{a,b}.rs)".into()],
+        ..Default::default()
+    };
+    assert!(Permissions::compile(&p, &env()).is_err(), "a deny fails the policy");
+    let p = policy::Permissions {
+        allow: vec!["Edit(src/{a,b}.rs)".into()],
+        ..Default::default()
+    };
+    let (perms, warns) = Permissions::compile(&p, &env()).unwrap();
+    assert!(perms.allow.is_empty() && warns.len() == 1, "{warns:?}");
+}
+
+#[test]
 fn agents_monitors_and_package_manager_runs_are_never_honoured() {
     for layer in [None, Some("system"), Some("user"), Some("project")] {
         for r in [

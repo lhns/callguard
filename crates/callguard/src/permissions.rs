@@ -19,7 +19,10 @@
 //! - `Write`, `NotebookEdit` and `MultiEdit` rules mean `Edit`; `Grep`, `Glob`
 //!   and `LS` mean `Read`. Claude accepts them and never matches.
 //! - `/x` anchors at the project directory in every layer (Claude: at the
-//!   settings source). `!` negation is not supported.
+//!   settings source). `!` negation and `{a,b}` alternatives are not
+//!   supported (such a rule cannot be read). `[a-c]` and `[!a]` are classes in
+//!   deny and ask, which also match the literal text; allow matches the
+//!   literal text only, so `src/[id].tsx` works and never widens.
 //! - A deny or ask rule that cannot be read fails the policy (Claude skips it),
 //!   including `Bash(command:...)` and `Tool(param:value)`.
 //! - A backslash in a spec is a path separator unless it escapes a quote or a
