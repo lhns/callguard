@@ -525,6 +525,16 @@ impl Cx<'_> {
         })
     }
 
+    /// Whether a deny or ask rule would stop a read of `word`, taken as a file
+    /// name from any directory the command may be in.
+    fn flagged_word(&self, word: &str) -> bool {
+        !word.is_empty()
+            && self.bases.iter().any(|base| {
+                let p = self.env.clean_names(&self.env.normalize(word, base));
+                (self.flagged)(&p)
+            })
+    }
+
     fn command(&self, argv: &[String]) -> bool {
         let Some(prog) = argv.first() else {
             return false;
@@ -574,7 +584,15 @@ impl Cx<'_> {
                             .skip(usize::from(!given))
                             .all(|a| *a == "-" || self.inside(a))
                     }
-                    Args::Mixed => p.pos.iter().all(|a| !looks_like_path(a) || self.inside(a)),
+                    // Every word may name a file (`blame server.pem`, `show
+                    // HEAD:.env`), also after the colon; those that look like a
+                    // path must be inside the project too.
+                    Args::Mixed => p.pos.iter().all(|a| {
+                        let words = [Some(*a), a.split_once(':').map(|(_, rest)| rest)];
+                        words.into_iter().flatten().all(|w| {
+                            !self.flagged_word(w) && (!looks_like_path(w) || self.inside(w))
+                        })
+                    }),
                     Args::Free | Args::Find => unreachable!("handled above"),
                 }
             }

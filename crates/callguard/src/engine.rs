@@ -639,7 +639,9 @@ impl Inner {
         // decision wins and a regex rule wins a tie, except between two
         // allows, where the user's own permission rule is the one named (a
         // default allow such as `read-only-command` would hide it).
-        let regex_hit = self.rules.match_with(&call, nah_res.as_ref());
+        let regex_hit = self
+            .rules
+            .match_stopping(&call, nah_res.as_ref(), &|read| self.perms.stops(read));
         let perm_hit = self.perms.check(&call, nah_res.as_ref());
         let perm_wins = match (&regex_hit, &perm_hit) {
             (Some(r), Some(p)) => {

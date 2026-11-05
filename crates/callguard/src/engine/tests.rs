@@ -2880,3 +2880,48 @@ fn additional_dirs_of_the_policy_and_the_request_count_as_inside_the_project() {
     // The directories are in the policy's rev.
     assert_ne!(e.policy_rev(), plain.policy_rev());
 }
+
+#[test]
+fn a_permission_rule_on_a_file_keeps_a_read_only_command_from_the_allow() {
+    let cat = |path: &'static str| -> (Vec<&'static str>, String) {
+        (vec!["cat", path], format!("cat {path}"))
+    };
+    let run = |perms: (&[&str], &[&str], &[&str]), path: &'static str| {
+        let (argv, cmd) = cat(path);
+        let (e, via) = perm_engine(perms, NahMode::Delegate, &[&argv], no_mut);
+        (e.decide(&bash(&cmd)), via.calls())
+    };
+    // Nothing on the file: the built-in rule allows, no judge.
+    let (got, calls) = run((&[], &[], &[]), "secrets/x");
+    assert!(got.rule == "read-only-command" && calls == 0, "{got:?}");
+    // A deny, an ask and a bare `Read` deny each send it on to the judge,
+    // which here asks; none is turned into a verdict of its own.
+    for perms in [
+        (&["Read(./secrets/**)"][..], &[][..], &[][..]),
+        (&[][..], &["Read(./secrets/**)"][..], &[][..]),
+        (&["Read"][..], &[][..], &[][..]),
+        (&[][..], &["Read"][..], &[][..]),
+        (&["Read(//w/p/secrets/**)"][..], &[][..], &[][..]),
+    ] {
+        let (got, calls) = run(perms, "secrets/x");
+        assert!(
+            got.rule != "read-only-command" && got.decision != Decision::Allow,
+            "{perms:?}: {got:?}"
+        );
+        assert_eq!(calls, 1, "{perms:?}");
+    }
+    // Another path is not touched by that rule.
+    let (got, _) = run((&["Read(./secrets/**)"], &[], &[]), "src/x");
+    assert_eq!(got.rule, "read-only-command");
+    // The same through `git`, which takes files as plain words.
+    let (e, _) = perm_engine(
+        (&["Read(./secrets/**)"], &[], &[]),
+        NahMode::Delegate,
+        &[&["git", "show", "HEAD:secrets/x"]],
+        no_mut,
+    );
+    assert_ne!(
+        e.decide(&bash("git show HEAD:secrets/x")).rule,
+        "read-only-command"
+    );
+}

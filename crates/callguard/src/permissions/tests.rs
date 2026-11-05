@@ -2342,6 +2342,49 @@ fn cd_elsewhere_and_git_in_one_command_is_not_read_only() {
 }
 
 #[test]
+fn git_words_are_checked_for_secrets_too() {
+    let secret = |p: &str| p.ends_with(".pem") || p.ends_with("/.env");
+    for cmd in [
+        "git blame server.pem",
+        "git diff secrets.pem",
+        "git diff -- sub/a.pem",
+        "git show HEAD:.env",
+        "git show HEAD:sub/.env",
+        "git log -- .env",
+        "git ls-files .env",
+    ] {
+        assert!(!read_only_in(cmd, CWD, &secret), "{cmd}");
+        assert!(read_only(cmd) || cmd.contains("ls-files"), "{cmd}");
+    }
+    for cmd in [
+        "git blame a.txt",
+        "git show HEAD:sub/a.txt",
+        "git diff HEAD main",
+    ] {
+        assert!(read_only_in(cmd, CWD, &secret), "{cmd}");
+    }
+}
+
+#[test]
+fn permission_deny_and_ask_rules_on_files_stop_read_only() {
+    let read = |p: &str| call("Read", &serde_json::json!({ "file_path": p }).to_string());
+    for (deny, ask) in [
+        (&["Read(./secrets/**)"][..], &[][..]),
+        (&[][..], &["Read(./secrets/**)"][..]),
+        (&["Read"][..], &[][..]),
+        (&[][..], &["Read(//w/p/secrets/**)"][..]),
+    ] {
+        let a = set(deny, ask, &[]);
+        assert!(a.stops(&read("/w/p/secrets/x")), "{deny:?} {ask:?}");
+    }
+    let a = set(&["Read(./secrets/**)"], &["Bash(ls:*)"], &[]);
+    assert!(!a.stops(&read("/w/p/src/x")));
+    // An allow does not stop, and a rule for another tool does not.
+    assert!(!set(&[], &[], &["Read(./secrets/**)"]).stops(&read("/w/p/secrets/x")));
+    assert!(!set(&["Edit(./secrets/**)"], &[], &[]).stops(&read("/w/p/secrets/x")));
+}
+
+#[test]
 fn network_paths_and_long_commands_are_not_read_only() {
     let win = Env {
         home: "C:/Users/u".into(),

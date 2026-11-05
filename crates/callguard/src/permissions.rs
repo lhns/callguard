@@ -277,6 +277,15 @@ impl Permissions {
         })
     }
 
+    /// Whether a deny or ask rule matches `call`, a `Read` the read-only
+    /// commands stand in for.
+    pub(crate) fn stops(&self, call: &Call) -> bool {
+        self.deny
+            .iter()
+            .chain(&self.ask)
+            .any(|e| self.matches(e, call, None))
+    }
+
     // --- deny and ask ---
 
     fn matches(&self, e: &Entry, call: &Call, nah: Option<&NahResult>) -> bool {

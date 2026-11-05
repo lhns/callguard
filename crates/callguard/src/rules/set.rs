@@ -249,8 +249,20 @@ impl Set {
     }
 
     /// [`Set::match_call`] with nah's answer for the call, if there is one.
+    #[cfg(test)]
     pub(crate) fn match_with(&self, call: &Call, nah: Option<&NahResult>) -> Option<Matched> {
-        let read_only = || self.read_only(call, nah);
+        self.match_stopping(call, nah, &|_| false)
+    }
+
+    /// [`Set::match_with`], where `stops` says whether a deny or ask permission
+    /// rule would stop the given `Read` call (the read-only commands need it).
+    pub(crate) fn match_stopping(
+        &self,
+        call: &Call,
+        nah: Option<&NahResult>,
+        stops: &dyn Fn(&Call) -> bool,
+    ) -> Option<Matched> {
+        let read_only = || self.read_only(call, nah, stops);
         let mut best: Option<&Compiled> = None;
         for c in &self.rules {
             if !c.matches(call, &read_only) {
@@ -268,9 +280,14 @@ impl Set {
     }
 
     /// Whether the call is made only of read-only commands on files in the
-    /// project. A path that a deny or ask rule would stop a `Read` of does not
-    /// count (`secret-read` stops `cat .env` too).
-    fn read_only(&self, call: &Call, nah: Option<&NahResult>) -> bool {
+    /// project. A path that a deny or ask rule, policy or permission, would stop
+    /// a `Read` of does not count (`secret-read` stops `cat .env` too).
+    fn read_only(
+        &self,
+        call: &Call,
+        nah: Option<&NahResult>,
+        stops: &dyn Fn(&Call) -> bool,
+    ) -> bool {
         if call.kind != KIND_SHELL {
             return false;
         }
@@ -287,11 +304,12 @@ impl Set {
                 },
                 &self.env,
             );
-            self.rules.iter().any(|c| {
-                c.decision != Decision::Allow
-                    && c.rule.r#match.read_only.is_none()
-                    && c.matches(&read, &|| false)
-            })
+            stops(&read)
+                || self.rules.iter().any(|c| {
+                    c.decision != Decision::Allow
+                        && c.rule.r#match.read_only.is_none()
+                        && c.matches(&read, &|| false)
+                })
         };
         crate::permissions::read_only(&self.env, call, nah, &flagged)
     }
