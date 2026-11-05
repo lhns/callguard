@@ -20,6 +20,10 @@
 //!   dropped in every layer (the project layer has more limits). Like Claude,
 //!   an exact rule runs a command nah cannot look into (`npm test`, `pytest`)
 //!   with no look inside; any other gap in nah's answer does not pass.
+//! - `Skill(name)` compares the literal `skill` input; Claude's deny rule
+//!   matches a skill under any of its names (alias, display name), which
+//!   callguard does not know. Deny and ask ignore the arguments of the call, so
+//!   `Skill(name)` also stops `name` with arguments.
 //! - `Write`, `NotebookEdit` and `MultiEdit` rules mean `Edit`; `Grep`, `Glob`
 //!   and `LS` mean `Read`. Claude accepts them and never matches.
 //! - `/x` anchors at the project directory in every layer (Claude: at the
@@ -87,6 +91,15 @@ pub enum Rule {
     /// `Agent(name)`, `Task(name)`: a call of kind agent whose `subagent_type`
     /// is `name`, exactly; `*` is any named agent.
     Agent(String),
+    /// `Skill(name)`, `Skill(name *)`, `Skill(skill:name)`: the `skill` input
+    /// of a `Skill` call, literally. `*` in `name` is a wildcard.
+    Skill {
+        name: String,
+        /// `name *`: any arguments. Without it an allow rule needs none.
+        any_args: bool,
+        /// Written `skill:name`: never an allow rule.
+        by_param: bool,
+    },
     /// Any other bare name: that tool, exactly.
     Tool(String),
 }
@@ -156,6 +169,7 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
             domain: s.map(Domain::parse).transpose()?,
         }),
         ("WebSearch", None) => Ok(Rule::Search),
+        ("Skill", Some(s)) => parse_skill(s),
         ("Agent" | "Task" | "task", Some(s)) => {
             let name = s.trim();
             if name.is_empty() {
@@ -171,6 +185,33 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
             Ok(Rule::Tool(n.to_owned()))
         }
     }
+}
+
+/// The inside of `Skill(...)`.
+fn parse_skill(spec: &str) -> Result<Rule, String> {
+    let spec = spec.trim();
+    let (by_param, rest) = match spec.strip_prefix("skill") {
+        Some(r) if r.trim_start().starts_with(':') => (true, r.trim_start()[1..].trim()),
+        _ => (false, spec),
+    };
+    let (name, any_args) = match rest
+        .strip_suffix(" *")
+        .or_else(|| rest.strip_suffix(":*"))
+    {
+        Some(n) if !by_param => (n.trim(), true),
+        _ => (rest, false),
+    };
+    if name.is_empty() {
+        return Err("no skill name".into());
+    }
+    if name.contains(char::is_whitespace) {
+        return Err("a skill name has no spaces; `Skill(name *)` means any arguments".into());
+    }
+    Ok(Rule::Skill {
+        name: name.to_owned(),
+        any_args: any_args || name == "*",
+        by_param,
+    })
 }
 
 mod vet;
@@ -335,6 +376,13 @@ impl Permissions {
                         .get("subagent_type")
                         .is_some_and(|t| (name == "*" && !t.is_empty()) || t == name)
             }
+            Rule::Skill { name, .. } => {
+                call.tool == "Skill"
+                    && call
+                        .fields
+                        .get("skill")
+                        .is_some_and(|k| spec::glob(name, k))
+            }
             Rule::Tool(n) => call.tool == *n,
         }
     }
@@ -447,8 +495,23 @@ impl Permissions {
                 }
                 Rule::Search => WEBSEARCH_TOOLS.contains(&call.tool.as_str()),
                 Rule::Mcp(m) => m.matches(&call.tool, true),
+                Rule::Skill {
+                    name,
+                    any_args,
+                    by_param: false,
+                } => {
+                    call.tool == "Skill"
+                        && call
+                            .fields
+                            .get("skill")
+                            .is_some_and(|k| spec::glob(name, k))
+                        && (*any_args || call.fields.get("args").is_none_or(String::is_empty))
+                }
                 Rule::Tool(n) => call.tool == *n,
-                Rule::Shell { .. } | Rule::Fetch { domain: None } | Rule::Agent(_) => false,
+                Rule::Shell { .. }
+                | Rule::Fetch { domain: None }
+                | Rule::Agent(_)
+                | Rule::Skill { .. } => false,
             })
             .map(|e| e.text.clone())
     }

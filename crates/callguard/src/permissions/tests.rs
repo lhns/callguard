@@ -2530,3 +2530,45 @@ fn agent_rules_match_the_subagent_type_exactly() {
     // Allow stays dropped.
     assert!(vet_allow("Agent(Explore)", None).is_err());
 }
+
+// --- Skill(name) -----------------------------------------------------------------
+
+fn skill(name: &str, args: Option<&str>) -> Call {
+    let mut v = serde_json::json!({ "skill": name });
+    if let Some(a) = args {
+        v["args"] = a.into();
+    }
+    call("Skill", &v.to_string())
+}
+
+#[test]
+fn skill_rules_compare_the_literal_skill_input() {
+    for rule in ["Skill(commit)", "Skill(commit *)", "Skill(skill:commit)", "Skill( skill : commit )"] {
+        let d = deny(&[rule]);
+        assert_eq!(hit(&d, &skill("commit", None)), Some("deny"), "{rule}");
+        assert_eq!(hit(&d, &skill("commit", Some("-m x"))), Some("deny"), "{rule}");
+        assert_eq!(hit(&d, &skill("Commit", None)), None, "{rule}");
+        assert_eq!(hit(&d, &skill("commit-all", None)), None, "{rule}");
+        assert_eq!(hit(&d, &call("Skill", "{}")), None, "{rule}");
+        assert_eq!(hit(&d, &call("Read", r#"{"skill":"commit"}"#)), None, "{rule}");
+    }
+    let d = set(&[], &["Skill(deploy-*)"], &[]);
+    assert_eq!(hit(&d, &skill("deploy-prod", None)), Some("ask"));
+    assert_eq!(hit(&d, &skill("redeploy", None)), None);
+}
+
+#[test]
+fn skill_allow_rules_need_the_arguments_they_name() {
+    let a = allow(&["Skill(commit)", "Skill(review *)"]);
+    assert_eq!(hit(&a, &skill("commit", None)), Some("allow"));
+    assert_eq!(hit(&a, &skill("commit", Some(""))), Some("allow"));
+    assert_eq!(hit(&a, &skill("commit", Some("-m x"))), None);
+    assert_eq!(hit(&a, &skill("review", Some("42"))), Some("allow"));
+    assert_eq!(hit(&a, &skill("review", None)), Some("allow"));
+    for r in ["Skill(*)", "Skill(* *)", "Skill(skill:commit)", "Skill(**)"] {
+        assert!(vet_allow(r, None).is_err(), "{r}");
+    }
+    assert!(vet_allow("Skill(commit)", None).is_ok());
+    assert!(parse("Skill(a b)").is_err());
+    assert!(parse("Skill()").is_err());
+}

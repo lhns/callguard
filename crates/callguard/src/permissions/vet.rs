@@ -226,6 +226,12 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
         Rule::Fetch { domain: Some(d) } if d.is_blanket() => {
             return blocked("the domain pattern matches every host");
         }
+        Rule::Skill { by_param: true, .. } => {
+            return blocked("a parameter value does not establish that a call is safe");
+        }
+        Rule::Skill { name, .. } if name.chars().all(|c| c == '*') => {
+            return blocked("a blanket Skill allow allows every skill");
+        }
         Rule::Tool(n) if matches!(kind_of(n), KIND_SHELL | KIND_READ | KIND_WRITE | KIND_FETCH) => {
             return blocked("name the tool with its pattern, such as Bash(...) or Read(...)");
         }
