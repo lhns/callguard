@@ -221,8 +221,7 @@ fn rule_forms() {
         "mcp__a*__b",
         "mcp__",
         "mcp__s__",
-        "Agent(model:x)",
-        "Tool(param:value)",
+        "Agent()",
         "*",
         "B*",
     ] {
@@ -234,7 +233,7 @@ fn rule_forms() {
 fn a_deny_or_ask_rule_that_cannot_be_read_fails_the_policy() {
     for list in ["deny", "ask"] {
         let p: policy::Policy = serde_json::from_str(&format!(
-            r#"{{"policy_version":1,"permissions":{{"{list}":["Bash(git push:*)","Agent(model:x)"]}}}}"#
+            r#"{{"policy_version":1,"permissions":{{"{list}":["Bash(git push:*)","Bash(command:x)"]}}}}"#
         ))
         .unwrap();
         let problems = policy::validate(&p, false);
@@ -247,7 +246,7 @@ fn a_deny_or_ask_rule_that_cannot_be_read_fails_the_policy() {
     }
     // An allow rule that cannot be read is dropped, not fatal.
     let p = policy::Permissions {
-        allow: vec!["Agent(model:x)".into(), "Bash(ls)".into()],
+        allow: vec!["Bash(command:x)".into(), "Bash(ls)".into()],
         ..Default::default()
     };
     let (perms, warns) = Permissions::compile(&p, &env()).unwrap();
@@ -2499,4 +2498,35 @@ fn read_only_needs_the_same_agreement_as_an_allow_rule() {
     // A shell tool that is not Bash.
     let c = call("PowerShell", r#"{"command":"ls"}"#);
     assert!(!ro(&c, Some(&ok)));
+}
+
+// --- Agent(name) -----------------------------------------------------------------
+
+fn agent(tool: &str, sub: &str) -> Call {
+    call(
+        tool,
+        &serde_json::json!({ "subagent_type": sub, "prompt": "x" }).to_string(),
+    )
+}
+
+#[test]
+fn agent_rules_match_the_subagent_type_exactly() {
+    // Claude's docs: Agent(Explore), Agent(Plan), Agent(my-custom-agent).
+    let d = deny(&["Agent(Explore)", "Agent(my-custom-agent)"]);
+    assert_eq!(hit(&d, &agent("Agent", "Explore")), Some("deny"));
+    assert_eq!(hit(&d, &agent("Task", "Explore")), Some("deny"));
+    assert_eq!(hit(&d, &agent("task", "my-custom-agent")), Some("deny"));
+    assert_eq!(hit(&d, &agent("Agent", "explore")), None);
+    assert_eq!(hit(&d, &agent("Agent", "Explorer")), None);
+    assert_eq!(hit(&d, &agent("Agent", "Plan")), None);
+    assert_eq!(hit(&d, &call("Agent", r#"{"prompt":"x"}"#)), None);
+    // Only a call of kind agent.
+    assert_eq!(hit(&d, &call("Read", r#"{"subagent_type":"Explore"}"#)), None);
+    let a = set(&[], &["Task(Plan)"], &[]);
+    assert_eq!(hit(&a, &agent("Agent", "Plan")), Some("ask"));
+    let any = deny(&["Agent(*)"]);
+    assert_eq!(hit(&any, &agent("Agent", "Plan")), Some("deny"));
+    assert_eq!(hit(&any, &call("Agent", r#"{"prompt":"x"}"#)), None);
+    // Allow stays dropped.
+    assert!(vet_allow("Agent(Explore)", None).is_err());
 }

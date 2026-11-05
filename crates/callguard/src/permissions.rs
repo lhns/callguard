@@ -47,7 +47,9 @@ mod web;
 
 use crate::nah::{NahResult, NahVerdict};
 use crate::policy::{self, quote_string};
-use crate::rules::{Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, RulesError, kind_of};
+use crate::rules::{
+    Call, Env, KIND_AGENT, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, RulesError, kind_of,
+};
 use crate::schema::Decision;
 
 use paths::{Ctx, PathSpec};
@@ -82,6 +84,9 @@ pub enum Rule {
     /// Bare `WebSearch`.
     Search,
     Mcp(Mcp),
+    /// `Agent(name)`, `Task(name)`: a call of kind agent whose `subagent_type`
+    /// is `name`, exactly; `*` is any named agent.
+    Agent(String),
     /// Any other bare name: that tool, exactly.
     Tool(String),
 }
@@ -151,6 +156,13 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
             domain: s.map(Domain::parse).transpose()?,
         }),
         ("WebSearch", None) => Ok(Rule::Search),
+        ("Agent" | "Task" | "task", Some(s)) => {
+            let name = s.trim();
+            if name.is_empty() {
+                return Err("no agent name".into());
+            }
+            Ok(Rule::Agent(name.to_owned()))
+        }
         (_, Some(_)) => Err(format!("{name}(...) rules are not supported")),
         (n, None) => {
             if n.contains(|c: char| c.is_whitespace() || c == '*' || c == ')') {
@@ -316,6 +328,13 @@ impl Permissions {
             }
             Rule::Search => WEBSEARCH_TOOLS.contains(&call.tool.as_str()),
             Rule::Mcp(m) => m.matches(&call.tool, false),
+            Rule::Agent(name) => {
+                call.kind == KIND_AGENT
+                    && call
+                        .fields
+                        .get("subagent_type")
+                        .is_some_and(|t| (name == "*" && !t.is_empty()) || t == name)
+            }
             Rule::Tool(n) => call.tool == *n,
         }
     }
@@ -429,7 +448,7 @@ impl Permissions {
                 Rule::Search => WEBSEARCH_TOOLS.contains(&call.tool.as_str()),
                 Rule::Mcp(m) => m.matches(&call.tool, true),
                 Rule::Tool(n) => call.tool == *n,
-                Rule::Shell { .. } | Rule::Fetch { domain: None } => false,
+                Rule::Shell { .. } | Rule::Fetch { domain: None } | Rule::Agent(_) => false,
             })
             .map(|e| e.text.clone())
     }
