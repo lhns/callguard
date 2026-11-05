@@ -106,36 +106,40 @@ pub struct ShadowVerdict {
     pub rule: String,
 }
 
-/// `<state dir>/callguard/decisions.jsonl`.
-pub fn default_path() -> String {
+/// `<state dir>/callguard/decisions.jsonl`; None if the state directory cannot
+/// be told (no home). A relative path would put the log in the working
+/// directory, where the agent can write forged entries.
+pub fn default_path() -> Option<String> {
     default_path_with(&|k| std::env::var(k).ok(), std::env::consts::OS)
 }
 
 /// [`default_path`] with the environment and OS name given.
-fn default_path_with(env: &dyn Fn(&str) -> Option<String>, os: &str) -> String {
+fn default_path_with(env: &dyn Fn(&str) -> Option<String>, os: &str) -> Option<String> {
     let get = |k: &str| env(k).filter(|v| !v.is_empty());
     let file = |base: PathBuf| {
-        base.join("callguard")
-            .join("decisions.jsonl")
-            .to_string_lossy()
-            .into_owned()
+        Some(
+            base.join("callguard")
+                .join("decisions.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+        )
     };
     if let Some(x) = get("XDG_STATE_HOME") {
         return file(PathBuf::from(x));
     }
+    if os == "windows"
+        && let Some(local) = get("LocalAppData")
+    {
+        return file(PathBuf::from(local));
+    }
     // USERPROFILE on Windows, HOME elsewhere.
-    let home = PathBuf::from(
-        get(if os == "windows" {
-            "USERPROFILE"
-        } else {
-            "HOME"
-        })
-        .unwrap_or_default(),
-    );
+    let home = PathBuf::from(get(if os == "windows" {
+        "USERPROFILE"
+    } else {
+        "HOME"
+    })?);
     match os {
-        "windows" => file(
-            get("LocalAppData").map_or_else(|| home.join("AppData").join("Local"), PathBuf::from),
-        ),
+        "windows" => file(home.join("AppData").join("Local")),
         "macos" => file(home.join("Library").join("Application Support")),
         _ => file(home.join(".local").join("state")),
     }
@@ -495,35 +499,35 @@ mod tests {
                     .map(|(_, v)| (*v).to_owned())
             }
         };
-        let p = |path: String| path.replace('\\', "/");
+        let p = |path: Option<String>| path.map(|p| p.replace(std::path::MAIN_SEPARATOR, "/"));
         assert_eq!(
             p(default_path_with(
                 &env(&[("XDG_STATE_HOME", "/x/state")]),
                 "linux"
             )),
-            "/x/state/callguard/decisions.jsonl"
+            Some("/x/state/callguard/decisions.jsonl".into())
         );
         assert_eq!(
             p(default_path_with(&env(&[("HOME", "/h")]), "linux")),
-            "/h/.local/state/callguard/decisions.jsonl"
+            Some("/h/.local/state/callguard/decisions.jsonl".into())
         );
         assert_eq!(
             p(default_path_with(&env(&[("HOME", "/h")]), "macos")),
-            "/h/Library/Application Support/callguard/decisions.jsonl"
+            Some("/h/Library/Application Support/callguard/decisions.jsonl".into())
         );
         assert_eq!(
             p(default_path_with(
                 &env(&[("USERPROFILE", "C:/U"), ("LocalAppData", "C:/L")]),
                 "windows"
             )),
-            "C:/L/callguard/decisions.jsonl"
+            Some("C:/L/callguard/decisions.jsonl".into())
         );
         assert_eq!(
             p(default_path_with(
                 &env(&[("USERPROFILE", "C:/U")]),
                 "windows"
             )),
-            "C:/U/AppData/Local/callguard/decisions.jsonl"
+            Some("C:/U/AppData/Local/callguard/decisions.jsonl".into())
         );
         // An empty XDG_STATE_HOME counts as unset.
         assert_eq!(
@@ -531,8 +535,18 @@ mod tests {
                 &env(&[("XDG_STATE_HOME", ""), ("HOME", "/h")]),
                 "linux"
             )),
-            "/h/.local/state/callguard/decisions.jsonl"
+            Some("/h/.local/state/callguard/decisions.jsonl".into())
         );
+    }
+
+    #[test]
+    fn no_home_means_no_default_path() {
+        let none = |_: &str| None;
+        for os in ["linux", "macos", "windows"] {
+            assert_eq!(default_path_with(&none, os), None, "{os}");
+            let empty = |_: &str| Some(String::new());
+            assert_eq!(default_path_with(&empty, os), None, "{os}");
+        }
     }
 
     /// A FIFO as the log must fail at once, not hang the hook; `/dev/null`

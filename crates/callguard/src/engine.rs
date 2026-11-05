@@ -256,9 +256,14 @@ impl Engine {
                 hostmeta::probe(&hostmeta::exec_runner, cwd, command, have, deadline)
             }))
         };
-        let logger = Some(log_path(&pol, &opts))
-            .filter(|p| !p.is_empty())
-            .map(|p| declog::Logger::new(&p));
+        let logger = match log_path(&pol, &opts) {
+            Ok(p) if p.is_empty() => None,
+            Ok(p) => Some(declog::Logger::new(&p)),
+            Err(warning) => {
+                opts.warnings.push(warning);
+                None
+            }
+        };
         let nah = opts.nah_engine.clone().unwrap_or_else(default_nah_engine);
         let rev = policy::rev(&pol);
         Ok(Engine {
@@ -996,20 +1001,23 @@ pub fn resolve_project_dir(req: &Request) -> String {
     }
 }
 
-/// Where the decision log goes for `pol` and `opts` ("" = no log).
-pub(crate) fn log_path(pol: &Policy, opts: &Options) -> String {
+/// Where the decision log goes for `pol` and `opts` ("" = no log). The error
+/// is a warning: there is no home to put the default log in.
+pub(crate) fn log_path(pol: &Policy, opts: &Options) -> Result<String, String> {
     if opts.log_path == "-" || pol.log.as_ref().is_some_and(|l| l.disabled) {
-        return String::new();
+        return Ok(String::new());
     }
     if !opts.log_path.is_empty() {
-        return opts.log_path.clone();
+        return Ok(opts.log_path.clone());
     }
     if let Some(l) = &pol.log
         && !l.path.is_empty()
     {
-        return l.path.clone();
+        return Ok(l.path.clone());
     }
-    declog::default_path()
+    declog::default_path().ok_or_else(|| {
+        "no decision log: the home directory is unknown (set log.path to choose a place)".into()
+    })
 }
 
 #[cfg(test)]
