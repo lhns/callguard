@@ -1008,3 +1008,32 @@ fn a_missing_key_error_never_shows_a_key() {
     let err = b.classify(&test_req(), soon()).unwrap_err().to_string();
     assert!(err.contains("CALLGUARD_NO_KEY_SET_ANYWHERE"), "{err}");
 }
+
+#[test]
+fn the_templates_placeholder_key_is_no_key_and_is_not_sent() {
+    let srv = Server::ok(anthropic_ok_body(""));
+    let b = from_config(&policy::Backend {
+        base_url: srv.url.clone(),
+        api_key: policy::Secret::new(policy::PLACEHOLDER_KEY),
+        api_key_env: key_env().into(), // set, but not a fallback for the placeholder
+        ..cfg("anthropic")
+    })
+    .unwrap();
+    assert!(b.classify(&test_req(), soon()).is_err());
+    assert!(srv.requests().is_empty());
+
+    let ok = format!(
+        r#"{{"choices":[{{"message":{{"content":{}}}}}]}}"#,
+        json_str(OK_TEXT)
+    );
+    let srv = Server::ok(ok);
+    let b = from_config(&policy::Backend {
+        model: "m".into(),
+        base_url: srv.url.clone(),
+        api_key: policy::Secret::new(policy::PLACEHOLDER_KEY),
+        ..cfg("openai")
+    })
+    .unwrap();
+    b.classify(&test_req(), soon()).unwrap();
+    assert_eq!(srv.only_request().header("authorization"), None);
+}

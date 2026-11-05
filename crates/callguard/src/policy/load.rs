@@ -318,6 +318,68 @@ pub fn load(o: &LoadOptions) -> Result<Loaded, PolicyError> {
     Ok(out)
 }
 
+/// The template's key value. A backend whose `api_key` is still this has no key.
+pub const PLACEHOLDER_KEY: &str = "PASTE-KEY-HERE";
+
+const BACKENDS_TEMPLATE: &str = r#"{
+  "default": "anthropic",
+  "backends": {
+    "anthropic": {
+      "type": "anthropic",
+      "model": "claude-haiku-5-5",
+      "api_key": "PASTE-KEY-HERE",
+      "data_classes": ["open", "private"]
+    },
+    "local": {
+      "type": "openai",
+      "model": "qwen3",
+      "base_url": "http://localhost:8080/v1",
+      "api_key": "PASTE-KEY-HERE",
+      "data_classes": ["open", "private"]
+    }
+  }
+}
+"#;
+
+/// Writes the template backends file to the user's config directory and
+/// returns its path. Never overwrites. On Unix the file is 0600 in a 0700
+/// directory; on Windows it inherits the per-user ACL of `%APPDATA%`.
+pub fn init_backends_file(config: &UserConfig) -> Result<String, PolicyError> {
+    use std::io::Write;
+    let path = backends_path(config)
+        .ok_or_else(|| PolicyError("the user config directory is unknown".into()))?;
+    let dir = Path::new(&path).parent().expect("a file has a parent");
+    let err = |what: &str, e: std::io::Error| PolicyError(format!("{what} {path}: {e}"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(|e| err("create the directory of", e))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir).map_err(|e| err("create the directory of", e))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&path).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AlreadyExists {
+            PolicyError(format!("{path} already exists; not overwriting it"))
+        } else {
+            err("create", e)
+        }
+    })?;
+    f.write_all(BACKENDS_TEMPLATE.as_bytes())
+        .map_err(|e| err("write", e))?;
+    Ok(path)
+}
+
 /// The user's backends file: `default` and `backends`. It is read last and
 /// only from the user's own config directory.
 #[derive(Debug, Default, Deserialize)]

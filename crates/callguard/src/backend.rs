@@ -131,6 +131,10 @@ fn max_tokens(cfg: &policy::Backend) -> i64 {
 /// The API key: `api_key` if set, else the value of the variable `key_env`
 /// names; empty when neither gives one.
 fn api_key(key: &policy::Secret, key_env: &str) -> String {
+    // The template's placeholder is no key, and no fallback to the variable.
+    if key.expose() == policy::PLACEHOLDER_KEY {
+        return String::new();
+    }
     if !key.is_empty() {
         return key.expose().to_owned();
     }
