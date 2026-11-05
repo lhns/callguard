@@ -283,6 +283,35 @@ fn windows_device_and_share_prefixes_name_the_plain_path() {
 }
 
 #[test]
+fn a_read_tools_pattern_decides_like_a_path() {
+    let unix = unix();
+    let st = set(&unix, policy::default_rules());
+    let glob = |input: &str| {
+        let c = Call::new(at("Glob", raw(input), "/w/p", "/w/p"), &unix);
+        let id = st.match_call(&c).map(|r| r.id);
+        (c, id)
+    };
+    // Inside the project: still free.
+    let (_, id) = glob(r#"{"pattern":"src/**/*.rs"}"#);
+    assert_eq!(id.as_deref(), Some("read-in-project"));
+    // Reaching out: no allow, whatever the path says.
+    for pat in ["/home/u/*", "../../**", "~/*", "src/../../*", "{a,/etc}/*"] {
+        let (c, id) = glob(&serde_json::json!({ "pattern": pat }).to_string());
+        assert!(c.pattern_escapes, "{pat}");
+        assert_ne!(id.as_deref(), Some("read-in-project"), "{pat}");
+    }
+    // Deny and ask see the pattern's literal prefix.
+    for pat in ["~/.ssh/*", "/home/u/.ssh/id_*", "/home/u/.aws/credentials"] {
+        let (_, id) = glob(&serde_json::json!({ "pattern": pat }).to_string());
+        assert_eq!(id.as_deref(), Some("secret-read"), "{pat}");
+    }
+    let (_, id) = glob(r#"{"path":"/w/p","glob":"/home/u/.env"}"#);
+    assert_eq!(id.as_deref(), Some("secret-read"));
+    let c = Call::new(at("Glob", raw(r#"{"pattern":"~/.ssh/*"}"#), "/w/p", "/w/p"), &unix);
+    assert_eq!(c.pattern_paths, [("/home/u/.ssh".to_owned(), false)]);
+}
+
+#[test]
 fn new_call() {
     let unix = unix();
     let c = Call::new(

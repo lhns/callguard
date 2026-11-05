@@ -1039,6 +1039,21 @@ fn a_read_tools_pattern_cannot_leave_the_allowed_path() {
 }
 
 #[test]
+fn deny_and_ask_see_a_read_tools_pattern_prefix() {
+    let d = set(&["Read(~/.ssh/**)"], &["Read(/private/**)"], &[]);
+    for (tool, input, want) in [
+        ("Glob", r#"{"pattern":"~/.ssh/*"}"#, Some("deny")),
+        ("Glob", r#"{"pattern":"/home/u/.ssh/id_*"}"#, Some("deny")),
+        ("Grep", r#"{"pattern":"x","glob":"/home/u/.ssh/**"}"#, Some("deny")),
+        ("Glob", r#"{"pattern":"private/**/*.md"}"#, Some("ask")),
+        ("Glob", r#"{"pattern":"src/**/*.rs"}"#, None),
+        ("Glob", r#"{"pattern":"/home/u/*"}"#, None),
+    ] {
+        assert_eq!(hit(&d, &call(tool, input)), want, "{input}");
+    }
+}
+
+#[test]
 fn symlinks_deny_on_either_path_allow_on_both() {
     let resolver: Resolver = Box::new(|_, p| {
         Some(if p == "/w/p/src/key" {

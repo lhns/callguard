@@ -601,7 +601,7 @@ impl Permissions {
         if raw.is_empty() || (allow && raw.len() != 1) {
             return false;
         }
-        if allow && !self.read_globs_ok(call) {
+        if allow && call.pattern_escapes {
             return false;
         }
         let ctx = self.ctx(call);
@@ -624,24 +624,12 @@ impl Permissions {
                 return true;
             }
         }
-        false
-    }
-
-    /// A read tool's `pattern` or `glob` may reach outside the path: refuse an
-    /// allow when it is absolute, starts with `~` or climbs with `..`.
-    fn read_globs_ok(&self, call: &Call) -> bool {
-        if call.kind != KIND_READ {
-            return true;
-        }
-        ["pattern", "glob"].iter().all(|k| {
-            field_values(&call.fields, k).iter().all(|v| {
-                let b = v.as_bytes();
-                !(v.starts_with(['/', '\\', '~'])
-                    || v.contains("..")
-                    || v.contains('{')
-                    || (b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic()))
-            })
-        })
+        // The files a read tool's pattern starts in, as rules.rs resolved them.
+        !allow
+            && call
+                .pattern_paths
+                .iter()
+                .any(|(p, _)| spec.matches(&paths::to_posix(&self.env, p), &ctx, false))
     }
 
     // --- allow ---

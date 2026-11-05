@@ -778,6 +778,13 @@ pub struct Call {
     /// it does not count as a project: `in_project` and `real_in_project` stay
     /// false.
     pub project_ignored: bool,
+    /// A read tool's `pattern` or `glob` can name files outside `path`
+    /// (absolute, `~`, `..`, `{`): no allow rule may match on the path.
+    pub pattern_escapes: bool,
+    /// Where such patterns start: the directory part of each literal prefix,
+    /// as written and resolved, with whether it is in the project. Deny and
+    /// ask see these like `path`.
+    pub pattern_paths: Vec<(String, bool)>,
     /// Top-level input fields; non-strings JSON-encoded.
     pub fields: BTreeMap<String, String>,
     /// Compact input JSON plus every string leaf, for the "*" field.
@@ -789,6 +796,32 @@ pub struct Call {
 }
 
 pub(crate) const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "filePath"];
+
+/// The fields of a read tool that hold a glob or pattern for files.
+const PATTERN_KEYS: [&str; 2] = ["pattern", "glob"];
+
+/// Whether the glob `v` can reach outside the directory it is searched in.
+fn pattern_escapes(v: &str) -> bool {
+    let b = v.as_bytes();
+    v.starts_with(['/', '\\', '~'])
+        || v.contains("..")
+        || v.contains('{')
+        || (b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic())
+}
+
+/// The directory a glob starts in: its literal prefix up to the last slash,
+/// or all of it when it has no wildcard. None if it names nothing but
+/// entries of the directory it is searched in.
+fn pattern_dir(env: &Env, v: &str) -> Option<String> {
+    let v = env.slash(v);
+    let Some(cut) = v.find(['*', '?', '[', '{']) else {
+        return (v.contains('/') || v == "~").then_some(v);
+    };
+    match v[..cut].rfind('/')? {
+        0 => Some("/".to_owned()),
+        i => Some(v[..i].to_owned()),
+    }
+}
 
 /// Joins shell (backslash) and PowerShell (backtick) line continuations with
 /// `sep`, so a command split over lines is matched as one line. A space reads
@@ -843,6 +876,31 @@ impl Call {
             .filter(|p| !p.is_empty())
             .into_iter()
             .chain(self.real_path.as_deref())
+    }
+
+    /// Reads the `pattern` and `glob` fields of a read tool into
+    /// `pattern_escapes` and `pattern_paths`.
+    fn add_patterns(&mut self, env: &Env, project: Option<&(String, Option<String>)>) {
+        for key in PATTERN_KEYS {
+            for v in field_values(&self.fields, key) {
+                self.pattern_escapes |= pattern_escapes(&v);
+                let Some(dir) = pattern_dir(env, &v) else {
+                    continue;
+                };
+                let lexical = env.clean_names(&env.normalize(&dir, &self.path));
+                let real = env.real(&lexical);
+                for (p, is_real) in [(Some(lexical), false), (real, true)] {
+                    let Some(p) = p else { continue };
+                    let inside = project.is_some_and(|(dir, real_dir)| {
+                        let root = if is_real { real_dir.as_ref() } else { Some(dir) };
+                        root.is_some_and(|d| env.in_dir(&p, d))
+                    });
+                    if !self.pattern_paths.iter().any(|(q, _)| *q == p) {
+                        self.pattern_paths.push((p, inside));
+                    }
+                }
+            }
+        }
     }
 
     /// Extracts command, URL and path from the tool input.
@@ -929,6 +987,9 @@ impl Call {
                     _ => false,
                 };
             }
+        }
+        if kind == KIND_READ {
+            c.add_patterns(env, project.as_ref().filter(|_| !c.project_ignored));
         }
         c
     }
@@ -1457,6 +1518,9 @@ impl Compiled {
         if m.in_project.is_none() && self.path.is_empty() && self.not_path.is_empty() {
             return true;
         }
+        if allow && call.pattern_escapes {
+            return false;
+        }
         // The path conditions hold for the path as written, and for where it
         // really is. Deny and ask need one of them (a link into a protected
         // place fires), allow needs both, and a path that does not resolve
@@ -1469,7 +1533,12 @@ impl Compiled {
         if allow {
             lexical && real
         } else {
-            lexical || real
+            lexical
+                || real
+                || call
+                    .pattern_paths
+                    .iter()
+                    .any(|(p, inside)| self.path_ok(p, *inside))
         }
     }
 
