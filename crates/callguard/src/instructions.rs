@@ -15,6 +15,7 @@
 //! Session files live in `<state dir>/callguard/instructions/<session>.txt`,
 //! beside the decision log's default place, whatever `--log` says.
 
+use sha2::Digest;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -52,7 +53,15 @@ fn session_file(dir: &Path, session_id: &str) -> Option<PathBuf> {
             }
         })
         .collect();
-    (!id.is_empty()).then(|| dir.join(format!("{id}.txt")))
+    if id.is_empty() {
+        return None;
+    }
+    // Two ids that reduce to the same name must not share a file.
+    if id != session_id {
+        let sum = hex::encode(sha2::Sha256::digest(session_id.as_bytes()));
+        return Some(dir.join(format!("{id}-{}.txt", &sum[..8])));
+    }
+    Some(dir.join(format!("{id}.txt")))
 }
 
 /// Appends `file_path` to the session's file unless it is there already, and
@@ -233,6 +242,14 @@ mod tests {
             assert!(f.to_string_lossy().ends_with(".txt"));
         }
         assert_eq!(session_file(d, ""), None);
+        // Ids that reduce to the same name get different files; a clean id
+        // keeps its plain name.
+        assert_ne!(session_file(d, "a/b"), session_file(d, "a\x5cb"));
+        assert_ne!(
+            session_file(d, &"a".repeat(150)),
+            session_file(d, &"a".repeat(160))
+        );
+        assert_eq!(session_file(d, "abc-1").unwrap(), d.join("abc-1.txt"));
         let long = "a".repeat(500);
         assert!(session_file(d, &long).unwrap().to_string_lossy().len() < 140);
     }
