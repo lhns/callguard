@@ -1,4 +1,5 @@
 use super::*;
+use crate::nah::NahResult;
 
 // --- Policy rules -----------------------------------------------------------
 
@@ -14,7 +15,7 @@ struct Compiled {
 }
 
 impl Compiled {
-    fn matches(&self, call: &Call) -> bool {
+    fn matches(&self, call: &Call, read_only: &dyn Fn() -> bool) -> bool {
         let m = &self.rule.r#match;
         if !m.tool.is_empty() && !m.tool.contains(&call.tool) {
             return false;
@@ -26,6 +27,9 @@ impl Compiled {
             return false;
         }
         if m.unattended.is_some_and(|u| u != call.unattended) {
+            return false;
+        }
+        if m.read_only.is_some_and(|r| r != read_only()) {
             return false;
         }
         for (k, allowed) in &m.context {
@@ -112,6 +116,7 @@ impl Compiled {
 /// A compiled, ordered list of policy rules.
 pub struct Set {
     rules: Vec<Compiled>,
+    env: Env,
 }
 
 impl std::fmt::Debug for Set {
@@ -191,15 +196,26 @@ impl Set {
                     .map_err(|e| RulesError(format!("rule {}: {e}", quote_string(&r.id))))?,
             );
         }
-        Ok(Set { rules: set })
+        Ok(Set {
+            rules: set,
+            env: env.clone(),
+        })
     }
 
     /// The matching rule that wins: deny over ask over allow, then list order.
-    /// (Named `match_call` because `match` is a keyword.)
+    /// (Named `match_call` because `match` is a keyword.) Rules that ask for
+    /// read-only commands never match here: they need nah's parse.
+    #[cfg(test)]
     pub(crate) fn match_call(&self, call: &Call) -> Option<Matched> {
+        self.match_with(call, None)
+    }
+
+    /// [`Set::match_call`] with nah's answer for the call, if there is one.
+    pub(crate) fn match_with(&self, call: &Call, nah: Option<&NahResult>) -> Option<Matched> {
+        let read_only = || self.read_only(call, nah);
         let mut best: Option<&Compiled> = None;
         for c in &self.rules {
-            if !c.matches(call) {
+            if !c.matches(call, &read_only) {
                 continue;
             }
             if best.is_none_or(|b| c.decision > b.decision) {
@@ -211,5 +227,34 @@ impl Set {
             description: c.rule.description.clone(),
             decision: c.decision,
         })
+    }
+
+    /// Whether the call is made only of read-only commands on files in the
+    /// project. A path that a deny or ask rule would stop a `Read` of does not
+    /// count (`secret-read` stops `cat .env` too).
+    fn read_only(&self, call: &Call, nah: Option<&NahResult>) -> bool {
+        if call.kind != KIND_SHELL {
+            return false;
+        }
+        let flagged = |path: &str| {
+            let input = serde_json::json!({ "file_path": path }).to_string();
+            let read = Call::new(
+                CallInput {
+                    harness: call.harness.clone(),
+                    tool: "Read".into(),
+                    input: RawValue::from_string(input).ok(),
+                    cwd: call.cwd.clone(),
+                    project_dir: call.project_dir.clone(),
+                    ..Default::default()
+                },
+                &self.env,
+            );
+            self.rules.iter().any(|c| {
+                c.decision != Decision::Allow
+                    && c.rule.r#match.read_only.is_none()
+                    && c.matches(&read, &|| false)
+            })
+        };
+        crate::permissions::read_only(&self.env, call, nah, &flagged)
     }
 }

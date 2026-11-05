@@ -75,6 +75,49 @@ pub struct Call {
     pub unattended: bool,
     pub cwd: String,
     pub project_dir: String,
+    /// The directories that count as inside the project.
+    pub(crate) roots: Roots,
+}
+
+/// The directories that count as inside the project, each as normalized and
+/// as resolved (None if it cannot be).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Roots {
+    dirs: Vec<(String, Option<String>)>,
+}
+
+impl Roots {
+    /// The roots for `project_dir`, and whether it was left out because it is
+    /// the home directory or a file system root, which say nothing about a
+    /// project.
+    fn new(env: &Env, project_dir: &str, cwd: &str) -> (Roots, bool) {
+        if project_dir.is_empty() {
+            return (Roots::default(), false);
+        }
+        let dir = env.normalize(project_dir, cwd);
+        let real = env.real(&dir);
+        if env.is_broad_dir(&dir, real.as_deref()) {
+            return (Roots::default(), true);
+        }
+        (
+            Roots {
+                dirs: vec![(dir, real)],
+            },
+            false,
+        )
+    }
+
+    /// Whether the normalized path `p` is in a root, by its name.
+    pub(crate) fn contains(&self, env: &Env, p: &str) -> bool {
+        self.dirs.iter().any(|(d, _)| env.in_dir(p, d))
+    }
+
+    /// Whether the resolved path `p` is in a root, by where the root is.
+    pub(crate) fn contains_real(&self, env: &Env, p: &str) -> bool {
+        self.dirs
+            .iter()
+            .any(|(_, r)| r.as_ref().is_some_and(|r| env.in_dir(p, r)))
+    }
 }
 
 const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "filePath"];
@@ -201,7 +244,7 @@ impl Call {
 
     /// Reads the `pattern` and `glob` fields of a read tool into
     /// `pattern_escapes` and `pattern_paths`.
-    fn add_patterns(&mut self, env: &Env, project: Option<&(String, Option<String>)>) {
+    fn add_patterns(&mut self, env: &Env, roots: &Roots) {
         let text = pattern_is_text(&self.tool, &self.fields);
         for key in PATTERN_KEYS {
             if text && key == "pattern" {
@@ -217,14 +260,11 @@ impl Call {
                 let real = env.real(&lexical);
                 for (p, is_real) in [(Some(lexical), false), (real, true)] {
                     let Some(p) = p else { continue };
-                    let inside = project.is_some_and(|(dir, real_dir)| {
-                        let root = if is_real {
-                            real_dir.as_ref()
-                        } else {
-                            Some(dir)
-                        };
-                        root.is_some_and(|d| env.in_dir(&p, d))
-                    });
+                    let inside = if is_real {
+                        roots.contains_real(env, &p)
+                    } else {
+                        roots.contains(env, &p)
+                    };
                     if !self.pattern_paths.iter().any(|(q, _)| *q == p) {
                         self.pattern_paths.push((p, inside));
                     }
@@ -299,34 +339,25 @@ impl Call {
             c.raw_paths.push(input.cwd.clone()); // Glob, Grep and LS default to the working directory
         }
         let raw_path = c.raw_paths.first().cloned().unwrap_or_default();
-        let project = (!input.project_dir.is_empty())
-            .then(|| env.normalize(&input.project_dir, &input.cwd))
-            .map(|p| {
-                let real = env.real(&p);
-                (p, real)
-            });
-        if let Some((p, real)) = &project {
-            c.project_ignored = env.is_broad_dir(p, real.as_deref());
-        }
+        let (roots, ignored) = Roots::new(env, &input.project_dir, &input.cwd);
+        c.project_ignored = ignored;
         if !raw_path.is_empty() {
             let path = env.clean_names(&env.normalize(&raw_path, &input.cwd));
             let resolvable = !env.drive_relative(&raw_path);
             c.real_path = env.real(&path).filter(|_| resolvable);
-            if let Some((dir, real_dir)) = project
-                .as_ref()
-                .filter(|_| !c.project_ignored && resolvable)
-            {
-                c.in_project = env.in_dir(&path, dir);
-                c.real_in_project = match (&c.real_path, real_dir) {
-                    (Some(p), Some(d)) => env.in_dir(p, d),
-                    _ => false,
-                };
+            if resolvable {
+                c.in_project = roots.contains(env, &path);
+                c.real_in_project = c
+                    .real_path
+                    .as_deref()
+                    .is_some_and(|p| roots.contains_real(env, p));
             }
             c.path = Some(path).filter(|p| !p.is_empty());
         }
         if kind == KIND_READ {
-            c.add_patterns(env, project.as_ref().filter(|_| !c.project_ignored));
+            c.add_patterns(env, &roots);
         }
+        c.roots = roots;
         c
     }
 }

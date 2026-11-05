@@ -140,6 +140,10 @@ pub struct Match {
     pub not_path: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub in_project: Option<bool>,
+    /// Whether the shell call is made only of read-only commands on files
+    /// inside the project (see `permissions::read_only`). Needs nah's parse.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
     #[serde(
         skip_serializing_if = "BTreeMap::is_empty",
         deserialize_with = "nullable"
@@ -162,6 +166,7 @@ impl Match {
             && self.path.is_empty()
             && self.not_path.is_empty()
             && self.in_project.is_none()
+            && self.read_only.is_none()
             && self.context.is_empty()
             && self.unattended.is_none()
             && self.harness.is_empty()

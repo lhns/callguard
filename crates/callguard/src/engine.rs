@@ -612,7 +612,7 @@ impl Inner {
 
         // 2 rules: the regex rules and the permission rules, the stricter
         // decision wins and a regex rule wins a tie.
-        let regex_hit = self.rules.match_call(&call);
+        let regex_hit = self.rules.match_with(&call, nah_res.as_ref());
         let perm_hit = self.perms.check(&call, nah_res.as_ref());
         let perm_wins = match (&regex_hit, &perm_hit) {
             (Some(r), Some(p)) => p.decision > r.decision,

@@ -2074,3 +2074,349 @@ fn a_path_pattern_that_does_not_compile_matches_deny_and_ask_and_not_allow() {
     assert!(spec.matches("/x", &ctx, false), "deny and ask fail closed");
     assert!(!spec.matches("/x", &ctx, true), "allow matches nothing");
 }
+
+// --- built-in read-only commands -------------------------------------------------
+
+/// The commands nah reports for `cmd` (words split on spaces, `&&`, `;` and
+/// `|`): it reports none for `echo`, `pwd`, `which` and `cd`.
+fn nah_for(cmd: &str) -> NahResult {
+    let calls: Vec<Vec<&str>> = cmd
+        .split(['&', ';', '|'])
+        .map(|s| {
+            s.split_whitespace()
+                .map(|w| w.trim_matches('\''))
+                .collect::<Vec<_>>()
+        })
+        .filter(|w| !w.is_empty() && !["echo", "pwd", "which", "cd"].contains(&w[0]))
+        .collect();
+    let refs: Vec<&[&str]> = calls.iter().map(Vec::as_slice).collect();
+    nah_of(&refs)
+}
+
+fn read_only_in(cmd: &str, cwd: &str, flagged: &dyn Fn(&str) -> bool) -> bool {
+    let c = call_in(
+        "Bash",
+        &serde_json::json!({ "command": cmd }).to_string(),
+        cwd,
+    );
+    let mut n = nah_for(cmd);
+    for call in &mut n.calls {
+        call.cwd = Some(cwd.into());
+    }
+    readonly::read_only(&env(), &c, Some(&n), flagged)
+}
+
+fn read_only(cmd: &str) -> bool {
+    read_only_in(cmd, CWD, &|_| false)
+}
+
+#[test]
+fn read_only_commands_with_listed_flags_pass() {
+    for cmd in [
+        "ls",
+        "ls -la",
+        "ls -l -h sub",
+        "ls /w/p/sub",
+        "cat a.txt",
+        "cat -n a.txt sub/b.txt",
+        "echo hi there",
+        "echo -n 'a b'",
+        "pwd",
+        "head -n 5 a.txt",
+        "head -5 a.txt",
+        "head -n5 a.txt",
+        "tail -n 5 a.txt",
+        "grep -rn foo .",
+        "grep -i foo a.txt",
+        "grep -e foo a.txt",
+        "grep --include=x -r foo sub",
+        "find . -name a.txt",
+        "find . -type f -name xy -print",
+        "find sub -maxdepth 2 -type d",
+        "find",
+        "wc -l a.txt",
+        "which git",
+        "which -a git",
+        "diff a.txt sub/b.txt",
+        "stat a.txt",
+        "du -sh .",
+        "cd sub",
+        "ls && pwd",
+        "cat a.txt | grep foo",
+        "git status",
+        "git status --short -b",
+        "git status --porcelain=v2",
+        "git log",
+        "git log --oneline -5",
+        "git log -3",
+        "git log -n 5 --author=bob",
+        "git log main..dev",
+        "git log -- sub/a.txt",
+        "git diff",
+        "git diff --stat --cached",
+        "git diff HEAD -- a.txt",
+        "git show HEAD",
+        "git show HEAD:sub/a.txt",
+        "git branch",
+        "git branch -a -vv",
+        "git branch --list",
+        "git rev-parse HEAD",
+        "git rev-parse --show-toplevel",
+        "git ls-files",
+        "git ls-files -o --exclude-standard",
+        "git blame a.txt",
+        "git blame -L 1,5 a.txt",
+    ] {
+        assert!(read_only(cmd), "{cmd}");
+    }
+}
+
+#[test]
+fn a_flag_off_the_list_is_not_read_only() {
+    for cmd in [
+        "tail -f a.txt",
+        "tail -F a.txt",
+        "tail --follow a.txt",
+        "head -f a.txt",
+        "grep -R foo .",
+        "grep -f pats a.txt",
+        "grep -P foo a.txt",
+        "grep --exclude-from=x foo a.txt",
+        "ls -L",
+        "ls --bogus",
+        "cat --bogus a.txt",
+        "wc --files0-from=x",
+        "find . -delete",
+        "find . -fprint out",
+        "find . -fprintf out x",
+        "find . -fprint0 out",
+        "find . -fls out",
+        "find . -exec rm x ;",
+        "find . -execdir rm x ;",
+        "find . -ok rm x ;",
+        "find . -okdir rm x ;",
+        "find . -newer a.txt",
+        "find -L .",
+        "find . -name",
+        "find . -name a /etc",
+        "git diff --ext-diff",
+        "git diff --output=x",
+        "git diff --textconv",
+        "git diff --no-index a b",
+        "git log --output=x",
+        "git log --ext-diff",
+        "git log -c",
+        "git show --output=x HEAD",
+        "git -c core.pager=x status",
+        "git --exec-path=x status",
+        "git --git-dir=x status",
+        "git --work-tree=x status",
+        "git --paginate log",
+        "git branch foo",
+        "git branch -d foo",
+        "git branch -D foo",
+        "git branch -m a b",
+        "git branch --list foo",
+        "git branch --set-upstream-to=x",
+        "git config user.name x",
+        "git push",
+        "git commit -m x",
+        "git checkout main",
+        "git blame --contents x a.txt",
+        "git rev-parse --git-path x",
+        "git",
+        "stat -f a.txt",
+        "du -L .",
+        "sort a.txt",
+        "sed p a.txt",
+        "cd -L sub",
+        "cd",
+        "cd a b",
+        "cd -",
+        "ls a; rm a",
+    ] {
+        assert!(!read_only(cmd), "{cmd}");
+    }
+}
+
+#[test]
+fn a_path_outside_the_project_is_not_read_only() {
+    for cmd in [
+        "ls /",
+        "ls /tmp",
+        "ls /w/other",
+        "ls /w/p/../other",
+        "ls ..",
+        "ls sub/../..",
+        "cat ../a.txt",
+        "cat /etc/passwd",
+        "cat a.txt /etc/passwd",
+        "cat '~/a.txt'",
+        "cat '~'",
+        "head -n 5 /etc/passwd",
+        "grep foo /etc/passwd",
+        "grep -r foo /",
+        "grep -e foo ../a",
+        "find / -name x",
+        "find . .. -name x",
+        "diff a.txt /etc/hosts",
+        "stat /etc",
+        "du -sh /",
+        "cd ..",
+        "cd /tmp",
+        "cd /",
+        "git log -- /etc/passwd",
+        "git diff -- ../a",
+        "git show HEAD:../x",
+        "git blame ../a",
+        "cd sub && ls ../..",
+    ] {
+        assert!(!read_only(cmd), "{cmd}");
+    }
+    // The pattern of grep is not a path.
+    assert!(read_only("grep /etc a.txt"));
+    assert!(read_only("grep -e /etc a.txt"));
+    assert!(read_only("echo /etc/passwd"));
+    assert!(read_only("which /etc/passwd"));
+}
+
+#[test]
+fn the_working_directory_must_be_inside_for_commands_that_read() {
+    for cmd in ["ls", "cat a.txt", "git status", "find .", "grep -r x"] {
+        assert!(!read_only_in(cmd, "/elsewhere", &|_| false), "{cmd}");
+    }
+    for cmd in ["echo hi", "pwd", "which git"] {
+        assert!(read_only_in(cmd, "/elsewhere", &|_| false), "{cmd}");
+    }
+    // Under the project is inside; a sibling that shares the prefix is not.
+    assert!(read_only_in("ls", "/w/p/sub", &|_| false));
+    assert!(!read_only_in("ls", "/w/p2", &|_| false));
+}
+
+#[test]
+fn cd_elsewhere_and_git_in_one_command_is_not_read_only() {
+    assert!(!read_only("cd sub && git status"));
+    assert!(!read_only("git status && cd sub"));
+    assert!(read_only("cd . && git status"));
+    assert!(read_only("cd sub"));
+    assert!(read_only("cd sub && pwd"));
+    // Relative paths after a `cd` count from every directory it may have reached.
+    assert!(!read_only("cd sub && cat ../../x"));
+}
+
+#[test]
+fn network_paths_and_long_commands_are_not_read_only() {
+    let win = Env {
+        home: "C:/Users/u".into(),
+        windows: true,
+        ..Default::default()
+    };
+    let on_windows = |command: &str| {
+        Call::new(
+            CallInput {
+                harness: "claude".into(),
+                tool: "Bash".into(),
+                input: RawValue::from_string(serde_json::json!({ "command": command }).to_string())
+                    .ok(),
+                cwd: "C:/w/p".into(),
+                project_dir: "C:/w/p".into(),
+                ..Default::default()
+            },
+            &win,
+        )
+    };
+    let mut n = nah_of(&[&["cat", r"\\host\share\x"]]);
+    n.calls[0].cwd = Some("C:/w/p".into());
+    let c = on_windows(r"cat '\\host\share\x'");
+    assert!(!readonly::read_only(&win, &c, Some(&n), &|_| false));
+    // The same check on a local path passes: only the network path stops it.
+    let mut n = nah_of(&[&["cat", "x"]]);
+    n.calls[0].cwd = Some("C:/w/p".into());
+    assert!(readonly::read_only(
+        &win,
+        &on_windows("cat x"),
+        Some(&n),
+        &|_| false
+    ));
+    // Anywhere in the arguments, even where no path is expected.
+    let c = on_windows("echo '//host/share'");
+    assert!(!readonly::read_only(&win, &c, Some(&nah_of(&[])), &|_| {
+        false
+    }));
+    // 10,000 characters is the longest.
+    let ok = format!("echo {}", "a".repeat(10_000 - 5));
+    assert_eq!(ok.chars().count(), 10_000);
+    assert!(read_only(&ok));
+    assert!(!read_only(&format!("{ok}a")));
+}
+
+#[test]
+fn a_deny_or_ask_rule_for_the_path_beats_read_only() {
+    let secret = |p: &str| p.ends_with("/.env");
+    assert!(read_only_in("cat a.txt", CWD, &secret));
+    assert!(!read_only_in("cat .env", CWD, &secret));
+    assert!(!read_only_in("grep -r x sub/.env", CWD, &secret));
+    assert!(!read_only_in("ls /w/p/.env", CWD, &secret));
+}
+
+#[test]
+fn read_only_needs_the_same_agreement_as_an_allow_rule() {
+    let c = bash("ls");
+    let ok = nah_of(&[&["ls"]]);
+    let ro = |c: &Call, n: Option<&NahResult>| readonly::read_only(&env(), c, n, &|_| false);
+    assert!(ro(&c, Some(&ok)));
+    // No answer, a block, no coverage, an unknown gap.
+    assert!(!ro(&c, None));
+    let blocked = NahResult {
+        verdict: NahVerdict::Block,
+        ..nah_of(&[&["ls"]])
+    };
+    assert!(!ro(&c, Some(&blocked)));
+    let none = NahResult {
+        coverage: "none".into(),
+        ..nah_of(&[&["ls"]])
+    };
+    assert!(!ro(&c, Some(&none)));
+    let unknown = opaque_nah(&[&["ls"]], &["Limit execution-limit"]);
+    assert!(!ro(&c, Some(&unknown)));
+    // The gap nah reports for `wc` is about the program itself.
+    let wc = opaque_nah(
+        &[&["wc", "-l", "a"]],
+        &["Unmodeled Filesystem access-semantics-partial"],
+    );
+    assert!(ro(&bash("wc -l a"), Some(&wc)));
+    // A command nah found that the lexer did not, and the reverse.
+    let n = nah_of(&[&["ls"], &["rm", "a"]]);
+    assert!(!ro(&c, Some(&n)));
+    let n = nah_of(&[&["ls"]]);
+    assert!(!ro(&bash("ls; rm a"), Some(&n)));
+    // Unknown argv, other cwd, other program spelling.
+    let mut n = nah_of(&[&["ls"]]);
+    n.calls[0].argv = None;
+    assert!(!ro(&c, Some(&n)));
+    let mut n = nah_of(&[&["ls"]]);
+    n.calls[0].cwd = Some("/w/p/sub".into());
+    assert!(!ro(&c, Some(&n)));
+    for prog in ["/bin/ls", "./ls", "LS", "ls.exe"] {
+        let n = nah_of(&[&[prog]]);
+        assert!(!ro(&bash(prog), Some(&n)), "{prog}");
+    }
+    // What argv hides.
+    for cmd in [
+        "ls > a",
+        "ls $X",
+        "ls *",
+        "ls `x`",
+        "FOO=1 ls",
+        "ls &",
+        "echo hi > a",
+        "cat a | sh",
+        "bash -c ls",
+        "ls ~",
+    ] {
+        assert!(!read_only(cmd), "{cmd}");
+    }
+    // A shell tool that is not Bash.
+    let c = call("PowerShell", r#"{"command":"ls"}"#);
+    assert!(!ro(&c, Some(&ok)));
+}

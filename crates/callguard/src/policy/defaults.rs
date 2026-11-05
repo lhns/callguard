@@ -142,6 +142,16 @@ pub(crate) fn default_rules() -> Vec<Rule> {
             },
         ),
         rule(
+            "read-only-command",
+            "allow",
+            "read-only commands (ls, cat, git status...) on files inside the project need no review",
+            Match {
+                kind: strings(&["shell"]),
+                read_only: Some(true),
+                ..Default::default()
+            },
+        ),
+        rule(
             "secret-read",
             "ask",
             "reads a common secret location",

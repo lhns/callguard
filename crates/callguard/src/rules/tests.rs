@@ -3235,3 +3235,103 @@ fn rm_root_sees_more_wrappers() {
         assert!(!rm_root(cmd), "{cmd}");
     }
 }
+
+// --- read-only commands ----------------------------------------------------
+
+fn nah_with(calls: &[&[&str]]) -> crate::nah::NahResult {
+    use crate::nah::{NahCall, NahResult, NahVerdict};
+    NahResult {
+        verdict: NahVerdict::Delegate,
+        rule: String::new(),
+        reason: String::new(),
+        coverage: "full".into(),
+        facts: Some(crate::schema::Facts::default()),
+        warnings: Vec::new(),
+        calls: calls
+            .iter()
+            .map(|a| NahCall {
+                argv: Some(a.iter().map(|s| (*s).to_owned()).collect()),
+                program: a[0].to_owned(),
+                cwd: Some("/w/p".into()),
+                via: String::new(),
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn the_default_read_only_rule_allows_a_read_only_call_and_nothing_beats_it_but_deny_and_ask() {
+    let unix = unix();
+    let st = set(&unix, policy::default_rules());
+    let sh = |cmd: &str| Call::new(at("Bash", bash_input(cmd), "/w/p", "/w/p"), &unix);
+    let id = |cmd: &str, nah: &[&[&str]]| {
+        st.match_with(&sh(cmd), Some(&nah_with(nah)))
+            .map(|m| (m.id, m.decision))
+    };
+    assert_eq!(
+        id("ls -la", &[&["ls", "-la"]]),
+        Some(("read-only-command".into(), Decision::Allow))
+    );
+    assert_eq!(
+        id("git status", &[&["git", "status"]]),
+        Some(("read-only-command".into(), Decision::Allow))
+    );
+    // It needs nah's parse.
+    assert_eq!(st.match_with(&sh("ls"), None).map(|m| m.id), None);
+    assert_eq!(st.match_call(&sh("ls")).map(|m| m.id), None);
+    // Not a shell call, not a read-only command.
+    let read = Call::new(at("Read", file_input("/w/p/a"), "/w/p", "/w/p"), &unix);
+    assert_eq!(
+        st.match_with(&read, Some(&nah_with(&[]))).map(|m| m.id),
+        Some("read-in-project".into())
+    );
+    assert_eq!(id("rm a", &[&["rm", "a"]]), None);
+    // An ask rule on the command beats it.
+    assert_eq!(
+        id("cat /w/p/.ssh/id_rsa", &[&["cat", "/w/p/.ssh/id_rsa"]]),
+        Some(("secret-read-shell".into(), Decision::Ask))
+    );
+    // `secret-read` stops the path, so the rule does not apply.
+    assert_eq!(id("cat .env", &[&["cat", ".env"]]), None);
+    assert_eq!(
+        id("cat sub/server.pem", &[&["cat", "sub/server.pem"]]),
+        None
+    );
+    assert_eq!(
+        id("cat a.txt", &[&["cat", "a.txt"]]),
+        Some(("read-only-command".into(), Decision::Allow))
+    );
+    // A user's deny rule on the same call wins.
+    let mut rules = policy::default_rules();
+    rules.push(sh_rule("no-ls", "deny", r"\bls\b"));
+    let st = set(&unix, rules);
+    assert_eq!(
+        st.match_with(&sh("ls"), Some(&nah_with(&[&["ls"]])))
+            .map(|m| (m.id, m.decision)),
+        Some(("no-ls".into(), Decision::Deny))
+    );
+}
+
+#[test]
+fn a_read_only_match_condition_is_a_condition_and_makes_a_rule_valid() {
+    let unix = unix();
+    let rule = |read_only: Option<bool>| Rule {
+        id: "r".into(),
+        decision: "ask".into(),
+        r#match: Match {
+            read_only,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(Set::compile(&[rule(Some(true))], &unix).is_ok());
+    assert!(Set::compile(&[rule(None)], &unix).is_err());
+    let st = Set::compile(&[rule(Some(false))], &unix).unwrap();
+    let c = Call::new(at("Bash", bash_input("rm a"), "/w/p", "/w/p"), &unix);
+    assert!(
+        st.match_with(&c, Some(&nah_with(&[&["rm", "a"]])))
+            .is_some()
+    );
+    let c = Call::new(at("Bash", bash_input("ls"), "/w/p", "/w/p"), &unix);
+    assert!(st.match_with(&c, Some(&nah_with(&[&["ls"]]))).is_none());
+}

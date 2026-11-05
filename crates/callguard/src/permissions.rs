@@ -6,7 +6,9 @@
 //! raw text whenever the parse has a hole. Allow is the opposite: it needs nah
 //! and an independent lexer to agree that every command of the call is one the
 //! rules name, with nothing around them (assignments, redirects, expansions)
-//! that argv would hide. Anything else goes on to the judge.
+//! that argv would hide. Anything else goes on to the judge. The same gate lets
+//! the built-in read-only commands through (`readonly`, rule
+//! `read-only-command`).
 //!
 //! Where this differs from Claude's documentation:
 //! - Specs match argv tokens, never joined text. Deny and ask also match a call
@@ -15,7 +17,9 @@
 //! - Allow is stricter: wrappers (`timeout`, `env`, `cd x &&`), assignments,
 //!   redirects and expansions send the call to the judge, programs compare
 //!   literally, and a long list of open-ended programs and blanket patterns is
-//!   dropped in every layer (the project layer has more limits).
+//!   dropped in every layer (the project layer has more limits). Like Claude,
+//!   an exact rule runs a command nah cannot look into (`npm test`, `pytest`)
+//!   with no look inside; any other gap in nah's answer does not pass.
 //! - `Write`, `NotebookEdit` and `MultiEdit` rules mean `Edit`; `Grep`, `Glob`
 //!   and `LS` mean `Read`. Claude accepts them and never matches.
 //! - `/x` anchors at the project directory in every layer (Claude: at the
@@ -37,6 +41,7 @@
 
 mod lexer;
 mod paths;
+mod readonly;
 mod spec;
 mod web;
 
@@ -46,6 +51,7 @@ use crate::rules::{Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, Rul
 use crate::schema::Decision;
 
 use paths::{Ctx, PathSpec};
+pub(crate) use readonly::read_only;
 pub(crate) use spec::prog_name;
 use spec::{Spec, Tok};
 use web::{Domain, Mcp};
@@ -421,15 +427,6 @@ impl Permissions {
     /// A shell command is allowed only if nah and the independent lexer both
     /// find nothing but commands the allow rules name, literally.
     fn allowed_shell(&self, call: &Call, nah: Option<&NahResult>) -> Option<String> {
-        if !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str()) {
-            return None;
-        }
-        // A real answer of nah for this call, complete but for code it cannot read.
-        let n = nah?;
-        if n.verdict != NahVerdict::Delegate || n.calls.is_empty() {
-            return None;
-        }
-        let script_hidden = opaque_only(n)?;
         let specs: Vec<(&Entry, &Spec)> = self
             .allow
             .iter()
@@ -442,42 +439,71 @@ impl Permissions {
             })
             .collect();
         let literal = |argv: &[String]| {
-            specs.iter().find(|(_, s)| {
-                let mut work = spec::WORK_LIMIT;
-                s.matches(argv, spec::Mode::Allow, &mut work)
-            })
+            specs
+                .iter()
+                .find(|(_, s)| {
+                    let mut work = spec::WORK_LIMIT;
+                    s.matches(argv, spec::Mode::Allow, &mut work)
+                })
+                .map(|(e, _)| *e)
         };
-        if call.cwd.is_empty() {
-            return None;
-        }
-        let want = self.env.fold(&self.env.normalize(&call.cwd, ""));
-        let mut first = None;
-        for c in &n.calls {
-            let argv = c.argv.as_ref()?;
-            // The child that stands for a script nah could not find.
-            if argv.is_empty() && script_hidden {
-                continue;
-            }
-            if argv.is_empty() {
-                return None;
-            }
-            let cwd = c.cwd.as_deref().filter(|c| !c.is_empty())?;
-            if self.env.fold(&self.env.normalize(cwd, "")) != want {
-                return None;
-            }
-            let (e, _) = literal(argv)?;
-            first.get_or_insert(e);
-        }
-        // The second parser. One spelling of the command only: we cannot know
-        // which one the harness runs.
-        if call.raw_commands.len() != 1 {
-            return None;
-        }
-        for seg in lexer::split(&call.raw_commands[0])? {
-            literal(&seg)?;
-        }
-        first.map(|e| e.text.clone())
+        // A rule needs a command to name.
+        let e = shell_gate(&self.env, call, nah, literal)??;
+        Some(e.text.clone())
     }
+}
+
+/// The gate of every shell allow, by rule or built in: nah's answer and the
+/// independent lexer must agree that the call is nothing but commands `pick`
+/// accepts, with nothing around them (assignments, redirects, expansions) that
+/// argv would hide. `pick` returns what the command stands for (the rule that
+/// names it); the value of the first command nah found comes back, which is
+/// `Some(None)` when nah found none (`echo`, `cd`).
+pub(crate) fn shell_gate<T>(
+    env: &Env,
+    call: &Call,
+    nah: Option<&NahResult>,
+    pick: impl Fn(&[String]) -> Option<T>,
+) -> Option<Option<T>> {
+    if !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str()) {
+        return None;
+    }
+    // A real answer of nah for this call, complete but for code it cannot read.
+    let n = nah?;
+    if n.verdict != NahVerdict::Delegate {
+        return None;
+    }
+    let script_hidden = opaque_only(n)?;
+    if call.cwd.is_empty() {
+        return None;
+    }
+    let want = env.fold(&env.normalize(&call.cwd, ""));
+    let mut first = None;
+    for c in &n.calls {
+        let argv = c.argv.as_ref()?;
+        // The child that stands for a script nah could not find.
+        if argv.is_empty() && script_hidden {
+            continue;
+        }
+        if argv.is_empty() {
+            return None;
+        }
+        let cwd = c.cwd.as_deref().filter(|c| !c.is_empty())?;
+        if env.fold(&env.normalize(cwd, "")) != want {
+            return None;
+        }
+        let t = pick(argv)?;
+        first.get_or_insert(t);
+    }
+    // The second parser. One spelling of the command only: we cannot know
+    // which one the harness runs.
+    if call.raw_commands.len() != 1 {
+        return None;
+    }
+    for seg in lexer::split(&call.raw_commands[0])? {
+        pick(&seg)?;
+    }
+    Some(first)
 }
 
 /// Gaps nah reports for a command that runs code of the repository, which it
