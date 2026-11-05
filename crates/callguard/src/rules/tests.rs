@@ -165,7 +165,7 @@ fn normalize_and_in_dir() {
 }
 
 #[test]
-fn path_clean_and_base() {
+fn path_clean_cases() {
     for (p, want) in [
         ("", "."),
         ("a//b/./c/..", "a/b"),
@@ -176,15 +176,6 @@ fn path_clean_and_base() {
         ("/", "/"),
     ] {
         assert_eq!(path_clean(p), want, "clean({p:?})");
-    }
-    for (p, want) in [
-        ("", "."),
-        ("/", "/"),
-        ("a/b/", "b"),
-        ("//", "/"),
-        ("x.exe", "x.exe"),
-    ] {
-        assert_eq!(path_base(p), want, "base({p:?})");
     }
 }
 
@@ -3000,6 +2991,10 @@ fn shell_guards_see_through_empty_quotes() {
         assert_eq!(id(cmd), None, "{cmd}");
     }
     assert!(runs_trust_verb(r#"callguard tr""ust"#));
+    assert!(
+        runs_trust_verb("callguard.cmd trust"),
+        "a script name counts"
+    );
     assert!(!runs_trust_verb(r#"callguard tr""ust --list"#));
     // The last value of a flag wins, so a later `=false` turns the list off.
     for c in [

@@ -13,6 +13,7 @@ use regex::Regex;
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+use crate::permissions::prog_name;
 use crate::policy::{self, quote_string};
 
 /// Tool kinds (design section 4).
@@ -246,18 +247,6 @@ pub(crate) fn path_clean(p: &str) -> String {
     }
 }
 
-/// The last element of a slash path.
-fn path_base(p: &str) -> &str {
-    if p.is_empty() {
-        return ".";
-    }
-    let p = p.trim_end_matches('/');
-    if p.is_empty() {
-        return "/";
-    }
-    p.rsplit('/').next().unwrap_or(p)
-}
-
 /// Replaces a lone UTF-16 surrogate escape in a JSON string with `\ufffd`, as
 /// the decoder of earlier versions did. `serde_json` accepts such an escape in a raw value but
 /// fails when it decodes the string, and the call would then be matched on its
@@ -312,30 +301,6 @@ pub(crate) fn sanitize_surrogates(json: &str) -> std::borrow::Cow<'_, str> {
     out.into()
 }
 
-/// Compacts valid JSON: drops whitespace outside strings.
-fn compact_json(json: &str) -> String {
-    let mut out = String::with_capacity(json.len());
-    let (mut in_string, mut escaped) = (false, false);
-    for c in json.chars() {
-        if in_string {
-            out.push(c);
-            if escaped {
-                escaped = false;
-            } else if c == '\\' {
-                escaped = true;
-            } else if c == '"' {
-                in_string = false;
-            }
-        } else if c == '"' {
-            in_string = true;
-            out.push(c);
-        } else if !matches!(c, ' ' | '\t' | '\n' | '\r') {
-            out.push(c);
-        }
-    }
-    out
-}
-
 /// Every string in a JSON value, objects in key order.
 fn collect_strings(v: &Value, out: &mut Vec<String>) {
     match v {
@@ -353,31 +318,8 @@ fn collect_strings(v: &Value, out: &mut Vec<String>) {
 /// command read this way is the one the host runs, so a differently cased key
 /// must not hide it.
 pub fn input_string_field(input: &str, name: &str) -> String {
-    struct Pairs(Vec<(String, Box<RawValue>)>);
-    impl<'de> serde::Deserialize<'de> for Pairs {
-        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-            struct V;
-            impl<'de> serde::de::Visitor<'de> for V {
-                type Value = Pairs;
-                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                    f.write_str("a JSON object")
-                }
-                fn visit_map<A: serde::de::MapAccess<'de>>(
-                    self,
-                    mut m: A,
-                ) -> Result<Pairs, A::Error> {
-                    let mut v = Vec::new();
-                    while let Some(kv) = m.next_entry::<String, Box<RawValue>>()? {
-                        v.push(kv);
-                    }
-                    Ok(Pairs(v))
-                }
-            }
-            d.deserialize_map(V)
-        }
-    }
     let text = sanitize_surrogates(input);
-    let Ok(Pairs(pairs)) = serde_json::from_str::<Pairs>(&text) else {
+    let Ok(pairs) = crate::serde_util::members(text.as_bytes()) else {
         return String::new();
     };
     let mut found = String::new();
@@ -466,18 +408,6 @@ pub(crate) fn resolve_real(p: &str) -> Option<String> {
     } else {
         s.strip_prefix("//?/").unwrap_or(&s).to_owned()
     })
-}
-
-/// Escapes regex metacharacters.
-fn quote_meta(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        if "\\.+*?()|[]{}^$".contains(c) {
-            out.push('\\');
-        }
-        out.push(c);
-    }
-    out
 }
 
 /// Windows names `//?/C:/x` and `//./C:/x` the file `C:/x`, `//?/UNC/h/s` the
@@ -728,7 +658,7 @@ impl Env {
                 i += end + 1;
             } else {
                 let ch = g[i..].chars().next().unwrap_or('\u{fffd}');
-                b.push_str(&quote_meta(&ch.to_string()));
+                b.push_str(&regex::escape(&ch.to_string()));
                 i += ch.len_utf8();
             }
         }
@@ -966,7 +896,7 @@ impl Call {
                     c.fields.insert(k, value);
                 }
             }
-            c.whole = compact_json(raw.get());
+            c.whole = crate::json_text::compact(raw.get());
             let mut leaves = Vec::new();
             if let Ok(v) = serde_json::from_str::<Value>(&text) {
                 collect_strings(&v, &mut leaves);
@@ -1174,12 +1104,6 @@ fn command_flag(name: &str) -> Option<fn(&str) -> bool> {
     })
 }
 
-/// The lower-case base name of a command word.
-fn command_name(tok: &str) -> String {
-    let base = path_base(&tok.replace('\\', "/")).to_owned();
-    base.strip_suffix(".exe").unwrap_or(&base).to_lowercase()
-}
-
 /// The index of the command a wrapper at `toks[i - 1]` runs.
 fn skip_wrapper(toks: &[&str], mut i: usize, valued: &[&str]) -> usize {
     let mut positional = valued
@@ -1224,7 +1148,7 @@ pub fn rm_root(command: &str) -> bool {
             .collect();
         let mut i = 0;
         while i < toks.len() {
-            let name = command_name(toks[i]);
+            let name = prog_name(toks[i], true);
             if let Some(is_flag) = command_flag(&name) {
                 // The command is the text after the flag; without one, nothing
                 // runs that we can read.
@@ -1247,7 +1171,7 @@ pub fn rm_root(command: &str) -> bool {
         if i >= toks.len() {
             continue;
         }
-        let name = command_name(toks[i]);
+        let name = prog_name(toks[i], true);
         if !REMOVERS.contains(&name.as_str()) {
             continue;
         }
@@ -1291,14 +1215,14 @@ pub fn runs_trust_verb(command: &str) -> bool {
     // The text as written, and with quotes and backslashes removed, where
     // `tr""ust` is `trust`.
     [command.to_owned(), unquoted(command)].iter().any(|text| {
-        text.split([';', '&', '|', '\n', '(', ')', '`']).any(|seg| {
+        SEGMENT_SPLIT.split(text).any(|seg| {
             let words: Vec<String> = seg
                 .replace(['\'', '"'], " ")
                 .split_whitespace()
                 .map(str::to_owned)
                 .collect();
             words.iter().enumerate().any(|(i, w)| {
-                command_name(w) == "callguard"
+                prog_name(w, true) == "callguard"
                     && words.get(i + 1).is_some_and(|n| n == "trust")
                     && !plain_list(&words[i + 2..])
             })
@@ -1403,7 +1327,7 @@ impl Builtin {
         for p in extra {
             // Cleaned like the paths of a call, so a `..` in the setting still matches.
             let p = env.normalize(p, "");
-            let mut pat = format!("^{}$", quote_meta(&p));
+            let mut pat = format!("^{}$", regex::escape(&p));
             if env.caseless() {
                 pat.insert_str(0, "(?i)");
             }

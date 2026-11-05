@@ -48,7 +48,8 @@ use crate::rules::{
 };
 
 use paths::{Ctx, PathSpec};
-use spec::{Spec, Tok, prog_name};
+pub(crate) use spec::prog_name;
+use spec::{Spec, Tok};
 use web::{Domain, Mcp};
 
 const WEBFETCH_TOOLS: [&str; 3] = ["WebFetch", "webfetch", "web_extract"];

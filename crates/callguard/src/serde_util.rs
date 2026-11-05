@@ -54,7 +54,7 @@ pub fn require_object(body: &[u8]) -> Result<(), String> {
 }
 
 /// The members of a JSON object in order, each value kept as raw text.
-fn members(body: &[u8]) -> Result<Vec<(String, Box<RawValue>)>, String> {
+pub(crate) fn members(body: &[u8]) -> Result<Vec<(String, Box<RawValue>)>, String> {
     use serde::de::{MapAccess, Visitor};
     struct V;
     impl<'de> Visitor<'de> for V {
