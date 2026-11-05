@@ -22,7 +22,7 @@ use crate::judge::{self, JudgeError, JudgeResult};
 use crate::nah::{NahEngine, NahRequest, NahResult, NahVerdict};
 use crate::permissions::Permissions;
 use crate::policy::{self, Policy, UserConfig, quote_string};
-use crate::rules::{self, Builtin, Call, CallInput, Env, Set, input_string_field};
+use crate::rules::{self, Builtin, Call, CallInput, Env, Set};
 use crate::schema::{
     Decision, Facts, LAYER_BUILTIN, LAYER_LLM, LAYER_NAH, LAYER_NONE, LAYER_RULES, REQUEST_SCHEMA,
     Request, VERDICT_SCHEMA, Verdict,
@@ -88,7 +88,8 @@ type JudgeFn = Box<
 >;
 
 /// The host probe with its runner bound; tests replace it.
-type ProbeFn = Box<dyn Fn(&str, &str, Option<&Meta>, Instant) -> Option<Meta> + Send + Sync>;
+type ProbeFn =
+    Box<dyn Fn(&str, &[Vec<String>], Option<&Meta>, Instant) -> Option<Meta> + Send + Sync>;
 
 struct Inner {
     pol: Policy,
@@ -240,8 +241,8 @@ impl Engine {
         let probe: Option<ProbeFn> = if opts.no_host_meta {
             None
         } else {
-            Some(Box::new(|cwd, command, have, deadline| {
-                hostmeta::probe(&hostmeta::exec_runner, cwd, command, have, deadline)
+            Some(Box::new(|cwd, commands, have, deadline| {
+                hostmeta::probe(&hostmeta::exec_runner, cwd, commands, have, deadline)
             }))
         };
         let logger = match log_path(&pol, &opts) {
@@ -773,8 +774,8 @@ impl Inner {
             && !req.cwd.is_empty()
             && call.kind == rules::KIND_SHELL
         {
-            let command = input_string_field(req.tool.input_str(), "command");
-            meta = probe(&req.cwd, &command, req.meta.as_ref(), deadline);
+            let commands = probe_argvs(call, nah_res);
+            meta = probe(&req.cwd, &commands, req.meta.as_ref(), deadline);
         }
         if let Some(m) = meta {
             input.git_status = m.git_status;
@@ -979,6 +980,22 @@ pub fn resolve_project_dir(req: &Request) -> String {
         }
     }
     req.cwd.clone()
+}
+
+/// The commands of a shell call, one argv each, for host probing: what nah
+/// unwrapped the call into, else what the independent lexer reads from the
+/// command. A command neither can spell gives no argv, so it is not probed
+/// (the judge then has no git status for it, which it reads as unknown).
+fn probe_argvs(call: &Call, nah_res: Option<&NahResult>) -> Vec<Vec<String>> {
+    match nah_res.filter(|r| !r.calls.is_empty()) {
+        Some(r) => r.calls.iter().filter_map(|c| c.argv.clone()).collect(),
+        None => call
+            .raw_commands
+            .iter()
+            .filter_map(|c| crate::permissions::lexer::split(c))
+            .flatten()
+            .collect(),
+    }
 }
 
 /// Where the decision log goes for `pol` and `opts` (None = no log). The error

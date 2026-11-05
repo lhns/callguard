@@ -1881,6 +1881,15 @@ fn facts_reach_the_judge() {
     assert!(v.last().facts.is_none(), "no facts expected");
 }
 
+/// The probed argvs as text: words joined by spaces, commands by " ; ".
+fn joined(argvs: &[Vec<String>]) -> String {
+    argvs
+        .iter()
+        .map(|a| a.join(" "))
+        .collect::<Vec<_>>()
+        .join(" ; ")
+}
+
 #[test]
 fn host_meta_probe() {
     let (mut e, v) = new_test_engine(
@@ -1892,7 +1901,7 @@ fn host_meta_probe() {
     let s = Arc::clone(&seen);
     with_inner(&mut e, |i| {
         i.probe = Some(Box::new(move |cwd, command, have, _| {
-            *s.lock().unwrap() = (cwd.into(), command.into(), have.cloned());
+            *s.lock().unwrap() = (cwd.into(), joined(command), have.cloned());
             Some(Meta {
                 git_status: Some(hostmeta::GitStatus {
                     clean: true,
@@ -1959,12 +1968,46 @@ fn the_probe_reads_the_command_whatever_the_key_case() {
     let s = Arc::clone(&seen);
     with_inner(&mut e, |i| {
         i.probe = Some(Box::new(move |_, command, _, _| {
-            *s.lock().unwrap() = command.into();
+            *s.lock().unwrap() = joined(command);
             None
         }));
     });
     e.decide(&call("Bash", r#"{"Command":"git push origin main"}"#));
     assert_eq!(*seen.lock().unwrap(), "git push origin main");
+}
+
+/// What the host probe is asked about for `cmd`, with the given nah calls.
+fn probed_commands(cmd: &str, calls: &[&[&'static str]]) -> String {
+    let (mut e, _) = perm_engine((&[], &[], &[]), NahMode::Delegate, calls, |_| {});
+    let seen: Arc<Mutex<String>> = Arc::default();
+    let s = Arc::clone(&seen);
+    with_inner(&mut e, |i| {
+        i.probe = Some(Box::new(move |_, commands, _, _| {
+            *s.lock().unwrap() = joined(commands);
+            None
+        }));
+    });
+    e.decide(&bash(cmd));
+    seen.lock().unwrap().clone()
+}
+
+#[test]
+fn the_probe_sees_the_commands_nah_unwrapped_the_call_into() {
+    // `bash -c 'git push'` hides the push from the lexer; nah sees it.
+    assert_eq!(
+        probed_commands(
+            "bash -c 'git push'",
+            &[&["bash", "-c", "git push"], &["git", "push"]]
+        ),
+        "bash -c git push ; git push"
+    );
+    // Without nah calls the lexer reads the command.
+    assert_eq!(
+        probed_commands("git add . && git push", &[]),
+        "git add . ; git push"
+    );
+    // A command the lexer refuses and nah did not parse is not probed.
+    assert_eq!(probed_commands("git reset --hard HEAD~1", &[]), "");
 }
 
 // --- fail-safe (needs the real judge and the fake backends) ---------------

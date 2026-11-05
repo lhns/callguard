@@ -35,7 +35,7 @@
 //!   only a bare `Edit`; a relative path with no working directory matches
 //!   no path rule.
 
-mod lexer;
+pub(crate) mod lexer;
 mod paths;
 mod spec;
 mod web;

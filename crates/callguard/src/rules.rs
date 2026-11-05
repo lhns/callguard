@@ -313,27 +313,6 @@ fn collect_strings(v: &Value, out: &mut Vec<String>) {
     }
 }
 
-/// The string value of the top-level key `name` of a tool input, with
-/// struct-decoding rules: the key matches in any letter case, the last
-/// string-valued match wins, other types and null are skipped. A shell
-/// command read this way is the one the host runs, so a differently cased key
-/// must not hide it.
-pub fn input_string_field(input: &str, name: &str) -> String {
-    let text = sanitize_surrogates(input);
-    let Ok(pairs) = crate::serde_util::members(text.as_bytes()) else {
-        return String::new();
-    };
-    let mut found = String::new();
-    for (k, v) in pairs {
-        if k.eq_ignore_ascii_case(name)
-            && let Ok(s) = serde_json::from_str::<String>(v.get())
-        {
-            found = s;
-        }
-    }
-    found
-}
-
 // --- Paths ------------------------------------------------------------------
 
 /// What path handling needs from the host. A call's path is also resolved

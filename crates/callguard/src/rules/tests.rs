@@ -589,24 +589,6 @@ fn sanitize_surrogates_keeps_valid_text() {
     );
 }
 
-#[test]
-fn input_string_field_follows_go_struct_decoding() {
-    for (json, want) in [
-        (r#"{"command":"ls"}"#, "ls"),
-        (r#"{"Command":"ls"}"#, "ls"),
-        (r#"{"COMMAND":"ls"}"#, "ls"),
-        (r#"{"command":"a","Command":"b"}"#, "b"),
-        (r#"{"command":"a","Command":5}"#, "a"),
-        (r#"{"command":"a","Command":null}"#, "a"),
-        (r#"{"command":5}"#, ""),
-        (r#"{"cmd":"ls"}"#, ""),
-        (r#"["command"]"#, ""),
-        (r#"{"command":"x\ud800\ny"}"#, "x\u{fffd}\ny"),
-    ] {
-        assert_eq!(input_string_field(json, "command"), want, "{json}");
-    }
-}
-
 fn set(env: &Env, rules: Vec<Rule>) -> Set {
     Set::compile(&rules, env).unwrap()
 }

@@ -14,6 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::child::{kill, read_in_background, wait_until};
+use crate::permissions::prog_name;
 use crate::rules::builtin_regex;
 use crate::serde_util::{is_false, is_zero, nullable};
 
@@ -172,24 +173,24 @@ fn run_process(
     }
 }
 
-/// Fills in what `have` lacks for a shell command run in `cwd`: the git status
-/// when the command can destroy or publish uncommitted work, and the
-/// destination's visibility when it pushes or publishes. Returns `have` plus
-/// the new observations, `have` itself if there are none. `cwd == ""` skips
-/// probing.
+/// Fills in what `have` lacks for the commands (one argv each) of a shell call
+/// run in `cwd`: the git status when a command can destroy or publish
+/// uncommitted work, and the destination's visibility when it pushes or
+/// publishes. Returns `have` plus the new observations, `have` itself if there
+/// are none. `cwd == ""` or no command skips probing.
 pub fn probe(
     run: &Runner,
     cwd: &str,
-    command: &str,
+    commands: &[Vec<String>],
     have: Option<&Meta>,
     deadline: Instant,
 ) -> Option<Meta> {
-    if cwd.is_empty() || command.is_empty() {
+    if cwd.is_empty() || commands.is_empty() {
         return have.cloned();
     }
     let mut out = have.cloned().unwrap_or_default();
-    let want_status = out.git_status.is_none() && needs_status(command);
-    let dests = destinations(command);
+    let want_status = out.git_status.is_none() && needs_status(commands);
+    let dests = destinations(commands);
     let want_vis = out.repo_visibility.is_empty() && !dests.is_empty();
     if !want_status && !want_vis {
         return have.cloned();
@@ -264,67 +265,71 @@ pub fn parse_status(porcelain: &str) -> GitStatus {
     st
 }
 
-static RM_RECURSIVE_RE: LazyLock<Regex> =
-    LazyLock::new(|| builtin_regex(r"(?i)(^|[\s;&|(])rm\s+(-[a-z]*r|--recursive)"));
-static REMOVE_ITEM_RE: LazyLock<Regex> =
-    LazyLock::new(|| builtin_regex(r"(?i)\bRemove-Item\b[^;&|\n]*-Recurse"));
-static SEP_RE: LazyLock<Regex> = LazyLock::new(|| builtin_regex(r"&&|\|\||[;|\n&]"));
 static SCP_RE: LazyLock<Regex> =
     LazyLock::new(|| builtin_regex(r"^(?:[^@/\s]+@)?([^:/\s]+):(.+)$"));
 
-/// Whether the command can destroy uncommitted work or stage, commit or
-/// publish it.
-pub fn needs_status(command: &str) -> bool {
-    if RM_RECURSIVE_RE.is_match(command) || REMOVE_ITEM_RE.is_match(command) {
-        return true;
+/// The words after the first one in `argv` that names program `name`
+/// (wrappers such as `sudo` or `env` come before it).
+fn after_program<'a>(argv: &'a [String], name: &str) -> Option<&'a [String]> {
+    let i = argv.iter().position(|w| prog_name(w, true) == name)?;
+    Some(&argv[i + 1..])
+}
+
+/// `-r`, `-fR`, `-vrf`, `--recursive`.
+fn is_recursive_flag(a: &str) -> bool {
+    if let Some(short) = a.strip_prefix('-').filter(|s| !s.starts_with('-')) {
+        return short
+            .chars()
+            .take_while(char::is_ascii_alphabetic)
+            .any(|c| c == 'r' || c == 'R');
     }
-    for seg in SEP_RE.split(command) {
-        let fields: Vec<&str> = seg.split_whitespace().collect();
-        let Some(g) = parse_git(&fields) else {
-            continue;
+    a.to_ascii_lowercase().starts_with("--recursive")
+}
+
+/// Whether a command can destroy uncommitted work or stage, commit or
+/// publish it. `commands` holds one argv per command.
+pub fn needs_status(commands: &[Vec<String>]) -> bool {
+    commands.iter().any(|argv| {
+        if after_program(argv, "rm").is_some_and(|a| a.iter().any(|a| is_recursive_flag(a)))
+            || after_program(argv, "remove-item").is_some_and(|a| {
+                a.iter()
+                    .any(|a| a.to_ascii_lowercase().starts_with("-recurse"))
+            })
+        {
+            return true;
+        }
+        let Some(g) = parse_git(argv) else {
+            return false;
         };
-        let has = |v: &str| g.args.contains(&v);
-        let hit = match g.sub {
+        let has = |v: &str| g.args.iter().any(|a| a == v);
+        match g.sub {
             "add" | "stage" | "commit" | "push" | "restore" | "clean" => true,
             "reset" => has("--hard"),
             "checkout" => has("--") || has("."),
-            "stash" => g
-                .args
-                .first()
-                .is_some_and(|a| *a == "drop" || *a == "clear"),
-            "worktree" => g.args.first().is_some_and(|a| *a == "remove"),
+            "stash" => g.args.first().is_some_and(|a| a == "drop" || a == "clear"),
+            "worktree" => g.args.first().is_some_and(|a| a == "remove"),
             _ => false,
-        };
-        if hit {
-            return true;
         }
-    }
-    false
+    })
 }
 
 struct GitCall<'a> {
     sub: &'a str,
-    args: &'a [&'a str],
+    args: &'a [String],
 }
 
-/// Finds `git [global options] <sub> <args>` in `fields`.
-fn parse_git<'a>(fields: &'a [&'a str]) -> Option<GitCall<'a>> {
-    for (i, f) in fields.iter().enumerate() {
-        if *f != "git" && !f.ends_with("/git") && !f.ends_with("\\git") && *f != "git.exe" {
-            continue;
+/// Finds `git [global options] <sub> <args>` in `argv`.
+fn parse_git(argv: &[String]) -> Option<GitCall<'_>> {
+    let mut rest = after_program(argv, "git")?;
+    while rest.first().is_some_and(|r| r.starts_with('-')) {
+        if (rest[0] == "-C" || rest[0] == "-c") && rest.len() > 1 {
+            rest = &rest[2..];
+        } else {
+            rest = &rest[1..];
         }
-        let mut rest = &fields[i + 1..];
-        while rest.first().is_some_and(|r| r.starts_with('-')) {
-            if (rest[0] == "-C" || rest[0] == "-c") && rest.len() > 1 {
-                rest = &rest[2..];
-            } else {
-                rest = &rest[1..];
-            }
-        }
-        let (sub, args) = rest.split_first()?;
-        return Some(GitCall { sub, args });
     }
-    None
+    let (sub, args) = rest.split_first()?;
+    Some(GitCall { sub, args })
 }
 
 /// Where a command pushes or publishes: a remote name, a URL or a gh repo
@@ -347,29 +352,26 @@ fn gh_publishes(sub: &str, verb: &str) -> bool {
     )
 }
 
-/// The push and publish destinations of `command`: the first non-flag argument
-/// of `git push` (default origin), the URL of `git remote add|set-url`, and
-/// the --repo/-R value of publishing gh commands (default origin).
-pub fn destinations(command: &str) -> Vec<Destination> {
+/// The push and publish destinations of `commands` (one argv each): the first
+/// non-flag argument of `git push` (default origin), the URL of
+/// `git remote add|set-url`, and the --repo/-R value of publishing gh commands
+/// (default origin).
+pub fn destinations(commands: &[Vec<String>]) -> Vec<Destination> {
     let mut out: Vec<Destination> = Vec::new();
     let mut add = |d: Destination| {
         if !out.contains(&d) {
             out.push(d);
         }
     };
-    for seg in SEP_RE.split(command) {
-        let fields: Vec<&str> = seg.split_whitespace().collect();
-        if let Some(g) = parse_git(&fields) {
+    for argv in commands {
+        if let Some(g) = parse_git(argv) {
             match g.sub {
                 "push" => add(Destination {
                     raw: first_non_flag(g.args, 0, "origin"),
                     gh: false,
                 }),
                 "remote" => {
-                    if g.args
-                        .first()
-                        .is_some_and(|a| *a == "add" || *a == "set-url")
-                    {
+                    if g.args.first().is_some_and(|a| a == "add" || a == "set-url") {
                         let u = first_non_flag(&g.args[1..], 1, "");
                         if !u.is_empty() {
                             add(Destination { raw: u, gh: false });
@@ -380,12 +382,12 @@ pub fn destinations(command: &str) -> Vec<Destination> {
             }
             continue;
         }
-        if let Some((sub, verb, rest)) = parse_gh(&fields)
+        if let Some((sub, verb, rest)) = parse_gh(argv)
             && gh_publishes(sub, verb)
         {
             let mut repo = "origin".to_owned();
             for (i, f) in rest.iter().enumerate() {
-                if (*f == "--repo" || *f == "-R") && i + 1 < rest.len() {
+                if (f == "--repo" || f == "-R") && i + 1 < rest.len() {
                     repo = rest[i + 1].to_owned();
                 } else if let Some(v) = f.strip_prefix("--repo=") {
                     repo = v.to_owned();
@@ -398,26 +400,21 @@ pub fn destinations(command: &str) -> Vec<Destination> {
     out
 }
 
-fn parse_gh<'a>(fields: &'a [&'a str]) -> Option<(&'a str, &'a str, &'a [&'a str])> {
-    for (i, f) in fields.iter().enumerate() {
-        if *f == "gh" || *f == "gh.exe" || f.ends_with("/gh") {
-            if fields.len() < i + 3 {
-                return None;
-            }
-            return Some((fields[i + 1], fields[i + 2], &fields[i + 3..]));
-        }
+fn parse_gh(argv: &[String]) -> Option<(&str, &str, &[String])> {
+    match after_program(argv, "gh")? {
+        [sub, verb, rest @ ..] => Some((sub, verb, rest)),
+        _ => None,
     }
-    None
 }
 
-/// The `n`-th (0-based) argument not starting with "-", with quotes trimmed.
-fn first_non_flag(args: &[&str], mut n: usize, default: &str) -> String {
+/// The `n`-th (0-based) argument not starting with "-".
+fn first_non_flag(args: &[String], mut n: usize, default: &str) -> String {
     for a in args {
         if a.starts_with('-') {
             continue;
         }
         if n == 0 {
-            return a.trim_matches(|c| c == '"' || c == '\'').to_owned();
+            return a.clone();
         }
         n -= 1;
     }
@@ -629,6 +626,11 @@ mod tests {
         }
     }
 
+    /// The argvs of a command line as the independent lexer reads them.
+    fn argvs(command: &str) -> Vec<Vec<String>> {
+        crate::permissions::lexer::split(command).unwrap_or_default()
+    }
+
     fn soon() -> Instant {
         Instant::now() + Duration::from_secs(5)
     }
@@ -655,7 +657,7 @@ mod tests {
     #[test]
     fn needs_status_cases() {
         let yes = [
-            "git reset --hard HEAD~1",
+            "git reset --hard HEAD^",
             "git checkout -- .",
             "git checkout .",
             "git restore f",
@@ -684,15 +686,50 @@ mod tests {
             "echo rm -rf", // quoted text is best effort; this one matches
             "ls",
         ];
-        for c in yes {
-            assert!(needs_status(c), "want status for {c:?}");
-        }
+        let missed: Vec<_> = yes.iter().filter(|c| !needs_status(&argvs(c))).collect();
+        assert!(missed.is_empty(), "want status for {missed:?}");
         for c in no {
             assert!(
-                !needs_status(c) || c == "echo rm -rf",
+                !needs_status(&argvs(c)) || c == "echo rm -rf",
                 "no status for {c:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_command_the_lexer_refuses_is_not_probed() {
+        // `~` is refused by the lexer (it is `git reset --hard HEAD~1` that used
+        // to give a status); with no nah parse the command has no argv.
+        assert!(argvs("git reset --hard HEAD~1").is_empty());
+        let run = |_: &[String], _: &str, _: &[&str], _: Instant| -> io::Result<Vec<u8>> {
+            panic!("nothing to probe")
+        };
+        let cmds = argvs("git push origin $(git branch --show-current)");
+        assert_eq!(probe(&run, "/w", &cmds, None, soon()), None);
+    }
+
+    #[test]
+    fn argv_decides_not_text() {
+        let a = |words: &[&str]| vec![words.iter().map(|w| (*w).to_owned()).collect::<Vec<_>>()];
+        // One argv word holding a command line is not a command.
+        assert!(!needs_status(&a(&["bash", "-c", "git push"])));
+        assert!(needs_status(&a(&[
+            "sudo",
+            "/usr/bin/git.exe",
+            "-C",
+            "/r",
+            "push"
+        ])));
+        assert!(needs_status(&a(&["rm", "-Rf", "x"])));
+        assert!(needs_status(&a(&["rm", "--recursive", "x"])));
+        assert!(!needs_status(&a(&["rm", "x"])));
+        assert_eq!(
+            destinations(&a(&["gh", "pr", "create", "--repo=o/r"])),
+            vec![Destination {
+                raw: "o/r".into(),
+                gh: true
+            }]
+        );
     }
 
     #[test]
@@ -723,7 +760,7 @@ mod tests {
             ("git status", vec![]),
         ];
         for (cmd, want) in cases {
-            assert_eq!(destinations(cmd), want, "{cmd:?}");
+            assert_eq!(destinations(&argvs(cmd)), want, "{cmd:?}");
         }
     }
 
@@ -764,7 +801,7 @@ mod tests {
         ]));
         let s2 = s.clone();
         let run = move |e: &[String], n: &str, a: &[&str], d: Instant| s2.run(e, n, a, d);
-        let got = probe(&run, "/w", "git add . && git push", None, soon()).unwrap();
+        let got = probe(&run, "/w", &argvs("git add . && git push"), None, soon()).unwrap();
         let st = got.git_status.unwrap();
         assert_eq!((st.untracked, st.staged), (1, 1));
         assert_eq!(got.repo_visibility, vec![vis("github.com/o/r", "public")]);
@@ -778,12 +815,12 @@ mod tests {
             repo_visibility: vec![vis("h/o/r", "private")],
         };
         let before = s.calls();
-        let got = probe(&run, "/w", "git push", Some(&have), soon());
+        let got = probe(&run, "/w", &argvs("git push"), Some(&have), soon());
         assert_eq!(got, Some(have));
         assert_eq!(s.calls(), before);
         // No cwd, no probing; a harmless command spawns nothing.
-        assert_eq!(probe(&run, "", "git push", None, soon()), None);
-        assert_eq!(probe(&run, "/w", "ls", None, soon()), None);
+        assert_eq!(probe(&run, "", &argvs("git push"), None, soon()), None);
+        assert_eq!(probe(&run, "/w", &argvs("ls"), None, soon()), None);
         assert_eq!(s.calls(), before);
 
         // Failures: no status, unknown visibility with the resolved remote.
@@ -792,7 +829,14 @@ mod tests {
             "https://gitlab.com/o/r.git",
         )]));
         let run = move |e: &[String], n: &str, a: &[&str], d: Instant| f.run(e, n, a, d);
-        let got = probe(&run, "/w", "git commit -m x && git push", None, soon()).unwrap();
+        let got = probe(
+            &run,
+            "/w",
+            &argvs("git commit -m x && git push"),
+            None,
+            soon(),
+        )
+        .unwrap();
         assert!(got.git_status.is_none());
         assert_eq!(got.repo_visibility, vec![vis("gitlab.com/o/r", "unknown")]);
     }
@@ -807,7 +851,7 @@ mod tests {
         let got = probe(
             &slow,
             "/w",
-            "git push",
+            &argvs("git push"),
             None,
             Instant::now() + Duration::from_secs(60),
         )
