@@ -410,8 +410,18 @@ fn the_five_gap_commands_today() {
             v["rule"],
             warnings(&v)
         );
+        // `ssh host rm -rf /` is also caught as a removal of the root by the
+        // built-in `rm-critical`, which reads the remote command's words; both
+        // ask, so the layer may be either.
+        let layer = v["layer"].as_str().unwrap();
+        let layer =
+            if command.starts_with("ssh ") && layer == "builtin" && v["rule"] == "rm-critical" {
+                want_layer
+            } else {
+                layer
+            };
         assert_eq!(
-            (decision(&v), v["layer"].as_str().unwrap()),
+            (decision(&v), layer),
             (want_decision, want_layer),
             "{command}: {v}"
         );
