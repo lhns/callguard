@@ -382,6 +382,13 @@ fn new_call() {
     assert_eq!(c.path, "/w/n.ipynb");
     let c = Call::new(input("execute_code", r#"{"code":"print(1)"}"#), &unix);
     assert_eq!(c.command, "print(1)");
+    // Both fields count: a harmless `command` is no cover for `code`.
+    let c = Call::new(
+        input("execute_code", r#"{"command":"ls","code":"rm -rf /"}"#),
+        &unix,
+    );
+    assert_eq!(c.raw_commands, ["ls", "rm -rf /"]);
+    assert!(c.command.contains("rm -rf /"), "{c:?}");
     let c = Call::new(
         input("WebFetch", r#"{"url":"https://x.test","n":3}"#),
         &unix,

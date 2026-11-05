@@ -972,8 +972,12 @@ impl Call {
         if kind == KIND_SHELL {
             // Every spelling counts: we can't know which one the harness reads.
             c.raw_commands = field_values(&c.fields, "command");
-            if c.raw_commands.is_empty() && input.tool == "execute_code" {
-                c.raw_commands = field_values(&c.fields, "code");
+            if input.tool == "execute_code" {
+                for code in field_values(&c.fields, "code") {
+                    if !c.raw_commands.contains(&code) {
+                        c.raw_commands.push(code);
+                    }
+                }
             }
             let all = c.raw_commands.join("\n");
             c.command = join_continuations(&all, " ");
