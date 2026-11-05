@@ -297,7 +297,13 @@ impl Engine {
         o.warnings.extend(l.warnings.iter().cloned());
         // The system default directory is protected by a built-in glob; an
         // explicit --policy file and the user layer file are protected here.
-        for p in [opts.system_policy, policy::user_path(&opts.user_config_dir)] {
+        let user_file = policy::user_path(&opts.user_config_dir);
+        // `rm -rf ~/.config/callguard` names the directory, not the file.
+        let user_dir = std::path::Path::new(&user_file)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        for p in [opts.system_policy, user_file, user_dir] {
             if p.is_empty() {
                 continue;
             }

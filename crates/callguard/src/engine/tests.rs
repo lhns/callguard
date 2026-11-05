@@ -2105,6 +2105,32 @@ fn load_protects_policy_files() {
 }
 
 #[test]
+fn deleting_the_user_config_directory_is_a_self_protect_ask() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let sys = d.join("sys.json");
+    fs::write(&sys, r#"{"policy_version":1}"#).unwrap();
+    let user_dir = d.join("config");
+    let e = Engine::load(LoadOptions {
+        system_policy: path_str(&sys),
+        user_config_dir: path_str(&user_dir),
+        options: Options {
+            log_path: "-".into(),
+            backend: Some(answer("allow", 1.0)),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .unwrap();
+    let slashed = path_str(&user_dir.join("callguard")).replace(std::path::MAIN_SEPARATOR, "/");
+    let got = e.decide(&bash(&format!("rm -rf {slashed}")));
+    assert!(
+        got.decision == Decision::Ask && got.rule == "self-protect-shell",
+        "{got:?}"
+    );
+}
+
+#[test]
 fn resolve_project_dir_finds_the_git_root() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().to_path_buf();
