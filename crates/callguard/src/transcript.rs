@@ -35,7 +35,7 @@ pub const OUTCOME_CLASSIFIER_UNAVAILABLE: &str = "classifier-unavailable";
 const TAIL_BYTES: u64 = 2 << 20;
 const DEFAULT_MESSAGES: usize = 20;
 const DEFAULT_BYTES: usize = 24000;
-const TRUNC_MARKER: &str = "…[truncated]";
+pub(crate) const TRUNC_MARKER: &str = "…[truncated]";
 
 const OUTCOMES: [&str; 8] = [
     OUTCOME_OK,
@@ -441,11 +441,8 @@ fn truncate(mut m: Message, max: usize) -> Message {
 /// Shortens `s` so that the result, marker included, fits in `max` bytes
 /// (best effort for tiny limits) and ends on a character boundary.
 fn cut(s: &str, max: usize) -> String {
-    let mut n = max.saturating_sub(TRUNC_MARKER.len());
-    while n > 0 && !s.is_char_boundary(n) {
-        n -= 1;
-    }
-    format!("{}{TRUNC_MARKER}", &s[..n])
+    let n = max.saturating_sub(TRUNC_MARKER.len());
+    format!("{}{TRUNC_MARKER}", &s[..s.floor_char_boundary(n)])
 }
 
 /// Removes the trailing tool_call that duplicates the pending action: Claude

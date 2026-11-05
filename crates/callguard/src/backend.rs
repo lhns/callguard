@@ -135,14 +135,7 @@ fn max_tokens(cfg: &policy::Backend) -> i64 {
 
 /// The first `n` bytes of `s`, cut on a character boundary.
 fn clip(s: &str, n: usize) -> &str {
-    if s.len() <= n {
-        return s;
-    }
-    let mut n = n;
-    while !s.is_char_boundary(n) {
-        n -= 1;
-    }
-    &s[..n]
+    &s[..s.floor_char_boundary(n)]
 }
 
 // ---------------------------------------------------------------------------

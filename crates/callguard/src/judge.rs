@@ -17,7 +17,7 @@ use crate::backend::{Backend, BackendError, ClassifyRequest};
 use crate::hostmeta::{GitStatus, RepoVisibility};
 use crate::json_text;
 use crate::serde_util::{nullable, raw_some};
-use crate::transcript;
+use crate::transcript::{self, TRUNC_MARKER};
 
 /// The system prompt template; one copy.
 const PROMPT_FILE: &str = include_str!("../assets/prompt.md");
@@ -44,7 +44,6 @@ const MAX_GIT_FILES: usize = 30;
 const MAX_GIT_FILE_LEN: usize = 512;
 const MAX_REASON_RUNES: usize = 500;
 const MAX_RULE_RUNES: usize = 64;
-const TRUNC_MARKER: &str = "…[truncated]";
 
 /// Why the judge gave no usable verdict. The caller turns every error into a
 /// fallback verdict; the judge never returns allow on error.
@@ -300,11 +299,7 @@ fn cut_string(s: &str, limit: usize) -> String {
     if s.len() <= limit {
         return s.to_owned();
     }
-    let mut n = limit;
-    while n > 0 && !s.is_char_boundary(n) {
-        n -= 1;
-    }
-    format!("{}{TRUNC_MARKER}", &s[..n])
+    format!("{}{TRUNC_MARKER}", &s[..s.floor_char_boundary(limit)])
 }
 
 fn non_empty_object(raw: &str) -> bool {
