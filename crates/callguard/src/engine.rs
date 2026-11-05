@@ -938,12 +938,18 @@ impl Inner {
                     _ => {}
                 }
             }
-            msgs = transcript::limit(transcript::referents(msgs), max_messages, max_bytes);
+            let pending = transcript::drop_pending(msgs, &req.tool.name, req.tool.input.as_deref());
+            msgs = transcript::limit(transcript::referents(pending), max_messages, max_bytes);
         } else if !t.path.is_empty()
             && (t.format == "claude-jsonl" || (t.format.is_empty() && req.harness == "claude"))
         {
-            match transcript::read_claude_jsonl(&t.path, max_messages, max_bytes) {
-                Ok(m) => msgs = m,
+            match transcript::read_claude_messages(&t.path) {
+                Ok(m) => {
+                    let pending =
+                        transcript::drop_pending(m, &req.tool.name, req.tool.input.as_deref());
+                    msgs =
+                        transcript::limit(transcript::referents(pending), max_messages, max_bytes);
+                }
                 Err(e) => err = Some(e.to_string()),
             }
         }

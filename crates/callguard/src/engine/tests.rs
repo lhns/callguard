@@ -457,6 +457,38 @@ fn assistant_text_does_not_reach_the_judge() {
     );
 }
 
+/// The call being judged is in the transcript already; it is dropped before
+/// the limit cuts a long input into a string that no longer equals it.
+#[test]
+fn a_long_pending_call_is_not_shown_twice() {
+    let (e, v) = new_test_engine(
+        test_policy(no_mut),
+        Options::default(),
+        Some(answer("allow", 0.95)),
+    );
+    let command = format!("echo {}", "x".repeat(8000));
+    let mut req = bash(&command);
+    req.transcript = Some(Transcript {
+        messages: vec![
+            Message {
+                role: "user".into(),
+                text: "run it".into(),
+                ..Default::default()
+            },
+            Message {
+                role: "tool_call".into(),
+                tool: "Bash".into(),
+                input: req.tool.input.clone(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    e.decide(&req);
+    let t = v.last().transcript;
+    assert!(t.len() == 1 && t[0].role == "user", "{t:?}");
+}
+
 /// Needs `transcript::{referents, limit, valid_outcome, mark_blocked}`.
 #[test]
 fn inline_transcript_roles_and_referents() {

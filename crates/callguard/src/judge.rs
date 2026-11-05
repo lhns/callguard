@@ -144,8 +144,6 @@ pub fn judge(
     mut input: Input,
     deadline: Instant,
 ) -> Result<JudgeResult, JudgeError> {
-    // Before the input is capped.
-    input.transcript = drop_pending(std::mem::take(&mut input.transcript), &input);
     let (tool_input, input_cut) = cap_input(input.tool_input.take());
     input.tool_input = tool_input;
     input.facts = cap_facts(input.facts.take());
@@ -312,54 +310,6 @@ fn cut_string(s: &str, limit: usize) -> String {
 fn non_empty_object(raw: &str) -> bool {
     let t = raw.trim();
     !(t.is_empty() || t == "null" || t == "{}")
-}
-
-/// Removes the trailing tool_call that duplicates the pending action: Claude
-/// writes the tool_use to the transcript before the hook runs.
-fn drop_pending(mut msgs: Vec<transcript::Message>, input: &Input) -> Vec<transcript::Message> {
-    if let Some(m) = msgs.last()
-        && m.role == transcript::ROLE_TOOL_CALL
-        && m.tool == input.tool
-        && same_json(m.input.as_deref(), input.tool_input.as_deref())
-    {
-        msgs.pop();
-    }
-    msgs
-}
-
-/// Compares two JSON documents by value, so key order and spacing (which
-/// differ between the hook payload and the transcript) do not matter.
-fn same_json(a: Option<&RawValue>, b: Option<&RawValue>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => {
-            match (
-                serde_json::from_str::<Value>(a.get()),
-                serde_json::from_str::<Value>(b.get()),
-            ) {
-                (Ok(a), Ok(b)) => json_eq(&a, &b),
-                _ => false,
-            }
-        }
-        _ => false,
-    }
-}
-
-/// Value equality on decoded JSON: every number
-/// is a float64, so `1` equals `1.0`.
-fn json_eq(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
-        (Value::Array(x), Value::Array(y)) => {
-            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| json_eq(p, q))
-        }
-        (Value::Object(x), Value::Object(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .all(|(k, p)| y.get(k).is_some_and(|q| json_eq(p, q)))
-        }
-        _ => a == b,
-    }
 }
 
 // Slot markers in prompt.md.
@@ -732,7 +682,14 @@ mod tests {
         }
     }
 
-    fn run(b: &dyn Backend, cfg: &Config, i: Input) -> Result<JudgeResult, JudgeError> {
+    /// As the engine runs it: the pending call is dropped from the transcript
+    /// before the transcript is limited, so before the judge.
+    fn run(b: &dyn Backend, cfg: &Config, mut i: Input) -> Result<JudgeResult, JudgeError> {
+        i.transcript = transcript::drop_pending(
+            std::mem::take(&mut i.transcript),
+            &i.tool,
+            i.tool_input.as_deref(),
+        );
         judge(b, cfg, i, soon())
     }
 
@@ -1074,19 +1031,6 @@ mod tests {
             2,
             "the pending call must not render twice"
         );
-    }
-
-    #[test]
-    fn json_numbers_compare_by_value() {
-        assert!(same_json(
-            raw(r#"{"n":1}"#).as_deref(),
-            raw(r#"{"n":1.0}"#).as_deref()
-        ));
-        assert!(!same_json(
-            raw(r#"{"n":1}"#).as_deref(),
-            raw(r#"{"n":2}"#).as_deref()
-        ));
-        assert!(!same_json(raw("1").as_deref(), None));
     }
 
     #[test]

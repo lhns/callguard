@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use serde_json::value::RawValue;
 
 use crate::json_text;
@@ -162,6 +163,16 @@ pub fn read_claude_jsonl(
     max_messages: usize,
     max_bytes: usize,
 ) -> io::Result<Vec<Message>> {
+    Ok(limit(
+        referents(read_claude_messages(path)?),
+        max_messages,
+        max_bytes,
+    ))
+}
+
+/// The messages in the tail of a Claude Code JSONL transcript, oldest first,
+/// before [`referents`] and [`limit`].
+pub fn read_claude_messages(path: &str) -> io::Result<Vec<Message>> {
     let mut f = File::open(path)?;
     let size = f.metadata()?.len();
     let partial = size > TAIL_BYTES;
@@ -186,7 +197,7 @@ pub fn read_claude_jsonl(
             msgs.extend(parse_line(line));
         }
     }
-    Ok(limit(referents(msgs), max_messages, max_bytes))
+    Ok(msgs)
 }
 
 fn parse_line(line: &str) -> Vec<Message> {
@@ -450,6 +461,57 @@ fn cut(s: &str, max: usize) -> String {
         n -= 1;
     }
     format!("{}{TRUNC_MARKER}", &s[..n])
+}
+
+/// Removes the trailing tool_call that duplicates the pending action: Claude
+/// writes the tool_use to the transcript before the hook runs.
+///
+/// This must run before [`limit`]: a long input is cut to a string there, which
+/// no longer equals the pending input.
+pub fn drop_pending(mut msgs: Vec<Message>, tool: &str, input: Option<&RawValue>) -> Vec<Message> {
+    if let Some(m) = msgs.last()
+        && m.role == ROLE_TOOL_CALL
+        && m.tool == tool
+        && same_json(m.input.as_deref(), input)
+    {
+        msgs.pop();
+    }
+    msgs
+}
+
+/// Compares two JSON documents by value, so key order and spacing (which
+/// differ between the hook payload and the transcript) do not matter.
+fn same_json(a: Option<&RawValue>, b: Option<&RawValue>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            match (
+                serde_json::from_str::<Value>(a.get()),
+                serde_json::from_str::<Value>(b.get()),
+            ) {
+                (Ok(a), Ok(b)) => json_eq(&a, &b),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Value equality on decoded JSON: every number
+/// is a float64, so `1` equals `1.0`.
+fn json_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
+        (Value::Array(x), Value::Array(y)) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(p, q)| json_eq(p, q))
+        }
+        (Value::Object(x), Value::Object(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, p)| y.get(k).is_some_and(|q| json_eq(p, q)))
+        }
+        _ => a == b,
+    }
 }
 
 #[cfg(test)]
@@ -820,5 +882,18 @@ mod tests {
     fn valid_outcomes() {
         assert!(valid_outcome("blocked-by-callguard"));
         assert!(!valid_outcome("fine"));
+    }
+
+    #[test]
+    fn json_numbers_compare_by_value() {
+        assert!(same_json(
+            raw(r#"{"n":1}"#).as_deref(),
+            raw(r#"{"n":1.0}"#).as_deref()
+        ));
+        assert!(!same_json(
+            raw(r#"{"n":1}"#).as_deref(),
+            raw(r#"{"n":2}"#).as_deref()
+        ));
+        assert!(!same_json(raw("1").as_deref(), None));
     }
 }
