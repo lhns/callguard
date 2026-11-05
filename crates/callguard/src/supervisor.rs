@@ -10,11 +10,11 @@
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::child::{kill, read_in_background, wait_until};
 use crate::nah::{NahEngine, NahError, NahRequest, NahResult};
 
 /// The most bytes the parent reads from the child. Facts of a big command run
@@ -118,11 +118,6 @@ fn read_line(mut r: impl Read) -> Read1 {
     }
 }
 
-fn kill(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 impl NahEngine for SupervisedEngine {
     fn decide(&self, req: &NahRequest) -> Result<NahResult, NahError> {
         let timeout = Duration::from_millis(req.timeout_ms.max(1));
@@ -139,10 +134,7 @@ impl NahEngine for SupervisedEngine {
             let _ = stdin.write_all(&body);
         });
         let stdout = child.stdout.take().expect("stdout is piped");
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(read_line(stdout));
-        });
+        let rx = read_in_background(stdout, read_line);
 
         let line = match rx.recv_timeout(timeout) {
             Ok(Read1::Line(line)) => line,
@@ -152,7 +144,7 @@ impl NahEngine for SupervisedEngine {
             }
             Ok(Read1::Eof(n)) => {
                 // Ended without a reply: the exit status says how.
-                return Err(match wait_until(&mut child, deadline) {
+                return Err(match wait_until(&mut child, deadline).unwrap_or(None) {
                     Some(st) => NahError::Crashed(format!(
                         "the nah process ended with {st} and no answer ({n} bytes of output)"
                     )),
@@ -169,7 +161,7 @@ impl NahEngine for SupervisedEngine {
             }
         };
         // A reply, then the child must also exit cleanly.
-        match wait_until(&mut child, deadline) {
+        match wait_until(&mut child, deadline).unwrap_or(None) {
             Some(st) if st.success() => {}
             Some(st) => {
                 return Err(NahError::Crashed(format!(
@@ -188,21 +180,6 @@ impl NahEngine for SupervisedEngine {
                 "the nah process wrote an unreadable answer: {e}"
             ))),
         }
-    }
-}
-
-/// Waits for `child` to exit until `deadline`.
-fn wait_until(child: &mut Child, deadline: Instant) -> Option<std::process::ExitStatus> {
-    loop {
-        match child.try_wait() {
-            Ok(Some(st)) => return Some(st),
-            Ok(None) => {}
-            Err(_) => return None,
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(1));
     }
 }
 

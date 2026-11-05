@@ -117,7 +117,7 @@ fn a_child_whose_parent_is_gone_ends_itself_after_the_deadline() {
         .unwrap();
     c.stdin.take().unwrap().write_all(&body).unwrap();
     let started = Instant::now();
-    let status = wait_until(&mut c, Instant::now() + Duration::from_secs(10));
+    let status = wait_until(&mut c, Instant::now() + Duration::from_secs(10)).unwrap();
     let Some(status) = status else {
         let _ = c.kill();
         panic!("the child did not end itself");

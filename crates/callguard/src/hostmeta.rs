@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::child::{kill, read_in_background, wait_until};
 use crate::rules::builtin_regex;
 use crate::serde_util::{is_false, is_zero, nullable};
 
@@ -143,25 +144,17 @@ fn run_process(
         }
     }
     let mut child = cmd.spawn()?;
-    let mut stdout = child.stdout.take().expect("stdout is piped");
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let rx = read_in_background(stdout, |mut r| {
         let mut buf = Vec::new();
-        let _ = stdout.read_to_end(&mut buf);
-        let _ = tx.send(buf);
+        let _ = r.read_to_end(&mut buf);
+        buf
     });
-    let status = loop {
-        if let Some(st) = child.try_wait()? {
-            break st;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            // The reader ends when the pipe closes; a grandchild holding it
-            // open must not hold us, so the thread is left to finish alone.
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "deadline exceeded"));
-        }
-        std::thread::sleep(Duration::from_millis(2));
+    let Some(status) = wait_until(&mut child, deadline)? else {
+        kill(&mut child);
+        // The reader is left to finish alone: a grandchild holding the pipe
+        // open must not hold us.
+        return Err(io::Error::new(io::ErrorKind::TimedOut, "deadline exceeded"));
     };
     // The pipe can stay open in a grandchild after the process is gone: wait
     // for its end only until the deadline.

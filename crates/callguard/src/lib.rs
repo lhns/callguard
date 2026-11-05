@@ -3,6 +3,7 @@
 //!
 
 pub mod backend;
+mod child;
 pub(crate) mod declog;
 pub mod engine;
 pub mod evalrun;

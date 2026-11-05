@@ -30,10 +30,7 @@ pub(crate) fn kill(child: &mut Child) {
 /// Runs `f` on `r` in a thread and reports its result by channel, so a reader
 /// whose pipe a grandchild holds open is left to finish alone and never holds
 /// the caller past its deadline.
-pub(crate) fn read_in_background<R, T>(
-    r: R,
-    f: impl FnOnce(R) -> T + Send + 'static,
-) -> Receiver<T>
+pub(crate) fn read_in_background<R, T>(r: R, f: impl FnOnce(R) -> T + Send + 'static) -> Receiver<T>
 where
     R: Read + Send + 'static,
     T: Send + 'static,

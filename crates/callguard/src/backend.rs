@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+use crate::child::{kill, read_in_background, wait_until};
 use crate::json_text;
 use crate::policy;
 use crate::serde_util::{is_zero, nullable, raw_some};
@@ -840,30 +841,17 @@ impl Backend for ExecBackend {
         std::thread::spawn(move || {
             let _ = stdin.write_all(stdin_json.as_bytes());
         });
-        // Read on threads that report by channel: a grandchild holding a pipe
-        // open must not hold us past the deadline.
-        let (out_tx, out_rx) = std::sync::mpsc::channel();
-        let (err_tx, err_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = out_tx.send(read_limited(stdout, MAX_EXEC_OUTPUT));
-        });
-        std::thread::spawn(move || {
-            let _ = err_tx.send(read_limited(stderr, 2048));
-        });
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(st)) => break st,
-                Ok(None) => {}
-                Err(e) => return Err(other(format!("exec: {e}"))),
-            }
-            if Instant::now() >= deadline {
-                // The readers end with the pipes; a grandchild that holds
-                // them open must not hold us, so they are left to finish alone.
-                let _ = child.kill();
-                let _ = child.wait();
+        // A grandchild holding a pipe open must not hold us past the deadline.
+        let out_rx = read_in_background(stdout, |r| read_limited(r, MAX_EXEC_OUTPUT));
+        let err_rx = read_in_background(stderr, |r| read_limited(r, 2048));
+        let status = match wait_until(&mut child, deadline) {
+            Ok(Some(st)) => st,
+            Ok(None) => {
+                // The readers are left to finish alone.
+                kill(&mut child);
                 return Err(BackendError::Timeout);
             }
-            std::thread::sleep(Duration::from_millis(2));
+            Err(e) => return Err(other(format!("exec: {e}"))),
         };
         let wait = deadline.saturating_duration_since(Instant::now());
         let (stdout, overflow) = out_rx
