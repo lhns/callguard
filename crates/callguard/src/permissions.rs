@@ -24,11 +24,16 @@
 //!   matches a skill under any of its names (alias, display name), which
 //!   callguard does not know. Deny and ask ignore the arguments of the call, so
 //!   `Skill(name)` also stops `name` with arguments.
+//! - PowerShell deny and ask rules canonicalize the common aliases (`ri`,
+//!   `rm`, `gci`, ...) and ignore case, as Claude does; the call is matched on
+//!   its raw text because nah does not analyse PowerShell. PowerShell allow
+//!   rules are refused in every layer: with no parse of nah's to agree with
+//!   the lexer, nothing could make them safe.
 //! - `Write`, `NotebookEdit` and `MultiEdit` rules mean `Edit`; `Grep`, `Glob`
 //!   and `LS` mean `Read`. Claude accepts them and never matches.
 //! - `/x` anchors at the project directory in every layer (Claude: at the
-//!   settings source). `!` negation and `{a,b}` alternatives are not
-//!   supported (such a rule cannot be read). `[a-c]` and `[!a]` are classes in
+//!   settings source). `{a,b}` alternatives are not supported (such a rule
+//!   cannot be read). `[a-c]` and `[!a]` are classes in
 //!   deny and ask, which also match the literal text; allow matches the
 //!   literal text only, so `src/[id].tsx` works and never widens.
 //! - A deny or ask rule that cannot be read fails the policy (Claude skips it),
@@ -37,6 +42,12 @@
 //! - `Tool(param:value)` is deny and ask only. For shell, path and WebFetch
 //!   tools only the parameters in `params::known` count (`Bash(git:status)`
 //!   stays a command); `Bash(timeout:*)` stays the program `timeout`.
+//! - `!` carve-outs follow Claude's limits (only `path` and `./path` rules of
+//!   the same list and tool family listed before it; none reopens a directory
+//!   a rule blocks whole, meaning a pattern ending in `/**`), but join their
+//!   rules when each layer is read, so a project's `!` cannot touch a system or
+//!   user rule (see `carve`). Allow lists drop a `!` rule. A carved path is
+//!   still stopped when its resolved path (a link's target) is not carved.
 //! - A backslash in a spec is a path separator unless it escapes a quote or a
 //!   space; quoting a `*` does not make it literal.
 //! - Hosts are read by this module, not by a URL parser: allow takes only the
@@ -236,7 +247,9 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
             }
             Ok(Rule::Agent(name.to_owned()))
         }
-        (_, Some(_)) => Err(format!("{name}(...) rules are not supported")),
+        (_, Some(_)) => Err(format!(
+            "{name}(...) cannot be read: a rule on an input parameter is written {name}(param:value)"
+        )),
         (n, None) => {
             if n.contains(|c: char| c.is_whitespace() || c == '*' || c == ')') {
                 return Err(format!("{n:?} is not a tool name"));

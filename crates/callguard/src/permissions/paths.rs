@@ -48,7 +48,10 @@ impl PathSpec {
             ));
         }
         if s.starts_with('!') {
-            return Err("`!` negation is not supported".into());
+            return Err(
+                "a `!` rule takes one `!` (`Read(!pattern)`) and carves earlier rules of its list"
+                    .into(),
+            );
         }
         if s.contains('{') {
             return Err("`{a,b}` alternatives are not supported; write one rule per path".into());
