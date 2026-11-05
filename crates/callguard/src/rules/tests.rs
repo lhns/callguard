@@ -2169,6 +2169,29 @@ fn builtin() {
             "deny",
         ),
         (
+            "write instruction state",
+            "Write",
+            file_input("/home/u/.local/state/callguard/instructions/abc.txt"),
+            "self-protect-write",
+            "deny",
+        ),
+        (
+            "write instruction state on windows",
+            "Edit",
+            file_input("C:/Users/u/AppData/Local/callguard/instructions/abc.txt"),
+            "self-protect-write",
+            "deny",
+        ),
+        (
+            "echo into instruction state",
+            "Bash",
+            bash_input(
+                "echo /home/u/.ssh/notes.md >> ~/.local/state/callguard/instructions/abc.txt",
+            ),
+            "self-protect-shell",
+            "ask",
+        ),
+        (
             "write hermes config",
             "write_file",
             file_input("/home/u/.hermes/config.yaml"),

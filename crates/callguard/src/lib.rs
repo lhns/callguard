@@ -13,6 +13,7 @@ pub mod gitfilter;
 mod glob;
 pub mod hook;
 pub mod hostmeta;
+pub mod instructions;
 pub mod io_util;
 pub mod json_text;
 pub(crate) mod judge;

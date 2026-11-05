@@ -43,6 +43,9 @@ pub struct Options {
     pub allow_in_auto: bool,
     /// `--add-dir` entries, appended to `req.additional_dirs`.
     pub additional_dirs: Vec<String>,
+    /// Claude only: where `InstructionsLoaded` events are recorded and where
+    /// PreToolUse reads them from (see [`crate::instructions`]). None = off.
+    pub instructions_dir: Option<std::path::PathBuf>,
 }
 
 /// Reads `input` up to [`MAX_INPUT`].
@@ -190,11 +193,14 @@ const CLAUDE_FIELDS: &[&str] = &[
     "tool_name",
     "tool_input",
     "tool_use_id",
+    "file_path",
 ];
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct ClaudeInput {
+    #[serde(deserialize_with = "nullable")]
+    file_path: String,
     #[serde(deserialize_with = "nullable")]
     session_id: String,
     #[serde(deserialize_with = "nullable")]
@@ -245,6 +251,26 @@ fn blocking_on_panic(err_out: &mut dyn Write, adapter: impl FnOnce(&mut dyn Writ
     }
 }
 
+/// Records an `InstructionsLoaded` file. Never fails and never panics out.
+fn record_instructions(opt: &Options, in0: &ClaudeInput) {
+    if let Some(dir) = &opt.instructions_dir {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _ = crate::instructions::record(dir, &in0.session_id, &in0.file_path);
+        }));
+    }
+}
+
+/// The text of the files recorded for the session; empty on any failure.
+fn claude_instructions(opt: &Options, session_id: &str) -> String {
+    let Some(dir) = &opt.instructions_dir else {
+        return String::new();
+    };
+    catch_unwind(AssertUnwindSafe(|| {
+        crate::instructions::collect(dir, session_id)
+    }))
+    .unwrap_or_default()
+}
+
 /// The Claude Code PreToolUse hook. Returns the process exit code.
 ///
 /// Claude treats any non-zero exit other than 2 as a non-blocking error and
@@ -274,6 +300,11 @@ fn claude_inner(
     }
     // Set before any fallback, so a malformed payload in dontAsk still denies.
     req.unattended = opt.unattended || in0.permission_mode == "dontAsk";
+    // Asynchronous, no decision control: record and say nothing, whatever fails.
+    if in0.hook_event_name == "InstructionsLoaded" {
+        record_instructions(opt, &in0);
+        return 0;
+    }
     let v = if let Some(e) = err {
         fallback(Some(&req), &format!("bad hook input: {e}"))
     } else if in0.hook_event_name != "PreToolUse" {
@@ -296,6 +327,7 @@ fn claude_inner(
                 messages: Vec::new(),
             });
         }
+        req.instructions = claude_instructions(opt, &in0.session_id);
         run_decider(d, opt, &mut req)
     };
 
@@ -891,6 +923,80 @@ mod tests {
             v["hookSpecificOutput"]["permissionDecision"], want_decision,
             "{out:?}"
         );
+    }
+
+    #[test]
+    fn instructions_loaded_is_recorded_silently_and_the_next_pretooluse_carries_the_text() {
+        let t = tempfile::tempdir().unwrap();
+        let md = t.path().join("CLAUDE.md");
+        std::fs::write(
+            &md,
+            "<!-- note -->
+use pnpm
+",
+        )
+        .unwrap();
+        let state = t.path().join("state").join("instructions");
+        let opt = Options {
+            instructions_dir: Some(state.clone()),
+            ..Default::default()
+        };
+        let (d, got) = capture(verdict(Decision::Allow, true));
+        let mut ev: serde_json::Value =
+            serde_json::from_str(&payload("claude_instructionsloaded.json")).unwrap();
+        ev["file_path"] = md.to_string_lossy().into_owned().into();
+        let (out, err, code) = run_claude(&ev.to_string(), &opt, &d);
+        assert_eq!((out.as_str(), err.as_str(), code), ("", "", 0));
+        assert!(got.lock().unwrap().is_none(), "no decision for the event");
+        // Twice: still one entry. A bad session id stays inside the directory.
+        run_claude(&ev.to_string(), &opt, &d);
+        ev["session_id"] = "../../evil".into();
+        run_claude(&ev.to_string(), &opt, &d);
+        assert_eq!(std::fs::read_dir(&state).unwrap().count(), 2);
+        assert_eq!(
+            std::fs::read_to_string(state.join("abc123.txt"))
+                .unwrap()
+                .lines()
+                .count(),
+            1
+        );
+        run_claude(&payload("claude_pretooluse_bash.json"), &opt, &d);
+        assert_eq!(
+            seen(&got).instructions,
+            format!(
+                "## {}
+use pnpm",
+                md.display()
+            )
+        );
+        // Without a state directory nothing is read, and nothing is said.
+        let (d2, got2) = capture(verdict(Decision::Allow, true));
+        run_claude(
+            &payload("claude_pretooluse_bash.json"),
+            &Options::default(),
+            &d2,
+        );
+        assert!(seen(&got2).instructions.is_empty());
+    }
+
+    #[test]
+    fn instructions_loaded_never_blocks_or_speaks_even_when_it_cannot_write() {
+        let t = tempfile::tempdir().unwrap();
+        // A file where the directory should be: every write fails.
+        let blocker = t.path().join("instructions");
+        std::fs::write(&blocker, "x").unwrap();
+        let opt = Options {
+            instructions_dir: Some(blocker),
+            ..Default::default()
+        };
+        for body in [
+            payload("claude_instructionsloaded.json"),
+            r#"{"hook_event_name":"InstructionsLoaded","file_path":7}"#.to_owned(),
+            r#"{"hook_event_name":"InstructionsLoaded"}"#.to_owned(),
+        ] {
+            let (out, err, code) = run_claude(&body, &opt, &panicking);
+            assert_eq!((out.as_str(), err.as_str(), code), ("", "", 0), "{body}");
+        }
     }
 
     #[test]

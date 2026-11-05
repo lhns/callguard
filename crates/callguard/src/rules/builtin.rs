@@ -11,7 +11,7 @@ pub struct Hit {
 }
 
 /// The files that carry hook and policy configuration.
-const PROTECTED_GLOBS: [&str; 10] = [
+const PROTECTED_GLOBS: [&str; 11] = [
     "**/.claude/settings.json",
     "**/.claude/settings.local.json",
     "**/.callguard/**",
@@ -22,6 +22,9 @@ const PROTECTED_GLOBS: [&str; 10] = [
     "**/.opencode/plugins/**",
     "**/.pi/agent/extensions/**",
     "**/.pi/extensions/**",
+    // The Claude instruction bridge's state: an agent that could add a path
+    // there would pick which .md files go to the judge provider.
+    "**/callguard/instructions/**",
 ];
 
 /// Finds those paths in a slash-normalized command line. A glob in the file
@@ -29,7 +32,7 @@ const PROTECTED_GLOBS: [&str; 10] = [
 static PROTECTED_SHELL: LazyLock<Regex> = LazyLock::new(|| {
     builtin_regex(concat!(
         r"(?i)\.claude/(?:settings|[^/\s]*[*?\[])|\.callguard\b|/etc/callguard|programdata/callguard",
-        r"|\.hermes/(?:config\.yaml|shell-hooks-allowlist\.json|[^/\s]*[*?\[])|\.config/opencode/plugins|\.opencode/plugins|\.pi/(?:agent/)?extensions"
+        r"|\.hermes/(?:config\.yaml|shell-hooks-allowlist\.json|[^/\s]*[*?\[])|\.config/opencode/plugins|\.opencode/plugins|\.pi/(?:agent/)?extensions|callguard/instructions"
     ))
 });
 

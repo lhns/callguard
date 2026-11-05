@@ -25,6 +25,11 @@ Flags:
   --allow-in-auto       claude only: also emit allow in permission_mode auto
   --add-dir PATH        a directory besides the project that counts as inside
                         it (repeatable; not the home directory or a root)
+
+claude also answers InstructionsLoaded events (register the hook for them
+too; it prints nothing): the loaded file paths are recorded per session in
+<state dir>/callguard/instructions/ and their text goes to the llm judge as
+unverified context.
 ";
 
 /// Runs a hook adapter. Usage errors exit 2: Claude and Hermes treat exit 2 as
@@ -95,6 +100,10 @@ pub fn run(
         context_file: f.str("context-file"),
         allow_in_auto: f.bool("allow-in-auto"),
         additional_dirs: engine_child::add_dirs(f.list("add-dir")),
+        // Beside the default decision log, whatever --log says.
+        instructions_dir: (name == "claude")
+            .then(callguard::instructions::default_dir)
+            .flatten(),
     };
     let policy_path = f.opt_str("policy");
     let test_engine = f.str("test-engine");
