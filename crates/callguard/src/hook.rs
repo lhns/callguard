@@ -14,15 +14,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::fallback::{fallback_verdict, panic_message};
+use crate::io_util::{MAX_INPUT, read_capped};
 use crate::json_text;
 use crate::schema::{
     Decision, LAYER_FALLBACK, REQUEST_SCHEMA, Request, ToolCall, Transcript, VERDICT_SCHEMA,
     Verdict,
 };
 use crate::serde_util::{decode_object, decode_partial, nullable, raw_some};
-
-/// Caps the hook payload read from stdin.
-pub const MAX_INPUT: usize = 4 << 20;
 
 /// Caps `--context-file`.
 const MAX_CONTEXT_FILE: usize = 1 << 20;
@@ -47,15 +45,9 @@ pub struct Options {
 
 /// Reads `input` up to [`MAX_INPUT`].
 fn read_input(input: &mut dyn Read) -> Result<Vec<u8>, String> {
-    let mut b = Vec::new();
-    input
-        .take(MAX_INPUT as u64 + 1)
-        .read_to_end(&mut b)
-        .map_err(|e| format!("reading stdin: {e}"))?;
-    if b.len() > MAX_INPUT {
-        return Err(format!("input larger than {MAX_INPUT} bytes"));
-    }
-    Ok(b)
+    read_capped(input, MAX_INPUT)
+        .map_err(|e| format!("reading stdin: {e}"))?
+        .ok_or_else(|| format!("input larger than {MAX_INPUT} bytes"))
 }
 
 /// Parses a hook payload: a JSON object, or an error. Field names match in any
@@ -138,16 +130,14 @@ fn run_decider(d: Decider, opt: &Options, req: &mut Request) -> Verdict {
 fn apply_context(req: &mut Request, opt: &Options) -> Result<(), String> {
     if !opt.context_file.is_empty() {
         let f = std::fs::File::open(&opt.context_file).map_err(|e| e.to_string())?;
-        let mut b = Vec::new();
-        f.take(MAX_CONTEXT_FILE as u64 + 1)
-            .read_to_end(&mut b)
-            .map_err(|e| e.to_string())?;
-        if b.len() > MAX_CONTEXT_FILE {
-            return Err(format!(
-                "{} is larger than {MAX_CONTEXT_FILE} bytes",
-                opt.context_file
-            ));
-        }
+        let b = read_capped(&mut { f }, MAX_CONTEXT_FILE)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| {
+                format!(
+                    "{} is larger than {MAX_CONTEXT_FILE} bytes",
+                    opt.context_file
+                )
+            })?;
         let m: Option<BTreeMap<String, String>> =
             serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", opt.context_file))?;
         merge_context(req, m.unwrap_or_default());

@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -173,22 +173,7 @@ pub fn read_claude_jsonl(
 /// The messages in the tail of a Claude Code JSONL transcript, oldest first,
 /// before [`referents`] and [`limit`].
 pub fn read_claude_messages(path: &str) -> io::Result<Vec<Message>> {
-    let mut f = File::open(path)?;
-    let size = f.metadata()?.len();
-    let partial = size > TAIL_BYTES;
-    if partial {
-        f.seek(SeekFrom::Start(size - TAIL_BYTES))?;
-    }
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
-    let mut data = &buf[..];
-    if partial {
-        // The first line is cut in the middle.
-        data = match data.iter().position(|&b| b == b'\n') {
-            Some(i) => &data[i + 1..],
-            None => &[],
-        };
-    }
+    let data = crate::io_util::read_tail(File::open(path)?, TAIL_BYTES)?;
     let mut msgs = Vec::new();
     for line in data.split(|&b| b == b'\n') {
         let line = String::from_utf8_lossy(line);

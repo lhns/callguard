@@ -11,6 +11,7 @@ pub mod fallback;
 pub mod gitfilter;
 pub mod hook;
 pub mod hostmeta;
+pub mod io_util;
 pub mod json_text;
 pub mod judge;
 pub mod nah;

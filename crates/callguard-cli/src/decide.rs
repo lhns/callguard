@@ -6,13 +6,12 @@ use std::io::{Read, Write};
 
 use callguard::engine::{self, Engine};
 use callguard::fallback::fallback_verdict;
+use callguard::io_util::{MAX_INPUT, read_capped};
 use callguard::json_text;
 use callguard::schema::{Decision, Request};
 
 use crate::engine_child;
 use crate::flags::{self, FlagError, Kind, spec};
-
-const MAX_REQUEST_BYTES: usize = 4 << 20;
 
 const USAGE: &str = "usage: callguard decide [flags]
 
@@ -59,24 +58,23 @@ pub fn run(
         print_json(stdout, &fallback_verdict(Some(&req), cause));
         3
     };
-    let mut data = Vec::new();
-    if let Err(e) = stdin
-        .take(MAX_REQUEST_BYTES as u64 + 1)
-        .read_to_end(&mut data)
-    {
-        return fail(
-            &Request::default(),
-            stdout,
-            &format!("cannot read the request: {e}"),
-        );
-    }
-    if data.len() > MAX_REQUEST_BYTES {
-        return fail(
-            &Request::default(),
-            stdout,
-            &format!("request is larger than {MAX_REQUEST_BYTES} bytes"),
-        );
-    }
+    let data = match read_capped(stdin, MAX_INPUT) {
+        Ok(Some(data)) => data,
+        Ok(None) => {
+            return fail(
+                &Request::default(),
+                stdout,
+                &format!("request is larger than {MAX_INPUT} bytes"),
+            );
+        }
+        Err(e) => {
+            return fail(
+                &Request::default(),
+                stdout,
+                &format!("cannot read the request: {e}"),
+            );
+        }
+    };
     let mut req = match Request::from_json(&data) {
         Ok(r) => r,
         Err(e) => {

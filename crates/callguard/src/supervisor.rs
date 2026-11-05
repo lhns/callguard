@@ -219,15 +219,9 @@ fn watchdog(timeout_ms: u64) {
 /// The child's side: reads the request from `stdin`, asks `engine`, writes one
 /// reply line to `stdout`. Returns the process exit code.
 pub fn serve(engine: &dyn NahEngine, stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32 {
-    let mut body = Vec::new();
-    if stdin
-        .take(MAX_REQUEST_BYTES + 1)
-        .read_to_end(&mut body)
-        .is_err()
-        || body.len() as u64 > MAX_REQUEST_BYTES
-    {
+    let Ok(Some(body)) = crate::io_util::read_capped(stdin, MAX_REQUEST_BYTES as usize) else {
         return 1;
-    }
+    };
     let reply = match serde_json::from_slice::<NahRequest>(&body) {
         Err(e) => Reply::Error(format!("unreadable request: {e}")),
         Ok(req) => {

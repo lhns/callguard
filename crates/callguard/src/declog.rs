@@ -1,7 +1,7 @@
 //! The decision log: one JSON line per decision.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -205,41 +205,19 @@ fn refuse_fifo(path: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Longest line the reader accepts, (4 MiB).
-const MAX_LINE: usize = 4 << 20;
-
 /// The entries of `session_id` within the last [`TAIL_BYTES`] of the file,
 /// oldest first. A missing file is no entries. Unparseable lines (a cut first
 /// line, a corrupt line) are skipped.
 pub fn read_tail(path: &str, session_id: &str) -> io::Result<Vec<Entry>> {
     refuse_fifo(path)?;
-    let mut f = match File::open(path) {
+    let f = match File::open(path) {
         Ok(f) => f,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(e) => return Err(e),
     };
-    let size = f.metadata()?.len();
-    let skip_first = size > TAIL_BYTES;
-    if skip_first {
-        f.seek(SeekFrom::Start(size - TAIL_BYTES))?;
-    }
-    let mut buf = Vec::new();
-    f.read_to_end(&mut buf)?;
-    let mut data = &buf[..];
-    if skip_first {
-        data = match data.iter().position(|&b| b == b'\n') {
-            Some(i) => &data[i + 1..],
-            None => &[],
-        };
-    }
+    let data = crate::io_util::read_tail(f, TAIL_BYTES)?;
     let mut out = Vec::new();
     for line in data.split(|&b| b == b'\n') {
-        if line.len() > MAX_LINE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "log line too long",
-            ));
-        }
         let line = line.strip_suffix(b"\r").unwrap_or(line);
         if let Ok(e) = serde_json::from_slice::<Entry>(line)
             && e.session_id == session_id
