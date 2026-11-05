@@ -768,6 +768,7 @@ pub(crate) fn parse_has_hole(call: &Call, nah: Option<&NahResult>) -> bool {
         return true;
     };
     !ALLOW_SHELL_TOOLS.contains(&call.tool.as_str())
+        || n.verdict != NahVerdict::Delegate
         || n.coverage != "full"
         || n.facts.as_ref().is_none_or(|f| !f.gaps.is_empty())
         || n.calls.is_empty()

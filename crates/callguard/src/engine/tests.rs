@@ -1518,6 +1518,8 @@ fn tool_use_id_is_logged() {
 #[derive(Clone, Copy)]
 enum NahMode {
     Block,
+    /// A block that carries a warning and facts.
+    BlockLoud,
     Delegate,
     DelegatePartial,
     Fail,
@@ -1540,6 +1542,18 @@ impl NahEngine for FakeNah {
         };
         match self.0 {
             NahMode::Block => res(NahVerdict::Block, "full", "nah says no", "git-history"),
+            NahMode::BlockLoud => {
+                let mut r = res(NahVerdict::Block, "full", "nah says no", "git-history");
+                if let Ok(r) = &mut r {
+                    r.warnings = vec!["nah warns".into()];
+                    r.facts = Some(Facts {
+                        source: "nah".into(),
+                        coverage: "full".into(),
+                        ..Default::default()
+                    });
+                }
+                r
+            }
             NahMode::Delegate => res(NahVerdict::Delegate, "full", "fine", ""),
             NahMode::DelegatePartial => res(NahVerdict::Delegate, "partial", "", ""),
             NahMode::Fail => Err(NahError::Failed("exit status 3".into())),
@@ -1690,6 +1704,23 @@ fn nah_shadow_does_not_end_the_pipeline() {
             && got.warnings.len() == 1
             && got.warnings[0].starts_with("nah skipped"),
         "shadow failure: {got:?}"
+    );
+}
+
+/// A shadowed block still tells the judge what nah saw, and keeps its warnings.
+#[test]
+fn a_shadowed_nah_block_keeps_its_warnings_and_facts() {
+    let (e, v) = nah_engine(
+        NahMode::BlockLoud,
+        |n| n.mode = policy::MODE_SHADOW.into(),
+        Options::default(),
+    );
+    let got = e.decide(&bash("echo hi"));
+    assert!(got.layer == LAYER_LLM, "{got:?}");
+    assert!(got.warnings.contains(&"nah warns".to_owned()), "{got:?}");
+    assert_eq!(
+        v.last().facts.map(|f| f.get().to_owned()).as_deref(),
+        Some(r#"{"source":"nah","coverage":"full"}"#)
     );
 }
 

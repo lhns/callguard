@@ -298,6 +298,25 @@ fn deny_matches_normalised_calls() {
     assert!(d.check(&bash("git status"), Some(&n)).is_none());
 }
 
+/// A shadowed nah that would have blocked is no complete parse: deny and ask
+/// still read the raw text, and an allow never stands on it.
+#[test]
+fn a_blocking_nah_result_is_a_hole_and_no_allow() {
+    let blocked = NahResult {
+        verdict: NahVerdict::Block,
+        ..nah_of(&[&["git", "status"]])
+    };
+    let c = bash("git status; git push");
+    assert!(parse_has_hole(&c, Some(&blocked)));
+    let d = deny(&["Bash(git push:*)"]);
+    assert_eq!(
+        d.check(&c, Some(&blocked)).map(|h| h.decision),
+        Some("deny")
+    );
+    let a = allow(&["Bash(git status:*)"]);
+    assert!(a.check(&bash("git status"), Some(&blocked)).is_none());
+}
+
 #[test]
 fn a_complete_parse_means_no_raw_text_match() {
     let d = deny(&["Bash(git push:*)"]);

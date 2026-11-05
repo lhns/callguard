@@ -607,6 +607,11 @@ impl Inner {
                         decision: "deny".into(),
                         rule,
                     });
+                    // The pipeline goes on as if nah had delegated: its warnings
+                    // and facts count. A Block result is a hole for the
+                    // permission rules (`parse_has_hole`), so they act as before.
+                    warns.extend(res.warnings.iter().cloned());
+                    nah_res = Some(res);
                 }
                 Ok(mut res) => {
                     warns.append(&mut res.warnings);
