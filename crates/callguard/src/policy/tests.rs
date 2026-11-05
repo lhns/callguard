@@ -629,7 +629,7 @@ fn permissions_keys_follow_the_schema() {
 fn a_deny_or_ask_rule_that_cannot_be_read_is_a_problem_of_its_file() {
     let (_d, o) = layers(
         r#"{"policy_version":1}"#,
-        r#"{"policy_version":1,"permissions":{"deny":["Agent(model:x)"],"ask":["Bash(git push"]}}"#,
+        r#"{"policy_version":1,"permissions":{"deny":["Bash(command:x)"],"ask":["Bash(git push"]}}"#,
         "",
     );
     let l = load(&o).unwrap();

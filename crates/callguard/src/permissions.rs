@@ -32,7 +32,11 @@
 //!   deny and ask, which also match the literal text; allow matches the
 //!   literal text only, so `src/[id].tsx` works and never widens.
 //! - A deny or ask rule that cannot be read fails the policy (Claude skips it),
-//!   including `Bash(command:...)` and `Tool(param:value)`.
+//!   including `Bash(command:...)` and the other primary fields in
+//!   `Tool(param:value)`.
+//! - `Tool(param:value)` is deny and ask only. For shell, path and WebFetch
+//!   tools only the parameters in `params::known` count (`Bash(git:status)`
+//!   stays a command); `Bash(timeout:*)` stays the program `timeout`.
 //! - A backslash in a spec is a path separator unless it escapes a quote or a
 //!   space; quoting a `*` does not make it literal.
 //! - Hosts are read by this module, not by a URL parser: allow takes only the
@@ -44,6 +48,7 @@
 //!   no path rule.
 
 mod lexer;
+mod params;
 mod paths;
 mod readonly;
 mod spec;
@@ -100,6 +105,13 @@ pub enum Rule {
         /// Written `skill:name`: never an allow rule.
         by_param: bool,
     },
+    /// `Tool(param:value)`: a top-level scalar input of `tool`, literally; `*`
+    /// in `value` is a wildcard. Deny and ask only.
+    Param {
+        tool: String,
+        param: String,
+        value: String,
+    },
     /// Any other bare name: that tool, exactly.
     Tool(String),
 }
@@ -154,6 +166,12 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
         }
         return Ok(Rule::Mcp(Mcp::parse(name)?));
     }
+    if let Some(s) = spec
+        && name != "Skill"
+        && let Some(rule) = params::parse(name, s)?
+    {
+        return Ok(rule);
+    }
     let write_family = ["Edit", "Write", "NotebookEdit", "MultiEdit"];
     let read_family = ["Read", "Grep", "Glob", "LS"];
     match (name, spec) {
@@ -187,6 +205,23 @@ pub(crate) fn parse(text: &str) -> Result<Rule, String> {
     }
 }
 
+/// Whether `s` can name a tool input field.
+fn is_param_name(s: &str) -> bool {
+    s.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Whether a `Tool(param:value)` rule applies to the tool of `call`.
+fn param_tool_matches(tool: &str, call: &Call) -> bool {
+    match tool {
+        "Bash" => call.kind == KIND_SHELL,
+        "Agent" | "Task" | "task" => call.kind == KIND_AGENT,
+        t => call.tool == t,
+    }
+}
+
 /// The inside of `Skill(...)`.
 fn parse_skill(spec: &str) -> Result<Rule, String> {
     let spec = spec.trim();
@@ -194,10 +229,7 @@ fn parse_skill(spec: &str) -> Result<Rule, String> {
         Some(r) if r.trim_start().starts_with(':') => (true, r.trim_start()[1..].trim()),
         _ => (false, spec),
     };
-    let (name, any_args) = match rest
-        .strip_suffix(" *")
-        .or_else(|| rest.strip_suffix(":*"))
-    {
+    let (name, any_args) = match rest.strip_suffix(" *").or_else(|| rest.strip_suffix(":*")) {
         Some(n) if !by_param => (n.trim(), true),
         _ => (rest, false),
     };
@@ -376,6 +408,13 @@ impl Permissions {
                         .get("subagent_type")
                         .is_some_and(|t| (name == "*" && !t.is_empty()) || t == name)
             }
+            Rule::Param { tool, param, value } => {
+                param_tool_matches(tool, call)
+                    && call
+                        .scalars
+                        .get(param)
+                        .is_some_and(|v| spec::glob(value, v))
+            }
             Rule::Skill { name, .. } => {
                 call.tool == "Skill"
                     && call
@@ -511,6 +550,7 @@ impl Permissions {
                 Rule::Shell { .. }
                 | Rule::Fetch { domain: None }
                 | Rule::Agent(_)
+                | Rule::Param { .. }
                 | Rule::Skill { .. } => false,
             })
             .map(|e| e.text.clone())

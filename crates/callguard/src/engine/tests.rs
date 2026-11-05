@@ -2716,7 +2716,7 @@ fn a_dropped_allow_rule_is_reported_in_the_verdict() {
 #[test]
 fn an_unreadable_deny_rule_refuses_the_policy() {
     let r = Engine::new(
-        test_policy(|p| p.permissions.deny.push("Agent(model:x)".into())),
+        test_policy(|p| p.permissions.deny.push("Bash(command:x)".into())),
         Options {
             log: LogTarget::Off,
             ..Default::default()

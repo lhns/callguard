@@ -226,6 +226,9 @@ pub(crate) fn vet_allow(text: &str, layer: Option<&str>) -> Result<Rule, String>
         Rule::Fetch { domain: Some(d) } if d.is_blanket() => {
             return blocked("the domain pattern matches every host");
         }
+        Rule::Param { .. } => {
+            return blocked("a parameter value does not establish that a call is safe");
+        }
         Rule::Skill { by_param: true, .. } => {
             return blocked("a parameter value does not establish that a call is safe");
         }

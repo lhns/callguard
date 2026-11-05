@@ -71,6 +71,10 @@ pub struct Call {
     pub pattern_paths: Vec<(String, bool)>,
     /// Top-level input fields; non-strings JSON-encoded.
     pub fields: BTreeMap<String, String>,
+    /// The top-level fields that are a string, number or bool, by their
+    /// literal JSON text (a string unquoted). Null, objects and arrays are
+    /// left out: no parameter rule matches them.
+    pub scalars: BTreeMap<String, String>,
     /// Compact input JSON plus every string leaf, for the "*" field.
     pub whole: String,
     pub context: BTreeMap<String, String>,
@@ -304,6 +308,15 @@ impl Call {
                         Ok(s) => s.unwrap_or_default(),
                         Err(_) => v.get().to_owned(),
                     };
+                    match serde_json::from_str::<Value>(v.get()) {
+                        Ok(Value::Number(_) | Value::Bool(_)) => {
+                            c.scalars.insert(k.clone(), v.get().to_owned());
+                        }
+                        Ok(Value::String(_)) => {
+                            c.scalars.insert(k.clone(), value.clone());
+                        }
+                        _ => {}
+                    }
                     c.fields.insert(k, value);
                 }
             }

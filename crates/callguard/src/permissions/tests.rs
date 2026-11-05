@@ -2521,7 +2521,10 @@ fn agent_rules_match_the_subagent_type_exactly() {
     assert_eq!(hit(&d, &agent("Agent", "Plan")), None);
     assert_eq!(hit(&d, &call("Agent", r#"{"prompt":"x"}"#)), None);
     // Only a call of kind agent.
-    assert_eq!(hit(&d, &call("Read", r#"{"subagent_type":"Explore"}"#)), None);
+    assert_eq!(
+        hit(&d, &call("Read", r#"{"subagent_type":"Explore"}"#)),
+        None
+    );
     let a = set(&[], &["Task(Plan)"], &[]);
     assert_eq!(hit(&a, &agent("Agent", "Plan")), Some("ask"));
     let any = deny(&["Agent(*)"]);
@@ -2543,14 +2546,27 @@ fn skill(name: &str, args: Option<&str>) -> Call {
 
 #[test]
 fn skill_rules_compare_the_literal_skill_input() {
-    for rule in ["Skill(commit)", "Skill(commit *)", "Skill(skill:commit)", "Skill( skill : commit )"] {
+    for rule in [
+        "Skill(commit)",
+        "Skill(commit *)",
+        "Skill(skill:commit)",
+        "Skill( skill : commit )",
+    ] {
         let d = deny(&[rule]);
         assert_eq!(hit(&d, &skill("commit", None)), Some("deny"), "{rule}");
-        assert_eq!(hit(&d, &skill("commit", Some("-m x"))), Some("deny"), "{rule}");
+        assert_eq!(
+            hit(&d, &skill("commit", Some("-m x"))),
+            Some("deny"),
+            "{rule}"
+        );
         assert_eq!(hit(&d, &skill("Commit", None)), None, "{rule}");
         assert_eq!(hit(&d, &skill("commit-all", None)), None, "{rule}");
         assert_eq!(hit(&d, &call("Skill", "{}")), None, "{rule}");
-        assert_eq!(hit(&d, &call("Read", r#"{"skill":"commit"}"#)), None, "{rule}");
+        assert_eq!(
+            hit(&d, &call("Read", r#"{"skill":"commit"}"#)),
+            None,
+            "{rule}"
+        );
     }
     let d = set(&[], &["Skill(deploy-*)"], &[]);
     assert_eq!(hit(&d, &skill("deploy-prod", None)), Some("ask"));
@@ -2571,4 +2587,201 @@ fn skill_allow_rules_need_the_arguments_they_name() {
     assert!(vet_allow("Skill(commit)", None).is_ok());
     assert!(parse("Skill(a b)").is_err());
     assert!(parse("Skill()").is_err());
+}
+
+// --- Tool(param:value) -----------------------------------------------------------
+
+#[test]
+fn claude_docs_parameter_table() {
+    let rows: &[(&str, &str, &str, bool)] = &[
+        (
+            "Agent(model:opus)",
+            "Agent",
+            r#"{"model":"opus","prompt":"x"}"#,
+            true,
+        ),
+        (
+            "Agent(model:opus)",
+            "Agent",
+            r#"{"model":"claude-opus-4"}"#,
+            false,
+        ),
+        (
+            "Agent(isolation:worktree)",
+            "Agent",
+            r#"{"isolation":"worktree"}"#,
+            true,
+        ),
+        (
+            "Agent(isolation:*)",
+            "Agent",
+            r#"{"isolation":"anything"}"#,
+            true,
+        ),
+        ("Agent(model:*)", "Agent", r#"{"prompt":"x"}"#, false),
+        ("Agent(model:*)", "Agent", r#"{"model":null}"#, false),
+        ("Agent(model:*)", "Agent", r#"{"model":{"a":"b"}}"#, false),
+        ("Agent(model:opus)", "Task", r#"{"model":"opus"}"#, true),
+        (
+            "Agent( model : opus )",
+            "Agent",
+            r#"{"model":"opus"}"#,
+            true,
+        ),
+        ("Agent(model:opu)", "Agent", r#"{"model":"opus"}"#, false),
+        ("Agent(model:op*)", "Agent", r#"{"model":"opus"}"#, true),
+        ("Agent(model:Opus)", "Agent", r#"{"model":"opus"}"#, false),
+        (
+            "Bash(run_in_background:true)",
+            "Bash",
+            r#"{"command":"ls","run_in_background":true}"#,
+            true,
+        ),
+        (
+            "Bash(run_in_background:true)",
+            "Bash",
+            r#"{"command":"ls","run_in_background":false}"#,
+            false,
+        ),
+        (
+            "Bash(run_in_background:true)",
+            "Bash",
+            r#"{"command":"ls"}"#,
+            false,
+        ),
+        (
+            "Bash(run_in_background:true)",
+            "Bash",
+            r#"{"command":"ls","run_in_background":"true"}"#,
+            true,
+        ),
+        (
+            "Bash(timeout:5000)",
+            "Bash",
+            r#"{"command":"ls","timeout":5000}"#,
+            true,
+        ),
+        (
+            "Read(offset:5)",
+            "Read",
+            r#"{"file_path":"/w/p/a","offset":5}"#,
+            true,
+        ),
+        (
+            "Read(offset: 5)",
+            "Read",
+            r#"{"file_path":"/w/p/a","offset":5}"#,
+            true,
+        ),
+        (
+            "Read(offset:5)",
+            "Read",
+            r#"{"file_path":"/w/p/a","offset":50}"#,
+            false,
+        ),
+        (
+            "Read(offset:5)",
+            "Grep",
+            r#"{"pattern":"x","offset":5}"#,
+            false,
+        ),
+        (
+            "Grep(output_mode:content)",
+            "Grep",
+            r#"{"pattern":"x","output_mode":"content"}"#,
+            true,
+        ),
+        (
+            "TaskCreate(subject:x)",
+            "TaskCreate",
+            r#"{"subject":"x"}"#,
+            true,
+        ),
+        (
+            "PowerShell(run_in_background:true)",
+            "PowerShell",
+            r#"{"command":"ls","run_in_background":true}"#,
+            true,
+        ),
+        (
+            "PowerShell(run_in_background:true)",
+            "Bash",
+            r#"{"command":"ls","run_in_background":true}"#,
+            false,
+        ),
+    ];
+    for (rule, tool, input, want) in rows {
+        for list in [0, 1] {
+            let p = if list == 0 {
+                deny(&[rule])
+            } else {
+                set(&[], &[rule], &[])
+            };
+            let got = p.check(&call(tool, input), None).is_some();
+            assert_eq!(got, *want, "{rule} on {tool} {input}");
+        }
+    }
+}
+
+#[test]
+fn old_meanings_survive_where_a_colon_is_ordinary() {
+    assert!(matches!(parse("Bash(git push:*)"), Ok(Rule::Shell { .. })));
+    assert!(matches!(parse("Bash(git:status)"), Ok(Rule::Shell { .. })));
+    assert!(matches!(parse("Bash(timeout:*)"), Ok(Rule::Shell { .. })));
+    assert!(matches!(parse("Bash(timeout:5)"), Ok(Rule::Param { .. })));
+    assert!(matches!(
+        parse("Bash(run_in_background:true)"),
+        Ok(Rule::Param { .. })
+    ));
+    assert!(matches!(parse("Read(ab:c)"), Ok(Rule::Path { .. })));
+    assert!(matches!(parse("Read(offset:5)"), Ok(Rule::Param { .. })));
+    assert!(matches!(
+        parse("Edit(replace_all:true)"),
+        Ok(Rule::Param { .. })
+    ));
+    assert!(matches!(parse("Write(offset:5)"), Ok(Rule::Path { .. })));
+    assert!(matches!(
+        parse("WebFetch(domain:example.com)"),
+        Ok(Rule::Fetch { .. })
+    ));
+    assert!(matches!(
+        parse("WebFetch(prompt:x)"),
+        Ok(Rule::Param { .. })
+    ));
+    // `Bash(timeout:*)` still stops the program.
+    let d = deny(&["Bash(timeout:*)"]);
+    let n = nah_of(&[&["timeout", "5", "ls"]]);
+    assert!(d.check(&bash("timeout 5 ls"), Some(&n)).is_some());
+}
+
+#[test]
+fn primary_fields_and_bad_parameter_rules_cannot_be_read() {
+    for bad in [
+        "Bash(command:rm *)",
+        "Bash(command : rm)",
+        "PowerShell(command:x)",
+        "Read(file_path:x)",
+        "Edit(file_path:x)",
+        "Write(file_path:x)",
+        "Grep(path:x)",
+        "Glob(path:x)",
+        "NotebookEdit(notebook_path:x)",
+        "WebFetch(url:x)",
+        "Agent(model:)",
+        "mcp__x(y:z)",
+    ] {
+        assert!(parse(bad).is_err(), "{bad}");
+    }
+    for r in [
+        "Agent(model:opus)",
+        "Bash(run_in_background:true)",
+        "Read(offset:5)",
+    ] {
+        assert!(vet_allow(r, None).is_err(), "{r}");
+    }
+    let p = policy::Permissions {
+        deny: vec!["Bash(command:rm *)".into()],
+        ..Default::default()
+    };
+    assert!(Permissions::compile(&p, &env()).is_err());
 }
