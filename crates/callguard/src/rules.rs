@@ -709,6 +709,9 @@ pub struct Call {
     pub urls: Vec<String>,
     /// Normalized absolute path, "" if none.
     pub path: String,
+    /// The distinct path values as the host wrote them (all path-like keys,
+    /// any letter case); a read tool without one gets the working directory.
+    pub raw_paths: Vec<String>,
     pub in_project: bool,
     /// `path` with links and junctions resolved; None if it cannot be
     /// resolved, and then no allow rule may match on the path. Deny and ask
@@ -737,7 +740,7 @@ pub struct Call {
     pub project_dir: String,
 }
 
-pub(crate) const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "filePath"];
+const PATH_KEYS: [&str; 4] = ["file_path", "path", "notebook_path", "filePath"];
 
 /// The fields of a read tool that hold a glob or pattern for files.
 const PATTERN_KEYS: [&str; 2] = ["pattern", "glob"];
@@ -802,7 +805,7 @@ fn join_continuations(s: &str, sep: &str) -> String {
 
 /// The distinct non-empty values of `key` in any letter case: the exact
 /// spelling first, then the others in sorted key order.
-pub(crate) fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<String> {
+fn field_values(fields: &BTreeMap<String, String>, key: &str) -> Vec<String> {
     let others = fields
         .keys()
         .filter(|k| k.as_str() != key && k.eq_ignore_ascii_case(key));
@@ -948,13 +951,17 @@ impl Call {
             }
         }
         c.urls = urls_of(&c.fields);
-        let mut raw_path = PATH_KEYS
-            .iter()
-            .find_map(|k| field_values(&c.fields, k).into_iter().next())
-            .unwrap_or_default();
-        if raw_path.is_empty() && kind == KIND_READ {
-            raw_path = input.cwd.clone(); // Glob, Grep and LS default to the working directory
+        for k in PATH_KEYS {
+            for v in field_values(&c.fields, k) {
+                if !c.raw_paths.contains(&v) {
+                    c.raw_paths.push(v);
+                }
+            }
         }
+        if c.raw_paths.is_empty() && kind == KIND_READ && !input.cwd.is_empty() {
+            c.raw_paths.push(input.cwd.clone()); // Glob, Grep and LS default to the working directory
+        }
+        let raw_path = c.raw_paths.first().cloned().unwrap_or_default();
         let project = (!input.project_dir.is_empty())
             .then(|| env.normalize(&input.project_dir, &input.cwd))
             .map(|p| {

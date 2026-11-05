@@ -42,10 +42,7 @@ mod web;
 
 use crate::nah::{NahResult, NahVerdict};
 use crate::policy::{self, quote_string};
-use crate::rules::{
-    Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, PATH_KEYS, RulesError, field_values,
-    kind_of,
-};
+use crate::rules::{Call, Env, KIND_FETCH, KIND_READ, KIND_SHELL, KIND_WRITE, RulesError, kind_of};
 use crate::schema::Decision;
 
 use paths::{Ctx, PathSpec};
@@ -599,26 +596,10 @@ impl Permissions {
         }
     }
 
-    /// The distinct path values of the call as the host wrote them.
-    fn raw_paths(&self, call: &Call) -> Vec<String> {
-        let mut vals: Vec<String> = Vec::new();
-        for k in PATH_KEYS {
-            for v in field_values(&call.fields, k) {
-                if !vals.contains(&v) {
-                    vals.push(v);
-                }
-            }
-        }
-        if vals.is_empty() && call.kind == KIND_READ && !call.cwd.is_empty() {
-            vals.push(call.cwd.clone()); // Glob, Grep and LS default to the working directory
-        }
-        vals
-    }
-
     /// A path rule. Deny and ask match if any path value, requested or
     /// resolved, matches. Allow needs one value, and both forms must match.
     fn path_match(&self, spec: &PathSpec, call: &Call, allow: bool) -> bool {
-        let raw = self.raw_paths(call);
+        let raw = &call.raw_paths;
         if raw.is_empty() || (allow && raw.len() != 1) {
             return false;
         }
@@ -629,7 +610,7 @@ impl Permissions {
         // `Edit(**/hooks/*)` names no guarded directory, but may reach one.
         let guarded = allow && !names_guarded_dir(spec);
         let root = ctx.project.as_deref().or(ctx.cwd.as_deref());
-        for r in &raw {
+        for r in raw {
             if allow && (paths::is_network(&self.env, r) || self.env.drive_relative(r)) {
                 return false;
             }
