@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::graph::list;
 use callguard::nah::NahCall;
 use callguard::schema::{FactCommand, FactEffect, FactGit, FactHost, FactPath, Facts};
 use serde_json::Value;
@@ -11,10 +12,25 @@ fn text(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_owned()
 }
 
-fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
-    v.get(key)
-        .and_then(Value::as_array)
-        .map_or(&[], Vec::as_slice)
+/// The commands by node id.
+fn by_id(commands: &[Value]) -> BTreeMap<u64, &Value> {
+    commands
+        .iter()
+        .filter_map(|c| Some((c.get("id")?.as_u64()?, c)))
+        .collect()
+}
+
+/// The program (else the kind) of the node `parent` that ran a command, unless
+/// that node is the tool call itself; "" for a command the tool ran directly.
+fn via_of(by_id: &BTreeMap<u64, &Value>, parent: u64) -> String {
+    by_id
+        .get(&parent)
+        .filter(|p| !p.get("parent").is_none_or(Value::is_null))
+        .map(|p| match text(p, "program") {
+            t if t.is_empty() => text(p, "kind"),
+            t => t,
+        })
+        .unwrap_or_default()
 }
 
 /// Every call but the root, unknown ones included, for permission rules:
@@ -22,10 +38,7 @@ fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
 /// allow rule must see them. An argv with a non-string element is unknown.
 pub(crate) fn calls(nf: &Value) -> Vec<NahCall> {
     let commands = list(nf, "commands");
-    let by_id: BTreeMap<u64, &Value> = commands
-        .iter()
-        .filter_map(|c| Some((c.get("id")?.as_u64()?, c)))
-        .collect();
+    let by_id = by_id(commands);
     let mut seen_root = false;
     commands
         .iter()
@@ -47,14 +60,7 @@ pub(crate) fn calls(nf: &Value) -> Vec<NahCall> {
                 .get("argv")
                 .and_then(Value::as_array)
                 .and_then(|a| a.iter().map(|x| x.as_str().map(str::to_owned)).collect());
-            let via = by_id
-                .get(&parent)
-                .filter(|p| !p.get("parent").is_none_or(Value::is_null))
-                .map(|p| match text(p, "program") {
-                    t if t.is_empty() => text(p, "kind"),
-                    t => t,
-                })
-                .unwrap_or_default();
+            let via = via_of(&by_id, parent);
             Some(NahCall {
                 argv,
                 program: text(c, "program"),
@@ -75,10 +81,7 @@ pub(crate) fn map(nf: &Value, guards: Vec<String>, coverage: &str) -> Facts {
         ..Default::default()
     };
     let commands = list(nf, "commands");
-    let by_id: BTreeMap<u64, &Value> = commands
-        .iter()
-        .filter_map(|c| Some((c.get("id")?.as_u64()?, c)))
-        .collect();
+    let by_id = by_id(commands);
     for c in commands {
         let Some(parent) = c.get("parent").and_then(Value::as_u64) else {
             continue; // the tool call itself
@@ -86,22 +89,14 @@ pub(crate) fn map(nf: &Value, guards: Vec<String>, coverage: &str) -> Facts {
         let Some(argv) = c.get("argv").and_then(Value::as_array) else {
             continue; // a command nah could not spell
         };
-        let mut fc = FactCommand {
+        let fc = FactCommand {
             argv: argv
                 .iter()
                 .map(|a| a.as_str().map_or_else(|| a.to_string(), str::to_owned))
                 .collect(),
             cwd: text(c, "cwd"),
-            via: String::new(),
+            via: via_of(&by_id, parent),
         };
-        if let Some(p) = by_id.get(&parent)
-            && !p.get("parent").is_none_or(Value::is_null)
-        {
-            fc.via = text(p, "program");
-            if fc.via.is_empty() {
-                fc.via = text(p, "kind");
-            }
-        }
         f.commands.push(fc);
     }
 

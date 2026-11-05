@@ -46,7 +46,7 @@ pub(crate) fn graph_facts(result: &DecisionResult, observations: &[Observation])
     })
 }
 
-fn list<'a>(value: &'a Value, key: &str) -> &'a [Value] {
+pub(crate) fn list<'a>(value: &'a Value, key: &str) -> &'a [Value] {
     value
         .get(key)
         .and_then(Value::as_array)
