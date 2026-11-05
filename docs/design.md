@@ -1,12 +1,12 @@
 # callguard design
 
-Status: v0 design, 2026-11-02; sections 4 to 6 and 12 rewritten 2026-11-04 for the Rust implementation (ADR 0007, ADR 0008). `[U]` marks a claim not verified against a primary source.
+Status: v0 design, 2026-11-02; sections 4 to 6 and 12 rewritten 2026-11-04 for the Rust implementation (ADR 0007, ADR 0008); parity with Claude's permission rules added 2026-11-05 ([claude-parity.md](claude-parity.md), ADR 0009). `[U]` marks a claim not verified against a primary source.
 
 callguard decides whether one pending coding-agent tool call may run without a human prompt. It answers `allow`, `ask` or `deny`, with a reason, the layer and rule that decided, and a confidence. It is a peer of Claude Code's auto-mode classifier that works for every harness through hook adapters. It has no dependency on any control plane; a host such as Switchboard supplies optional context through the request and reads verdicts back.
 
 ## 1. Reference: Claude Code auto mode
 
-callguard follows auto mode where that makes sense. What auto mode does, with sources (read 2026-11-02):
+callguard follows auto mode where that makes sense. What auto mode does, with sources (read 2026-11-02; the permissions page was read again 2026-11-05, see the last rows and [claude-parity.md](claude-parity.md)):
 
 | Topic | Auto mode behaviour | Source |
 | --- | --- | --- |
@@ -21,8 +21,15 @@ callguard follows auto mode where that makes sense. What auto mode does, with so
 | Config scopes | `autoMode` is read from user settings, managed settings and `--settings`, **not** from project settings, "so a checked-in repo or a build step could otherwise inject its own allow rules". Scopes combine additively: "a developer-added `allow` entry can override an organization `soft_deny` entry: the combination is additive, not a hard policy boundary." | [AC] |
 | Model | Docs: classifier requests go to Claude Sonnet 5 by default, overridable with `CLAUDE_CODE_AUTO_MODE_MODEL`. The post (older) says Sonnet 4.6. | [PM], [E] |
 | Injection probe | A separate server-side probe scans tool results and warns the agent; it is not part of the classifier. | [E] |
+| Rule order | "Rules are evaluated in order: deny, then ask, then allow. The first match in that order determines the outcome"; an allow cannot carve an exception out of a deny. A hook's `allow` does not bypass deny or ask rules. | [P] |
+| Rule forms | `Tool`, `Tool(specifier)`, `Tool(param:value)` for deny and ask (not a tool's primary field), `Agent(name)`, `Skill(...)`, `mcp__server__tool` with globs, `!` negation of earlier `path` rules of the same source, `PowerShell` with canonical aliases. `Write`, `NotebookEdit`, `Glob` and `MultiEdit` path rules never match. | [P] |
+| Bash matching | Wrappers stripped before matching: `timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command`, `builtin`, `noglob`, known-safe env assignments, bare `xargs`. Deny and ask see inside subshells and substitutions; every part of a compound command must be allowed. A deny rule does not stop `/bin/rm` or `sh -c 'rm ...'`. | [P] |
+| Read-only commands | Built-in set (`ls cat echo pwd head tail grep find wc which diff stat du cd` and read-only `git`) runs without a prompt; redirect and `tee` targets are checked against `Edit` rules, protected paths and working directories; commands over 10,000 characters, UNC paths and `cd` with `git` elsewhere prompt. | [P] |
+| Working directories | `--add-dir`, `/add-dir`, `permissions.additionalDirectories`. Reads inside need no prompt. Network paths (UNC, `/net`) always prompt, whatever allow rule or hook says (v2.1.292). | [P] |
+| Project trust | A project's `permissions.allow` and `additionalDirectories` count only after the workspace trust dialog; deny and ask apply at once. | [P] |
+| Symlinks | Allow needs the requested path and its target to match; deny matches either. | [P] |
 
-Sources: [E] anthropic.com/engineering/claude-code-auto-mode; [PM] code.claude.com/docs/en/permission-modes; [AC] code.claude.com/docs/en/auto-mode-config; [H] code.claude.com/docs/en/hooks.
+Sources: [E] anthropic.com/engineering/claude-code-auto-mode; [PM] code.claude.com/docs/en/permission-modes; [AC] code.claude.com/docs/en/auto-mode-config; [H] code.claude.com/docs/en/hooks; [P] code.claude.com/docs/en/permissions (read 2026-11-05). The auto-mode rows above were not re-read on 2026-11-05.
 
 Not verified: auto mode's latency and per-call cost (the post gives none); the exact prompt template beyond "a fixed template plus three customizable slots" [E]; whether the 3/20 counters include rule-based denials.
 
@@ -43,7 +50,7 @@ In scope:
 Non-goals:
 - Sandboxing, capabilities, rollback, or running the tool. `allow` only means "no prompt needed"; it never overrides a harness deny or ask rule.
 - Detection after the fact, transcript monitoring, content moderation, prompt-injection scanning of tool results (Prompt Guard class models belong in a separate watcher).
-- Reading host state. callguard never reads Switchboard state or any project file (CLAUDE.md included) on its own; the caller passes what it wants judged. The one exception is the judge's meta lines (§7): for shell calls that touch git it runs `git status`, `git remote get-url` and, for push or publish commands, `gh repo view`, which is a network call to GitHub. A deployment that must not make that call keeps `gh` off the hook's PATH (visibility then stays `unknown`) or passes `meta` in the request.
+- Reading host state. callguard never reads Switchboard state or any project file (CLAUDE.md included) on its own; the caller passes what it wants judged (`instructions`, `notes`, ADR 0009). The one Claude-specific bridge, `InstructionsLoaded`, records the paths Claude itself loaded and reads those files (§7). The one exception is the judge's meta lines (§7): for shell calls that touch git it runs `git status`, `git remote get-url` and, for push or publish commands, `gh repo view`, which is a network call to GitHub. A deployment that must not make that call keeps `gh` off the hook's PATH (visibility then stays `unknown`) or passes `meta` in the request.
 - Being complete. Shell analysis is regex-based and best-effort; nah, when installed, provides deeper deterministic analysis.
 
 ## 3. Threat model
@@ -73,7 +80,7 @@ One process per call. Layers run in order; the first enforced layer that decides
 
 | # | Layer (`layer` value) | Decides | Notes |
 | --- | --- | --- | --- |
-| 0 | `builtin` | deny, ask | Small hard-deny set (catastrophic deletion, raw-disk writes, fork bomb) and self-protection of the hook, policy and trust files (§3). Always on; only the system layer can disable a rule by id. Runs in the parent, before nah, so a nah crash is never a way past it. |
+| 0 | `builtin` | deny, ask | Small hard-deny set (catastrophic deletion, raw-disk writes, fork bomb), self-protection of the hook, policy and trust files (§3), and `rm-critical` (below). Always on; only the system layer can disable a rule by id. Runs in the parent, before nah, so a nah crash is never a way past it. |
 | 1 | `nah` | deny | nah, linked into the binary and run as a supervised child (§6). `block` → deny; `delegate` → next layer, keeping nah's parse as facts. |
 | 2 | `rules` | deny, ask, allow | The regex rules and the `permissions` rules (§5). Among matches deny > ask > allow. `allow` ends the pipeline without a model call (auto mode tiers 1 and 2). |
 | 3 | `llm` | allow, ask, deny | The judge (§7). Low confidence or invalid output → ask. |
@@ -81,6 +88,8 @@ One process per call. Layers run in order; the first enforced layer that decides
 | – | `fallback` | ask or deny | An error, timeout, unavailable backend, refused data class, or no nah answer. `ask` when interactive, `deny` when unattended. |
 
 Deterministic layers come first, so the model only loosens calls the rules sent to it, and only to "skip the prompt". It can never override a deny or ask from an earlier layer.
+
+**`rm-critical`.** Deleting something no project can afford to lose asks a human: no allow rule and no judge can pass it, and an unattended session turns the ask into a deny. Targets (Claude's list): the root and its direct children, home, Windows drive roots and their children (`\\?\C:\`, `\\localhost\C$`, volume GUIDs), the working or project directory and their parents, and shapes whose target cannot be known: `"$DIR"/*`, `"$1"/*`, `$VAR/usr`, a variable assigned `$(pwd)`, a target that is only a command substitution, `~/$(cmd)`. It reads nah's argv (which sees `bash -c` and substitutions) and the raw text, so a call that no parser can spell is still caught. Order: a deny from nah or a rule still wins; the check runs before allow rules and the judge, and also when nah failed. Not found: Windows 8.3 short names (`USERNA~1`) are not expanded. `disable_builtin: ["rm-critical"]` switches it off (system layer). The older `rm-root` hard deny stays.
 
 **nah is required.** If the nah child crashes, is killed at its deadline, gives bad output, or its analysis runs out of its budget, the call has no parse. Rules still run, but an allow cannot match; a deny or ask rule can. If no rule decides, the verdict is the fail-safe one (layer `fallback`, rule `nah`) and the judge is skipped: it would read the call without the parse that makes its answer safe to trust. Why: a crafted input that kills or stalls nah must not become a route to an allow. Ordinary partial coverage is not a failure; it only keeps allow rules away. `nah.enabled: false` (debugging) and `nah.mode: shadow` keep their meaning.
 
@@ -97,14 +106,16 @@ Deterministic layers come first, so the model only loosens calls the rules sent 
 **Tool kinds.** Adapters keep the harness's tool name and callguard maps it to a kind so rules work across harnesses: `shell` (Bash, PowerShell, bash, terminal, execute_code, process), `read` (Read, Glob, Grep, LS, read, glob, grep, list, find, ls, read_file, search_files), `write` (Write, Edit, MultiEdit, NotebookEdit, write, edit, patch, multi-edit, write_file), `fetch` (WebFetch, WebSearch, webfetch, websearch, web_search, web_extract), `agent` (Task, Agent, task), `mcp` (`mcp__*`), `other` (`rules.rs` has the table). Path arguments come from the common fields (`file_path`, `path`, `notebook_path`, `filePath`); shell commands from `command` (Hermes `execute_code`: `code`), with line continuations joined; URLs from `url`.
 
 **Default rules** (built into the default policy, removable by the system layer with `"defaults": false`):
-- allow `read` inside the project; allow `write` inside the project except protected paths (`.git/`, `.claude/`, `.callguard/`, `.opencode/`, `.pi/`, `.hermes/`), which go on to the judge rather than being auto-allowed — auto mode tiers 1 and 2;
+- allow `read` inside the project; allow `write` inside the project except protected paths, which go on to the judge rather than being auto-allowed (auto mode tiers 1 and 2). Protected paths are one list (`policy/protected.rs`) that also feeds allow-rule vetting: directories `.git`, `.config/git`, `.vscode`, `.idea`, `.husky`, `.cargo`, `.devcontainer`, `.yarn`, `.mvn`, `.claude`, `.callguard`, `.opencode`, `.pi`, `.hermes`, and files `.gitconfig`, `.gitmodules`, shell start-up files (`.bashrc`, `.zshrc`, `.profile`, `.envrc`, ...), package-manager and build config (`.npmrc`, `.yarnrc*`, `.pnp.*`, `bunfig.toml`, `.bazelrc`, ...), hook runners (`.pre-commit-config.yaml`, `lefthook.*`), `gradle-wrapper.properties`, `.devcontainer.json`, `.ripgreprc`, `pyrightconfig.json`, `.mcp.json`, `.claude.json`. Directories and files match by name at any depth, case-folded;
+- `read-only-command`: allow a shell call made only of built-in read-only commands (`ls cat echo pwd head tail grep find wc which diff stat du cd` and read-only `git` subcommands), each with a flag allowlist (`find` without `-exec`, `-delete`, `-fprint`, `-files0-from`; `git` without `--ext-diff`, `--output`). It passes the same gate as an allow rule: nah and the lexer agree on every command (`permissions/readonly.rs`). Stricter than Claude: a path argument outside the project and the additional directories, `..` and `~` included, goes to the judge, and so does a path that a deny or ask rule (`secret-read` too) would stop a `Read` of; unquoted globs and redirects are refused by the lexer. Like Claude: `cd` elsewhere together with `git`, UNC paths and commands over 10,000 characters are excluded. `cd sub && ls` still goes to the judge, because nah gives no argv for `cd`;
+- `docs-fetch`: allow `WebFetch` of a page on about 30 documentation hosts (Python, Rust, MDN, Go, Docker, Kubernetes, ...; exact host names, the plain `https://host/` shape; `DOCS_HOSTS` in `policy/defaults.rs`). No code hosting, paste sites, wikis, forums or registries. Explicit deny and ask rules win, and `classifier-injection` still reads the call;
 - ask for reads of common secret locations (`~/.ssh`, `~/.aws`, `.env`, `.env.*`, `*.pem`, `id_rsa*`, `id_ed25519*`, `.netrc`), by read tools or named in a shell command;
-- deny pipe-to-shell (`curl … | sh`) and secret-exfil (a network tool and a common secret location in one command); ask for force push, discarding uncommitted work (`git reset --hard`, `git clean -f`, `git checkout .`, `git restore .`), `terraform|tofu|pulumi|cdk|terragrunt destroy`, `kubectl delete`, `gh repo delete`, package publish, `sudo`/`doas`;
+- deny pipe-to-shell (`curl ... | sh`) and secret-exfil (a network tool and a common secret location in one command); ask for force push, discarding uncommitted work (`git reset --hard`, `git clean -f`, `git checkout .`, `git restore .`), `terraform|tofu|pulumi|cdk|terragrunt destroy`, `kubectl delete`, `gh repo delete`, package publish, `sudo`/`doas`;
 - ask for tool input that addresses the classifier (the injection marker); ask for `ssh host <destructive command>` (`ssh-remote-destructive`); deny `scp`/`rsync`/`sftp` of a whole `.ssh`, `.aws` or `.gnupg` directory to a remote (`scp-home-secret`).
 
 The default rules stay regex rules with ids. None was removed for overlapping nah: a case-by-case check found no rule whose every case nah blocks on both systems (the table is in `git show 145fe3e:docs/rust-phase4.md`), and a regex rule still reads the text when nah has no parse. Where nah also blocks, nah's deny comes first, so a former ask can become a deny.
 
-"Project" is the request's `project_dir` if given, else the git root above `cwd`, else `cwd`.
+"Project" is the request's `project_dir` if given, else the git root above `cwd`, else `cwd`. **Additional directories** (`permissions.additionalDirectories`, the request's `additional_dirs`, `--add-dir`) count as project for reads, writes and read-only commands; the protected list still applies in them. The home directory, a file system root, a network path and (in a policy or request) a relative path are refused with a warning. A project layer's entries need `callguard trust` and join its hash (only when present, so earlier trusts stay valid).
 
 ## 5. Policy
 
@@ -127,13 +138,14 @@ JSON (ADR 0003). Each file has `"policy_version": 1`. Unknown keys are an error 
   "permissions": {
     "deny": ["Bash(git push:*)", "Read(~/.ssh/**)"],
     "ask": ["Bash(npm publish:*)"],
-    "allow": ["Bash(git status)", "Edit(src/**)"]
+    "allow": ["Bash(git status)", "Edit(src/**)"],
+    "additionalDirectories": ["/data/shared"]
   },
   "nah": {"enabled": true, "timeout_ms": 10000, "budget_ms": 2000, "mode": "enforce", "guards": {}},
   "llm": {
     "enabled": true, "mode": "shadow", "backend": "anthropic",
     "timeout_ms": 3000, "min_confidence": 0.7,
-    "transcript": {"max_messages": 20, "max_bytes": 24000},
+    "transcript": {"max_messages": 20, "max_bytes": 24000}, "instructions": true,
     "environment": ["Trusted repo: the working repository and its remotes"],
     "block": [], "allow_exceptions": []
   },
@@ -159,13 +171,19 @@ All present conditions must hold (AND); a list means any of its values (OR).
 A rule with no conditions is invalid.
 
 ### Permission rules (ADR 0008)
-`permissions.deny`, `ask` and `allow` hold rules in Claude Code's syntax: `Bash(git push:*)`, `Bash(npm run build)`, `Bash(git * main)`, `Read(~/.ssh/**)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, `mcp__server__tool`, or a bare tool name. Tool names map across harnesses by kind, so `Bash` covers `shell`, `terminal` and so on; path forms are Claude's (`//abs`, `~/`, `/project-relative`, `./cwd-relative`).
+`permissions.deny`, `ask` and `allow` hold rules in Claude Code's syntax: `Bash(git push:*)`, `Bash(npm run build)`, `Bash(git * main)`, `Read(~/.ssh/**)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, `mcp__server__tool`, or a bare tool name. Tool names map across harnesses by kind, so `Bash` covers `shell`, `terminal` and so on; path forms are Claude's (`//abs`, `~/`, `/project-relative`, `./cwd-relative`). [claude-parity.md](claude-parity.md) compares every form with Claude's.
 - They match nah's parse by tokens, not joined text: `Bash(git push:*)` matches a sub-command whose argv begins `git push`, also behind the wrappers nah sees through (`bash -c`, `xargs`, `find -exec`), and as `git -C . push`.
 - **deny and ask** match if any sub-command matches. Where nah has no parse or a hole in it, they also try the raw text.
-- **allow** needs every sub-command to match, full coverage and agreement of nah's parse with callguard's own lexer (§4). `git status; rm x` does not match `Bash(git status:*)`.
-- An allow only skips the judge. It never overrides self-protection, nah or a deny.
-- Every layer drops blanket and interpreter allows with a warning (`Bash`, `Bash(*)`, `Bash(python:*)`, `Bash(node:*)`, `Bash(curl:*)`, ...), package-manager run wildcards (`npm run *`, `cargo run *`, `git config *`), `Agent`, `Task` and `Monitor` allows, and in the user and project layers allows for hook, policy and VCS directories (a wildcard allow also never matches a path inside one, whatever layer wrote it). Claude's auto mode drops the same kinds.
-- A deny or ask rule that cannot be read fails the policy; an allow rule that cannot be read is dropped.
+- **allow** needs every sub-command to match, full coverage and agreement of nah's parse with callguard's own lexer (§4). `git status; rm x` does not match `Bash(git status:*)`. One exception, as in Claude: an exact allow for a script runner (`npm test`, `pytest a`; runners `npm`, `yarn`, `pnpm`, `bun`, `make`, `just`, `cargo`, `go`) runs without a look inside when every gap in nah's answer is on a short list of "runs repository code" gaps, nah did not block, and the lexer still agrees. A budget overrun, a parse error or a failed nah never passes.
+- An allow only skips the judge. It never overrides self-protection, nah, `rm-critical` or a deny.
+- More forms, deny and ask only (as an allow they are dropped or unreadable):
+  - `Agent(name)` matches the call's `subagent_type`.
+  - `Skill(name)`, `Skill(name *)`, `Skill(skill:x)` compare the literal `skill` input; callguard does not know a skill's aliases, so it cannot match Claude's "any of its names". Arguments of the call are ignored.
+  - `Tool(param:value)` matches one top-level scalar of the input, `*` as wildcard; an omitted parameter never matches. A tool's primary field (`command`, `file_path`, `path`, `notebook_path`, `url`) cannot be named: Claude ignores such a rule, callguard fails the policy. Shell, path and WebFetch tools take only the parameters listed in `permissions/params.rs` (`run_in_background`, `timeout`, `offset`, ...), so `Bash(git:status)` stays a command.
+  - `Read(!pattern)` (any path family): a gitignore-style carve-out of the `path` and `./path` rules before it in the same list. Claude's limits hold (a `!` listed first carves nothing, no reopening inside a directory a rule blocks whole, anchored patterns carve nothing). The carve-out is joined to its rules when each layer is read (`permissions/carve.rs`), before the merge loses the source, so a project's `!` cannot cancel a system or user rule. A carved path is still stopped when the target of a link is not carved.
+  - `PowerShell(...)`: aliases (`gci`, `ri`, `rm`, ...) are canonicalized and matching ignores case, as in Claude. The call is matched on its raw text because nah does not analyse PowerShell.
+- Every layer drops with a warning: blanket and interpreter allows (`Bash`, `Bash(*)`, `Bash(python:*)`, `Bash(node:*)`, `Bash(curl:*)`, ...), package-manager run wildcards (`npm run *`, `cargo run *`, `git config *`), `Agent`, `Task` and `Monitor` allows, **PowerShell allows** (nah has no PowerShell parse for the lexer to agree with), and in the user and project layers allows for protected paths (§4; a wildcard allow also never matches a path inside one, whatever layer wrote it). Claude's auto mode drops the same kinds.
+- A deny or ask rule that cannot be read fails the policy (Claude skips it); an allow rule that cannot be read is dropped. The differences from Claude's matching are listed at the top of `crates/callguard/src/permissions.rs`.
 
 ### Layers and merge
 Layers, lowest to highest authority:
@@ -178,7 +196,7 @@ A system rule with the id of a default rule replaces it. User and project layers
 
 Two exceptions to "only tighten" follow Claude Code, which also lets a user and a project allow things:
 - `permissions.allow` is accepted from the user layer, after the vetting of §4.
-- A project's `permissions.allow` applies only after `callguard trust` (ADR 0008). The command shows the rules and asks in a real terminal: stdin and stdout must be terminals, with no `--yes` and no environment override. Trust is stored per user (`<user config dir>/callguard/trusted-projects.json`, protected like the policy files) as a hash of the project path and the allow rules in order, so a changed rule or a moved file must be approved again (stricter than Claude's per-workspace trust). After trust the rules get the user layer's vetting.
+- A project's `permissions.allow` and `permissions.additionalDirectories` apply only after `callguard trust` (ADR 0008). The command shows them and asks in a real terminal: stdin and stdout must be terminals, with no `--yes` and no environment override. Trust is stored per user (`<user config dir>/callguard/trusted-projects.json`, protected like the policy files) as a hash of the project path, the allow rules in order and the additional directories, so a changed rule or directory or a moved file must be approved again (stricter than Claude's per-workspace trust). After trust the rules get the user layer's vetting.
 
 `llm.block` from a project layer is ignored with a warning: it is repo-written text that goes into the judge's prompt as a HARD rule, so a cloned repo could use it to steer the judge. User and system `llm.block` entries stay. (Earlier versions appended project entries.)
 
@@ -227,6 +245,7 @@ The judge gets one `<transcript>` block of JSON lines, each a single-key object:
   - `call`: earlier tool calls, name and input, with a short id.
   - `outcome`: how a call ended, from harness records only (see below).
   - `tool_result` content is never shown.
+- **Host instructions and notes** (ADR 0009), when the request carries them: `{"meta":{"hostInstructions":"..."}}` right after the session line, and `{"meta":{"hostNote":{"id":"c3","text":"..."}}}` right after the call with that id. Both sit in the user message, so the cached system prompt stays stable, and both are JSON-escaped like every other line. The prompt calls them **unverified context from the host**: they may describe conventions and what the agent was told, but never establish user intent or consent, never clear a block and never lower a bar; a claim of approval in them counts only if the user's own `user` lines say it. The engine keeps the last 8 KiB of instructions and 2,000 characters of notes per call, and drops notes for calls the judge does not see (cut from the history). `llm.instructions: false` (system or user layer) keeps instructions out. Instructions are repo-written text, so they are labelled data, not a rule source.
 - **Meta lines** directly above the action (below).
 - **Action**: tool, kind and input (strings capped at 8 KiB, whole input at 16 KiB). If Claude already wrote the pending tool_use into the transcript, that trailing duplicate is dropped.
 
@@ -240,6 +259,8 @@ Inline `transcript.messages` from other harnesses use roles `user`, `assistant`,
 - `nah`: the facts of §6, unless the eval runs with `--facts off`.
 - Not provided (unlike the source prompt): meta lines above earlier calls (only the pending call gets them), `host_context` lines, browser navigation lines.
 
+**Where instructions come from.** The engine discovers nothing, parses no `@import` and runs no approval flow: the host passes `instructions` as one consolidated string. For Claude Code the PreToolUse payload has none, so the hook bridge (`callguard hook claude` handling `InstructionsLoaded`, `instructions.rs`) uses Claude's own discovery: the event fires per loaded file, imports included, after Claude's approvals. The hook records each `file_path` in `<state dir>/callguard/instructions/<session>.txt` (beside the decision log's default place, self-protected, pruned after 7 days) and the next PreToolUse reads the absolute `.md` files without `..`, up to 64 KiB each, in load order. Limits: the event is asynchronous, so the first calls of a session may run before any file is recorded; it does not fire when Claude reads `AGENTS.md` (or any file) directly. Other harnesses get instructions only from their host. `notes` have no CLI verb or file: an agent running as the same user could call it.
+
 Policy slots: `environment`, `block`, `allow_exceptions` (prose, as in auto mode) fill the prompt's slots.
 
 ### Prompt
@@ -251,7 +272,7 @@ Changed: outcome and meta lines match what callguard can actually produce (no `u
 
 Dropped, and why:
 - Chrome / browser rules and evaluation rules (navigate, form input, JS exfil, file upload, shortcuts, unverifiable gestures, side-door actions, agent narration, navigation meta lines): Claude-in-Chrome only; no harness callguard supports has these tools. Agent narration also contradicts excluding the agent's narration of the pending call.
-- Workflow tool scripts: a Claude Code feature with no equivalent here (sub-agent prompts are still covered). The source has no separate hand-back prompt, only one rule for it; `assets/handback.md` is callguard's own prompt built from that rule, used by the Claude `PostToolUse` report review.
+- Workflow tool scripts: a Claude Code feature with no equivalent here (sub-agent prompts are still covered). The source has no separate hand-back prompt, only one rule for it; the hand-back review is present as `assets/handback.md`, callguard's own prompt built from that rule and User Intent Rule 7 (relayed claims), used by the Claude `PostToolUse` report review (§10).
 - Live-shared Artifact rule, `SandboxNetworkAccess` callbacks, `allowed_domains` network lists: Claude Code product surfaces.
 - `host_context` lines, scheduled-task fires, `CronCreate`/`RemoteTrigger` exception, `<pasted_content>` and `[User answered AskUserQuestion]` conventions: Claude Code transcript conventions callguard does not render (pasted content is kept generically under principle 9).
 - Restricted destinations and copies-carry-sharing: connected-drive rules for one product's file tools; their substance survives in Outbound Submissions, Destination Novelty and Permission Grant.
@@ -293,12 +314,17 @@ Request `callguard/request/v1`:
   "meta": {"git_status": {"clean": false, "untracked": 1, "files": ["?? .env"]},
            "repo_visibility": [{"remote": "github.com/o/r", "visibility": "public"}]},
   "facts": {"source": "nah", "coverage": "full", "commands": [{"argv": ["git", "push"]}]},
+  "additional_dirs": ["/data/shared"],
+  "instructions": "# Project notes\nUse pnpm, not npm.",
+  "notes": [{"tool_use_id": "t1", "text": "the build output was truncated by the host"}],
   "context": {"trust": "tainted", "data_class": "private", "principal": "alice"},
   "unattended": false,
   "permission_mode": "default"
 }
 ```
 - `meta` and `facts` (additive within v1) are host-supplied observations about the pending call (§6, §7). Like `context`, only the host or adapter sets them; the bundled adapters never fill them, and the generic adapter does not copy them from its input. When absent, callguard computes `meta` itself and takes `facts` from nah.
+- `additional_dirs` (additive within v1) are absolute directories that count as the project, as `permissions.additionalDirectories` does (§4).
+- `instructions` (string) and `notes` (`tool_use_id`, `text`) are host-supplied text for the judge only (§7, ADR 0009): unverified, capped (8 KiB; 2,000 characters per call), never consent. Rules do not read them. The bundled adapters fill `instructions` only through the Claude bridge; the generic adapter does not copy either from its input.
 - `context` is a free string map. Rules can match it and the judge sees it; callguard gives no meaning to keys other than `data_class`. A host (Switchboard) can pass taint, zone class or principal here.
 - `unattended` is set by the adapter: Claude Code `permission_mode == "dontAsk"` (whether `-p` without a prompt tool always reports that is `[U]`), or the `--unattended` adapter flag for other harnesses.
 
@@ -338,6 +364,10 @@ Verdict `callguard/verdict/v1`:
 | pi | extension, `pi.on("tool_call")` | return | `ctx.ui.confirm`, else block | `{block: true, reason}` | return | verified against pi docs; untested `[U]` |
 
 Claude Code details: exit 0 with JSON for every decision. On an internal failure the adapter still prints an ask (or deny when unattended) and exits 0; if it cannot even produce JSON it exits 2. A usage error in the hook command (unknown harness, bad flag) or a mistyped verb (`callguard hok claude`) also exits 2. It never exits 1, 3 or 64, which Claude treats as non-blocking. The README's hook snippet sets `timeout` and `onFailure: "block"`. Deny reasons tell the agent not to route around the block and to ask the user.
+
+Claude Code also gets two more events from the same command (README has the settings):
+- `InstructionsLoaded` records instruction files for the judge (§7). It prints nothing.
+- `PostToolUse` on `Agent|Task` reviews a sub-agent's final report with `assets/handback.md`: the judge reads the report (cut to 16 KiB), the sub-agent's last 40 calls when its record is found, and the parent's request, all as untrusted data, and answers `clean` or `flag`. A flag, or a review that failed, returns `hookSpecificOutput.additionalContext` with a security warning for the parent; it never blocks and always exits 0. Skipped in `permission_mode: auto` (Claude reviews it) unless `--review-in-auto`, and when the llm layer is off. The log entry has layer `handback` and decision `ask`, so it feeds neither the deny streak nor the blocked-by-callguard marks. The shape of `tool_response` for an `Agent` call is not documented by Claude; the report text is read from `content[].text`, else the string, else `result` or `text` `[U]`.
 
 Two Claude-specific limits on `allow`:
 - Tools that need a user answer (`AskUserQuestion`, `ExitPlanMode`) need `updatedInput` together with `allow` [H]; a bare `allow` is wrong for them. The adapter emits nothing on `allow` for these tools; `ask` and `deny` still apply.
