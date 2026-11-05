@@ -1300,10 +1300,23 @@ pub fn runs_trust_verb(command: &str) -> bool {
             words.iter().enumerate().any(|(i, w)| {
                 command_name(w) == "callguard"
                     && words.get(i + 1).is_some_and(|n| n == "trust")
-                    && !words[i + 2..].iter().any(|a| a == "--list" || a == "-list")
+                    && !plain_list(&words[i + 2..])
             })
         })
     })
+}
+
+/// Whether the arguments of `callguard trust` ask for the listing, and
+/// nothing else: `--list` is there and every spelling of it is a bare flag.
+/// The last value of a flag wins, so `--list --list=false` is not a list.
+fn plain_list(args: &[String]) -> bool {
+    let lists: Vec<&String> = args
+        .iter()
+        .filter(|a| {
+            a.starts_with('-') && a.trim_start_matches('-').split('=').next() == Some("list")
+        })
+        .collect();
+    !lists.is_empty() && lists.iter().all(|a| *a == "--list" || *a == "-list")
 }
 
 /// `s` without quotes and backslashes: how a shell reads a word split by empty

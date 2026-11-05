@@ -3001,6 +3001,16 @@ fn shell_guards_see_through_empty_quotes() {
     }
     assert!(runs_trust_verb(r#"callguard tr""ust"#));
     assert!(!runs_trust_verb(r#"callguard tr""ust --list"#));
+    // The last value of a flag wins, so a later `=false` turns the list off.
+    for c in [
+        "callguard trust --list --list=false",
+        "callguard trust --list=false",
+        "callguard trust -list=0 --list",
+        "callguard trust --list --list=true",
+    ] {
+        assert!(runs_trust_verb(c), "{c}");
+    }
+    assert!(!runs_trust_verb("callguard trust --list -list"));
 }
 
 #[test]
