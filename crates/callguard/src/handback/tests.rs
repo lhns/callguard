@@ -1,6 +1,7 @@
 use std::fs;
 
 use super::*;
+use crate::transcript::TRUNC_MARKER;
 
 fn report(text: &str) -> SubagentReport {
     SubagentReport {

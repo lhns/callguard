@@ -14,9 +14,9 @@ use serde_json::Value;
 use serde_json::value::RawValue;
 
 use crate::backend::ClassifyRequest;
-use crate::judge::{self, Input};
+use crate::judge::{self, Input, MAX_REASON_RUNES, clip_runes, cut_string as cut};
 use crate::schema::Transcript;
-use crate::transcript::{self, TRUNC_MARKER};
+use crate::transcript;
 
 /// The embedded system prompt.
 const PROMPT_FILE: &str = include_str!("../assets/handback.md");
@@ -35,12 +35,11 @@ pub(crate) const SCHEMA: &str = concat!(
 );
 
 /// The report is cut to this many bytes.
-pub const MAX_REPORT_BYTES: usize = 16 << 10;
+pub(crate) const MAX_REPORT_BYTES: usize = 16 << 10;
 /// The most sub-agent calls listed (the last ones).
-pub const MAX_CALLS: usize = 40;
+pub(crate) const MAX_CALLS: usize = 40;
 const MAX_PROMPT_BYTES: usize = 4 << 10;
 const MAX_CALL_INPUT_BYTES: usize = 1 << 10;
-const MAX_REASON_RUNES: usize = 500;
 
 /// A finished sub-agent, as the hook adapter saw it.
 #[derive(Debug, Clone, Default)]
@@ -114,7 +113,7 @@ fn quote_safe(text: &str) -> String {
 /// The report's text from a `tool_response` the Claude docs do not describe:
 /// `content[].text` joined, else the value as a string, else `result` or
 /// `text`, else the JSON text itself. Cut to [`MAX_REPORT_BYTES`].
-pub fn report_text(tool_response: &str) -> String {
+pub(crate) fn report_text(tool_response: &str) -> String {
     let text = match serde_json::from_str::<Value>(tool_response) {
         Ok(Value::String(s)) => s,
         Ok(Value::Object(o)) => {
@@ -144,7 +143,7 @@ pub fn report_text(tool_response: &str) -> String {
 
 /// The sub-agent's id, if the response names one in a form that is safe in a
 /// file name.
-pub fn agent_id(tool_response: &str) -> Option<String> {
+pub(crate) fn agent_id(tool_response: &str) -> Option<String> {
     let v: Value = serde_json::from_str(tool_response).ok()?;
     let id = ["agentId", "agent_id"]
         .iter()
@@ -158,14 +157,17 @@ pub fn agent_id(tool_response: &str) -> Option<String> {
 }
 
 /// `<transcript without .jsonl>/subagents/agent-<id>.jsonl`.
-pub fn subagent_record_path(transcript_path: &str, agent_id: &str) -> Option<String> {
+fn subagent_record_path(transcript_path: &str, agent_id: &str) -> Option<String> {
     let base = transcript_path.strip_suffix(".jsonl")?;
     Some(format!("{base}/subagents/agent-{agent_id}.jsonl"))
 }
 
 /// The last [`MAX_CALLS`] tool calls of the sub-agent's record; empty if it
 /// does not exist or cannot be read.
-pub fn read_subagent_calls(transcript_path: &str, agent_id: &str) -> Vec<transcript::Message> {
+pub(crate) fn read_subagent_calls(
+    transcript_path: &str,
+    agent_id: &str,
+) -> Vec<transcript::Message> {
     let Some(path) = subagent_record_path(transcript_path, agent_id) else {
         return Vec::new();
     };
@@ -175,23 +177,10 @@ pub fn read_subagent_calls(transcript_path: &str, agent_id: &str) -> Vec<transcr
     calls
 }
 
-fn cut(s: &str, limit: usize) -> String {
-    if s.len() <= limit {
-        return s.to_owned();
-    }
-    format!("{}{TRUNC_MARKER}", &s[..s.floor_char_boundary(limit)])
-}
-
 /// The system prompt: handback.md without its provenance comment. Static, so
 /// backends can cache it.
 pub(crate) fn system_prompt() -> String {
-    let mut s = PROMPT_FILE.trim();
-    if s.starts_with("<!--")
-        && let Some((_, rest)) = s.split_once("-->")
-    {
-        s = rest.trim();
-    }
-    s.to_owned()
+    judge::strip_provenance(PROMPT_FILE).to_owned()
 }
 
 #[derive(Serialize)]
@@ -284,13 +273,6 @@ pub(crate) fn interpret(label: &str, confidence: f64, reason: &str) -> Result<Re
     } else {
         Review::Clean
     })
-}
-
-fn clip_runes(s: &str, n: usize) -> String {
-    let s = s.trim();
-    s.char_indices()
-        .nth(n)
-        .map_or_else(|| s.to_owned(), |(i, _)| s[..i].to_owned())
 }
 
 #[cfg(test)]

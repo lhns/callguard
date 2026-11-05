@@ -66,7 +66,7 @@ fn session_file(dir: &Path, session_id: &str) -> Option<PathBuf> {
 
 /// Appends `file_path` to the session's file unless it is there already, and
 /// deletes session files older than 7 days.
-pub fn record(dir: &Path, session_id: &str, file_path: &str) -> io::Result<()> {
+pub(crate) fn record(dir: &Path, session_id: &str, file_path: &str) -> io::Result<()> {
     let bad = |c: char| c == '\n' || c == '\r' || c == '\0';
     let Some(file) = session_file(dir, session_id) else {
         return Ok(());
@@ -145,7 +145,7 @@ fn readable(p: &str) -> bool {
 /// Claude loaded them. A missing or unreadable file is skipped. Reading starts
 /// from the last file and stops once enough text is gathered, because the
 /// engine keeps the end.
-pub fn collect(dir: &Path, session_id: &str) -> String {
+pub(crate) fn collect(dir: &Path, session_id: &str) -> String {
     let Some(state) = session_file(dir, session_id) else {
         return String::new();
     };

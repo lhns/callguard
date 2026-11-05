@@ -49,7 +49,7 @@ const MAX_INSTRUCTIONS_BYTES: usize = 8 << 10;
 /// Shared by all notes on one tool call.
 const MAX_NOTE_CHARS: usize = 2000;
 const INSTRUCTIONS_CUT_MARKER: &str = "[earlier instructions cut]…";
-const MAX_REASON_RUNES: usize = 500;
+pub(crate) const MAX_REASON_RUNES: usize = 500;
 const MAX_RULE_RUNES: usize = 64;
 
 /// Why the judge gave no usable verdict. The caller turns every error into a
@@ -209,7 +209,8 @@ pub fn judge(
     Ok(out)
 }
 
-fn clip_runes(s: &str, n: usize) -> String {
+/// `s` trimmed and cut to `n` characters.
+pub(crate) fn clip_runes(s: &str, n: usize) -> String {
     let s = s.trim();
     s.char_indices()
         .nth(n)
@@ -349,7 +350,7 @@ fn shrink(v: &Value, limit: usize) -> Value {
 }
 
 /// Cuts `s` to `limit` bytes on a character boundary and marks the cut.
-fn cut_string(s: &str, limit: usize) -> String {
+pub(crate) fn cut_string(s: &str, limit: usize) -> String {
     if s.len() <= limit {
         return s.to_owned();
     }
@@ -366,16 +367,20 @@ const SLOT_ENVIRONMENT: &str = "<!-- slot:environment -->";
 const SLOT_BLOCK: &str = "<!-- slot:block -->";
 const SLOT_ALLOW: &str = "<!-- slot:allow -->";
 
+/// A prompt file without its leading provenance comment.
+pub(crate) fn strip_provenance(file: &str) -> &str {
+    let s = file.trim();
+    match s.strip_prefix("<!--").and_then(|r| r.split_once("-->")) {
+        Some((_, rest)) => rest.trim(),
+        None => s,
+    }
+}
+
 /// The rendered system prompt: prompt.md without its provenance comment, with
 /// the policy slots filled in. It has no timestamps or per-call data, so
 /// backends can cache it.
 pub(crate) fn system_prompt(cfg: &Config) -> String {
-    let mut s = PROMPT_FILE.trim();
-    if s.starts_with("<!--")
-        && let Some((_, rest)) = s.split_once("-->")
-    {
-        s = rest.trim();
-    }
+    let s = strip_provenance(PROMPT_FILE);
     let env = if cfg.environment.is_empty() {
         "No additional environment entries.".to_owned()
     } else {
