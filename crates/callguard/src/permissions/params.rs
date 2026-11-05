@@ -12,7 +12,7 @@ fn primary(tool: &str) -> &'static [&'static str] {
         "Grep" | "Glob" | "LS" => &["path"],
         "NotebookEdit" => &["notebook_path"],
         "WebFetch" => &["url"],
-        _ => &["command", "file_path", "path", "notebook_path", "url"],
+        _ => &[],
     }
 }
 

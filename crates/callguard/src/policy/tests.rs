@@ -1089,3 +1089,15 @@ fn a_bang_in_an_allow_list_is_dropped_with_a_warning() {
         l.warnings
     );
 }
+
+#[test]
+fn a_project_pair_leaves_the_system_rule_whole() {
+    let sys = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"]}}"#;
+    let proj = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)","Read(!.env)"]}}"#;
+    let (_d, o) = layers(sys, "", proj);
+    let l = load(&o).unwrap();
+    assert_eq!(
+        l.policy.permissions.deny,
+        ["Read(.env)", "Read(.env) except Read(!.env)"]
+    );
+}

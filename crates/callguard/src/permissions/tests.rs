@@ -3071,3 +3071,13 @@ fn powershell_aliases_also_work_on_a_parsed_call() {
         Some("PowerShell(Remove-Item *)".into())
     );
 }
+
+#[test]
+fn only_a_tools_own_primary_field_is_refused() {
+    let d = deny(&["Monitor(command:x)", "Agent(url:y)"]);
+    assert_eq!(
+        hit(&d, &call("Monitor", r#"{"command":"x"}"#)),
+        Some("deny")
+    );
+    assert_eq!(hit(&d, &call("Agent", r#"{"url":"y"}"#)), Some("deny"));
+}
