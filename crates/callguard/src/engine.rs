@@ -785,7 +785,7 @@ impl Inner {
             environment: llm.environment.clone(),
             block: llm.block.clone(),
             allow_exceptions: llm.allow_exceptions.clone(),
-            min_confidence: llm.min_confidence.unwrap_or(0.7),
+            min_confidence: llm.min_confidence.unwrap_or(policy::DEFAULT_MIN_CONFIDENCE),
         };
         let res = match (self.judge)(b.as_ref(), &cfg, input, jdeadline) {
             Ok(r) => r,

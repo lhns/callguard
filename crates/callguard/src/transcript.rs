@@ -33,8 +33,8 @@ pub const OUTCOME_BLOCKED_BY_CALLGUARD: &str = "blocked-by-callguard";
 pub const OUTCOME_CLASSIFIER_UNAVAILABLE: &str = "classifier-unavailable";
 
 const TAIL_BYTES: u64 = 2 << 20;
-const DEFAULT_MESSAGES: usize = 20;
-const DEFAULT_BYTES: usize = 24000;
+pub(crate) const DEFAULT_MESSAGES: usize = 20;
+pub(crate) const DEFAULT_BYTES: usize = 24000;
 pub(crate) const TRUNC_MARKER: &str = "…[truncated]";
 
 const OUTCOMES: [&str; 8] = [

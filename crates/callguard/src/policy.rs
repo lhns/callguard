@@ -409,7 +409,7 @@ impl Loaded {
 pub struct PolicyError(pub String);
 
 /// The user's home directory (`USERPROFILE` on Windows, `HOME` elsewhere), None if unknown.
-pub(crate) fn home_dir() -> Option<String> {
+pub fn home_dir() -> Option<String> {
     let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
     std::env::var(key).ok().filter(|h| !h.is_empty())
 }
@@ -1268,6 +1268,9 @@ pub const DEFAULT_NAH_TIMEOUT_MS: i64 = 10_000;
 /// nah's analysis budget (kept by the load run, docs/rust-phase0.md).
 pub const DEFAULT_NAH_BUDGET_MS: i64 = 2_000;
 
+/// The confidence the judge needs for an allow to stand.
+pub const DEFAULT_MIN_CONFIDENCE: f64 = 0.7;
+
 /// The built-in policy: the default rules plus the default of every setting.
 pub fn default() -> Policy {
     with_defaults(Policy {
@@ -1320,14 +1323,14 @@ pub fn with_defaults(mut p: Policy) -> Policy {
         llm.timeout_ms = 3000;
     }
     if llm.min_confidence.is_none() {
-        llm.min_confidence = Some(0.7);
+        llm.min_confidence = Some(DEFAULT_MIN_CONFIDENCE);
     }
     let mut tr = llm.transcript.take().unwrap_or_default();
     if tr.max_messages == 0 {
-        tr.max_messages = 20;
+        tr.max_messages = crate::transcript::DEFAULT_MESSAGES as i64;
     }
     if tr.max_bytes == 0 {
-        tr.max_bytes = 24000;
+        tr.max_bytes = crate::transcript::DEFAULT_BYTES as i64;
     }
     llm.transcript = Some(tr);
     p.llm = Some(llm);

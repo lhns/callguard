@@ -7,10 +7,11 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use callguard::nah::{NahEngine, NahError, NahRequest, NahResult, NahVerdict};
-use nah_cli::{DecisionResult, shipped_guard_states};
+use callguard::policy::DEFAULT_NAH_BUDGET_MS;
+use nah_cli::shipped_guard_states;
 use nah_proto::ctx::{AbsolutePath, Ctx, ShippedGuardState, TrustProjection};
 use nah_proto::decision::DecisionOutput;
-use nah_proto::observation::{Observation, ObservationRequest};
+use nah_proto::observation::Observation;
 use nah_proto::tool::ToolCallInput;
 use serde_json::{Value, json};
 
@@ -57,11 +58,10 @@ fn absolute_cwd(cwd: &str) -> Result<String, NahError> {
 }
 
 fn home() -> Result<String, NahError> {
-    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    std::env::var(key)
-        .ok()
-        .filter(|h| !h.is_empty())
-        .ok_or_else(|| NahError::Failed(format!("{key} is not set")))
+    callguard::policy::home_dir().ok_or_else(|| {
+        let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+        NahError::Failed(format!("{key} is not set"))
+    })
 }
 
 /// nah's context. Every shipped guard is stated explicitly: a default-off guard
@@ -105,23 +105,6 @@ fn ctx(
     Ok((ctx, unknown))
 }
 
-/// nah's analysis under the policy's budget (the fork's `decide_with_budget`;
-/// nah's own `decide_with` is fixed at 100 ms). The 2 s default is the one that
-/// held up on a loaded machine.
-fn run<F>(input: &ToolCallInput, ctx: &Ctx, budget_ms: u64, observe: F) -> DecisionResult
-where
-    F: FnMut(&ObservationRequest) -> Result<Observation, String>,
-{
-    let budget = Duration::from_millis(if budget_ms == 0 {
-        DEFAULT_BUDGET_MS
-    } else {
-        budget_ms
-    });
-    nah_cli::decide_with_budget(input, ctx, budget, observe)
-}
-
-const DEFAULT_BUDGET_MS: u64 = 2000;
-
 fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
     let failed = |what: &str, e: &dyn std::fmt::Display| NahError::Failed(format!("{what}: {e}"));
     let cwd = absolute_cwd(&req.cwd)?;
@@ -136,7 +119,14 @@ fn decide_here(req: &NahRequest) -> Result<NahResult, NahError> {
     let observations = RefCell::new(Vec::<Observation>::new());
     let observe_warnings = RefCell::new(Vec::<String>::new());
     let started = Instant::now();
-    let result = run(&call, &ctx, req.budget_ms, |request| {
+    // The fork's `decide_with_budget` (nah's own `decide_with` is fixed at
+    // 100 ms): the 2 s default held up on a loaded machine.
+    let budget = Duration::from_millis(if req.budget_ms == 0 {
+        DEFAULT_NAH_BUDGET_MS as u64
+    } else {
+        req.budget_ms
+    });
+    let result = nah_cli::decide_with_budget(&call, &ctx, budget, |request| {
         let observation = observe(request, &observe_warnings);
         if let Ok(o) = &observation {
             observations.borrow_mut().push(o.clone());
