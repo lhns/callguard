@@ -252,10 +252,22 @@ impl Scan<'_> {
             return Some("a glob after a cd");
         }
         // The directory a trailing glob or slash is directly under.
-        let base = match t {
-            "*" => ".",
-            "/*" => "/",
-            _ => t.strip_suffix("/*").unwrap_or(t),
+        // A last segment made only of glob characters (`*`, `**`, `.*`,
+        // `?*`, `.[!.]*`) reaches everything directly under its parent; a
+        // literal `.` or `..` has no glob character and is handled as a path.
+        let (parent, last) = t.rsplit_once('/').unwrap_or(("", t));
+        let globby = last.chars().any(|c| matches!(c, '*' | '?' | '[' | ']' | '!'))
+            && last.chars().all(|c| matches!(c, '*' | '?' | '[' | ']' | '!' | '.'));
+        let base = if globby {
+            if !t.contains('/') {
+                "."
+            } else if parent.is_empty() {
+                "/"
+            } else {
+                parent
+            }
+        } else {
+            t
         };
         let base = if base.len() > 1 {
             base.trim_end_matches('/')
@@ -424,6 +436,15 @@ mod tests {
         "rm -rf ./*",
         "rm -rf *",
         "rm -rf ../*",
+        "rm -rf **",
+        "rm -rf ./**",
+        "rm -rf ~/**",
+        "rm -rf .*",
+        "rm -rf ~/.*",
+        "rm -rf ~/.[!.]*",
+        "rm -rf ?*",
+        "rm -rf /**",
+        "Remove-Item -Recurse -Force ./**",
         "rm -rf ./../src",
         "rm -rf sub/..",
         // shell forms
@@ -464,6 +485,10 @@ mod tests {
         "rm a.txt",
         "rm -rf /tmp/x",
         "rm -rf build/*",
+        "rm -rf build/**",
+        "rm *.log",
+        "rm -rf .cache",
+        "rm .env",
         "rm -rf \"${DIR:?}\"/*",
         "rm -rf \"${DIR:?}/usr\"",
         "rm -rf $DIR",
