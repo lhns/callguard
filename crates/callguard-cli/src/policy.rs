@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::io::Write;
 
 use callguard::json_text;
-use callguard::policy::{self, LoadOptions, Policy};
+use callguard::policy::{self, LoadOptions, Policy, UserConfig};
 use callguard::rules::{Env, Set};
 use serde::Serialize;
 
@@ -37,12 +37,12 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
         }
     };
     let lo = LoadOptions {
-        system_policy: f.str("policy"),
+        system_policy: f.opt_str("policy"),
         project_dir: f.str("project-dir"),
         user_config_dir: if f.bool("no-user-policy") {
-            "-".into()
+            UserConfig::None
         } else {
-            String::new()
+            UserConfig::Default
         },
     };
     let rep = check_policy(&lo);

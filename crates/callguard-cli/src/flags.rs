@@ -62,6 +62,11 @@ impl Parsed {
         self.strs.get(name).cloned().unwrap_or_default()
     }
 
+    /// The flag's value, None if it is unset or empty.
+    pub fn opt_str(&self, name: &str) -> Option<String> {
+        self.strs.get(name).filter(|s| !s.is_empty()).cloned()
+    }
+
     pub fn bool(&self, name: &str) -> bool {
         self.bools.get(name).copied().unwrap_or(false)
     }

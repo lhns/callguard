@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use callguard::engine;
 use callguard::permissions;
-use callguard::policy;
+use callguard::policy::{self, UserConfig};
 use callguard::schema::Request;
 use callguard::trust::{self, Record, State};
 
@@ -25,8 +25,7 @@ const USAGE: &str =
 pub struct Opts {
     /// "" means how `decide` finds it: the git root above the cwd, else the cwd.
     pub project: String,
-    /// "" means the user config dir.
-    pub user_config_dir: String,
+    pub user_config_dir: UserConfig,
     pub list: bool,
     pub revoke: bool,
 }
@@ -60,7 +59,7 @@ pub fn run(
     }
     let opts = Opts {
         project: f.str("project"),
-        user_config_dir: String::new(),
+        user_config_dir: UserConfig::Default,
         list: f.bool("list"),
         revoke: f.bool("revoke"),
     };
@@ -244,7 +243,7 @@ mod tests {
         let cfg = d.path().join("cfg");
         let o = Opts {
             project: proj.to_string_lossy().into_owned(),
-            user_config_dir: cfg.to_string_lossy().into_owned(),
+            user_config_dir: UserConfig::Dir(cfg.to_string_lossy().into_owned()),
             list: false,
             revoke: false,
         };

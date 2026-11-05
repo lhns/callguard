@@ -7,7 +7,10 @@ fn rules(r: &[&str]) -> Vec<String> {
 }
 
 fn record(d: &tempfile::TempDir) -> PathBuf {
-    record_path(&d.path().join("cfg").to_string_lossy()).unwrap()
+    record_path(&UserConfig::Dir(
+        d.path().join("cfg").to_string_lossy().into_owned(),
+    ))
+    .unwrap()
 }
 
 #[test]
@@ -87,7 +90,7 @@ fn a_malformed_or_unreadable_record_trusts_nothing() {
         std::fs::write(&path, bad).unwrap();
         assert!(matches!(load(&path), Record::Unreadable(_)), "{bad}");
     }
-    let cfg = d.path().join("cfg").to_string_lossy().into_owned();
+    let cfg = UserConfig::Dir(d.path().join("cfg").to_string_lossy().into_owned());
     let w = check_for_load(&cfg, "/p", &rules(&["Bash(ls)"])).unwrap_err();
     assert!(w.contains("not trusted") && w.contains("unreadable"), "{w}");
     // Writing over a bad file repairs it.
@@ -111,7 +114,7 @@ fn the_write_is_atomic_and_leaves_no_temporary_file() {
 #[test]
 fn the_load_check_words_its_warning() {
     let d = tempfile::tempdir().unwrap();
-    let cfg = d.path().join("cfg").to_string_lossy().into_owned();
+    let cfg = UserConfig::Dir(d.path().join("cfg").to_string_lossy().into_owned());
     let proj = d.path().join("proj");
     std::fs::create_dir_all(&proj).unwrap();
     let p = proj.to_string_lossy().into_owned();
@@ -126,7 +129,7 @@ fn the_load_check_words_its_warning() {
     let w = check_for_load(&cfg, &p, &allow[..1]).unwrap_err();
     assert!(w.contains("changed since"), "{w}");
     // The user layer is skipped: nothing can be trusted.
-    assert!(check_for_load("-", &p, &allow).is_err());
+    assert!(check_for_load(&UserConfig::None, &p, &allow).is_err());
 }
 
 #[test]

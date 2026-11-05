@@ -150,8 +150,8 @@ fn with_inner(e: &mut Engine, f: impl FnOnce(&mut Inner)) {
 }
 
 fn new_test_engine(p: Policy, mut o: Options, b: Option<Arc<FakeBackend>>) -> (Engine, Arc<Via>) {
-    if o.log_path.is_empty() {
-        o.log_path = "-".into();
+    if o.log == LogTarget::Default {
+        o.log = LogTarget::Off;
     }
     if let Some(b) = b {
         o.backend = Some(b);
@@ -373,7 +373,7 @@ fn default_policy_rev_is_pinned() {
     let e = Engine::new(
         policy::default(),
         Options {
-            log_path: "-".into(),
+            log: LogTarget::Off,
             ..Default::default()
         },
     )
@@ -1050,7 +1050,7 @@ fn new_rejects_bad_policy() {
         let r = Engine::new(
             test_policy(m),
             Options {
-                log_path: "-".into(),
+                log: LogTarget::Off,
                 ..Default::default()
             },
         );
@@ -1060,7 +1060,7 @@ fn new_rejects_bad_policy() {
     let e = Engine::new(
         Policy::default(),
         Options {
-            log_path: "-".into(),
+            log: LogTarget::Off,
             ..Default::default()
         },
     )
@@ -1167,7 +1167,7 @@ fn decision_log() {
     let (e, _) = new_test_engine(
         test_policy(no_mut),
         Options {
-            log_path: path.to_string_lossy().into_owned(),
+            log: LogTarget::File(path.to_string_lossy().into_owned()),
             ..Default::default()
         },
         Some(answer("deny", 0.9)),
@@ -1233,7 +1233,7 @@ fn decision_log() {
     let (e, _) = new_test_engine(
         p,
         Options {
-            log_path: path2.to_string_lossy().into_owned(),
+            log: LogTarget::File(path2.to_string_lossy().into_owned()),
             ..Default::default()
         },
         Some(answer("deny", 0.9)),
@@ -1260,7 +1260,7 @@ fn decision_log_disabled_and_failing() {
     let (e, _) = new_test_engine(
         p,
         Options {
-            log_path: d.join("never.jsonl").to_string_lossy().into_owned(),
+            log: LogTarget::File(d.join("never.jsonl").to_string_lossy().into_owned()),
             ..Default::default()
         },
         Some(answer("allow", 1.0)),
@@ -1271,7 +1271,7 @@ fn decision_log_disabled_and_failing() {
         "log.disabled must not write"
     );
 
-    // The policy path is used when Options.log_path is empty.
+    // The policy path is used when Options.log is Default.
     let pp = d.join("policy-log.jsonl");
     let p = test_policy(|p| {
         p.log = Some(Log {
@@ -1297,11 +1297,13 @@ fn decision_log_disabled_and_failing() {
     let (e, _) = new_test_engine(
         test_policy(no_mut),
         Options {
-            log_path: blocker
-                .join("sub")
-                .join("log.jsonl")
-                .to_string_lossy()
-                .into_owned(),
+            log: LogTarget::File(
+                blocker
+                    .join("sub")
+                    .join("log.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             ..Default::default()
         },
         Some(answer("allow", 1.0)),
@@ -1328,7 +1330,7 @@ fn deny_streak() {
     let (e, _) = new_test_engine(
         p,
         Options {
-            log_path: path,
+            log: LogTarget::File(path),
             ..Default::default()
         },
         Some(answer("deny", 0.9)),
@@ -1397,7 +1399,7 @@ fn deny_streak_total_and_reset() {
     let (e, _) = new_test_engine(
         p.clone(),
         Options {
-            log_path: path,
+            log: LogTarget::File(path),
             ..Default::default()
         },
         Some(answer("deny", 0.9)),
@@ -1437,7 +1439,7 @@ fn deny_streak_total_and_reset() {
     let (e, _) = new_test_engine(
         p,
         Options {
-            log_path: path,
+            log: LogTarget::File(path),
             ..Default::default()
         },
         Some(answer("deny", 0.9)),
@@ -1460,7 +1462,7 @@ fn prior_callguard_blocks_mark_the_call() {
     let (e, v) = new_test_engine(
         test_policy(no_mut),
         Options {
-            log_path: path,
+            log: LogTarget::File(path),
             ..Default::default()
         },
         Some(answer("allow", 0.9)),
@@ -1536,7 +1538,7 @@ fn tool_use_id_is_logged() {
     let (e, _) = new_test_engine(
         test_policy(no_mut),
         Options {
-            log_path: path.to_string_lossy().into_owned(),
+            log: LogTarget::File(path.to_string_lossy().into_owned()),
             ..Default::default()
         },
         Some(answer("allow", 0.9)),
@@ -1770,7 +1772,7 @@ fn nah_shadow_is_logged_without_the_reason() {
         NahMode::Block,
         |n| n.mode = policy::MODE_SHADOW.into(),
         Options {
-            log_path: path.to_string_lossy().into_owned(),
+            log: LogTarget::File(path.to_string_lossy().into_owned()),
             ..Default::default()
         },
     );
@@ -1803,7 +1805,7 @@ fn a_nah_failure_in_shadow_mode_is_logged_as_a_would_be_verdict() {
         NahMode::Fail,
         |n| n.mode = policy::MODE_SHADOW.into(),
         Options {
-            log_path: path.to_string_lossy().into_owned(),
+            log: LogTarget::File(path.to_string_lossy().into_owned()),
             ..Default::default()
         },
     );
@@ -2034,7 +2036,7 @@ fn fail_safe_with_the_real_judge() {
             p,
             Options {
                 backend: Some(b),
-                log_path: "-".into(),
+                log: LogTarget::Off,
                 ..Default::default()
             },
         )
@@ -2077,11 +2079,11 @@ fn load() {
     )
     .unwrap();
     let mut e = Engine::load(LoadOptions {
-        system_policy: path_str(&sys),
+        system_policy: Some(path_str(&sys)),
         project_dir: path_str(&proj),
-        user_config_dir: "-".into(),
+        user_config_dir: UserConfig::None,
         options: Options {
-            log_path: "-".into(),
+            log: LogTarget::Off,
             backend: Some(answer("allow", 1.0)),
             warnings: vec!["pre".into()],
             ..Default::default()
@@ -2109,8 +2111,8 @@ fn load() {
     );
 
     let lo = |sys: String| LoadOptions {
-        system_policy: sys,
-        user_config_dir: "-".into(),
+        system_policy: Some(sys),
+        user_config_dir: UserConfig::None,
         ..Default::default()
     };
     assert!(
@@ -2147,10 +2149,10 @@ fn load_protects_policy_files() {
     fs::write(&sys, r#"{"policy_version":1}"#).unwrap();
     let user_dir = d.join("config");
     let e = Engine::load(LoadOptions {
-        system_policy: path_str(&sys),
-        user_config_dir: path_str(&user_dir),
+        system_policy: Some(path_str(&sys)),
+        user_config_dir: UserConfig::Dir(path_str(&user_dir)),
         options: Options {
-            log_path: "-".into(),
+            log: LogTarget::Off,
             backend: Some(answer("allow", 1.0)),
             ..Default::default()
         },
@@ -2181,10 +2183,10 @@ fn deleting_the_user_config_directory_is_a_self_protect_ask() {
     fs::write(&sys, r#"{"policy_version":1}"#).unwrap();
     let user_dir = d.join("config");
     let e = Engine::load(LoadOptions {
-        system_policy: path_str(&sys),
-        user_config_dir: path_str(&user_dir),
+        system_policy: Some(path_str(&sys)),
+        user_config_dir: UserConfig::Dir(path_str(&user_dir)),
         options: Options {
-            log_path: "-".into(),
+            log: LogTarget::Off,
             backend: Some(answer("allow", 1.0)),
             ..Default::default()
         },
@@ -2562,7 +2564,7 @@ fn an_unreadable_deny_rule_refuses_the_policy() {
     let r = Engine::new(
         test_policy(|p| p.permissions.deny.push("Agent(model:x)".into())),
         Options {
-            log_path: "-".into(),
+            log: LogTarget::Off,
             ..Default::default()
         },
     );
@@ -2584,7 +2586,7 @@ fn real_judge_engine(nah: Option<Arc<dyn NahEngine>>, backend: Arc<FakeBackend>)
         Options {
             nah_engine: nah,
             backend: Some(backend),
-            log_path: "-".into(),
+            log: LogTarget::Off,
             ..Default::default()
         },
     )

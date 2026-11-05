@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::policy;
+use crate::policy::{self, UserConfig};
 
 /// The record's file name; the self-protection rules know it.
 pub const FILE: &str = "trusted-projects.json";
@@ -43,12 +43,9 @@ pub enum State {
 }
 
 /// Where the record lives: next to the user policy. None when the user layer is
-/// skipped (`-`) or its directory is unknown.
-pub fn record_path(user_config_dir: &str) -> Option<PathBuf> {
-    let p = policy::user_path(user_config_dir);
-    if p.is_empty() {
-        return None;
-    }
+/// skipped or its directory is unknown.
+pub fn record_path(user_config_dir: &UserConfig) -> Option<PathBuf> {
+    let p = policy::user_path(user_config_dir)?;
     Path::new(&p).parent().map(|d| d.join(FILE))
 }
 
@@ -158,7 +155,7 @@ pub fn revoke(path: &Path, project: &str) -> std::io::Result<bool> {
 /// The decision a project's allow rules get at policy load: Err carries the
 /// warning when they are dropped.
 pub fn check_for_load(
-    user_config_dir: &str,
+    user_config_dir: &UserConfig,
     project_dir: &str,
     allow: &[String],
 ) -> Result<(), String> {

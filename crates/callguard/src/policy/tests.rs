@@ -19,13 +19,13 @@ fn write(path: &Path, content: &str) -> String {
 fn layers(system: &str, user: &str, project: &str) -> (TempDir, LoadOptions) {
     let d = tempfile::tempdir().unwrap();
     let mut o = LoadOptions {
-        user_config_dir: "-".into(),
+        user_config_dir: UserConfig::None,
         ..Default::default()
     };
-    o.system_policy = write(&d.path().join("system.json"), system);
+    o.system_policy = Some(write(&d.path().join("system.json"), system));
     if !user.is_empty() {
         let cfg = d.path().join("cfg");
-        o.user_config_dir = cfg.to_string_lossy().into_owned();
+        o.user_config_dir = UserConfig::Dir(cfg.to_string_lossy().into_owned());
         write(&cfg.join("callguard").join("policy.json"), user);
     }
     if !project.is_empty() {
@@ -245,31 +245,34 @@ fn final_skips_lower_layers() {
 fn load_errors() {
     let d = tempfile::tempdir().unwrap();
     let p = |name: &str| d.path().join(name);
-    let lo = |sys: String| LoadOptions {
+    let lo = |sys: Option<String>| LoadOptions {
         system_policy: sys,
-        user_config_dir: "-".into(),
+        user_config_dir: UserConfig::None,
         ..Default::default()
     };
     let missing = p("missing.json").to_string_lossy().into_owned();
     assert!(
-        load(&lo(missing)).is_err(),
+        load(&lo(Some(missing))).is_err(),
         "explicit missing system policy must fail"
     );
     let bad = write(&p("v2.json"), r#"{"policy_version":2}"#);
-    let e = load(&lo(bad)).unwrap_err();
+    let e = load(&lo(Some(bad))).unwrap_err();
     assert!(e.0.contains("policy_version"), "{e}");
     let none = write(&p("none.json"), "{}");
-    assert!(load(&lo(none)).is_err(), "missing policy_version must fail");
+    assert!(
+        load(&lo(Some(none))).is_err(),
+        "missing policy_version must fail"
+    );
     let junk = write(&p("junk.json"), "{");
-    assert!(load(&lo(junk)).is_err(), "bad JSON must fail");
+    assert!(load(&lo(Some(junk))).is_err(), "bad JSON must fail");
     // A bad user file fails too: never ignore a layer silently.
     let (_d2, o) = layers(r#"{"policy_version":1}"#, r#"{"policy_version":7}"#, "");
     assert!(load(&o).is_err(), "bad user version must fail");
     // A BOM is tolerated.
     let bom = write(&p("bom.json"), "\u{feff}{\"policy_version\":1}");
-    assert!(load(&lo(bom)).is_ok());
+    assert!(load(&lo(Some(bom))).is_ok());
     // The default system path may be absent.
-    let l = load(&lo(String::new())).unwrap();
+    let l = load(&lo(None)).unwrap();
     assert!(l.files.len() <= 1);
 }
 

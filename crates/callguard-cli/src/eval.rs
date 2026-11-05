@@ -100,14 +100,14 @@ pub fn run(args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> i
         }
     }
 
-    let policy_path = f.str("policy");
+    let policy_path = f.opt_str("policy");
     let llm_timeout = f.int("llm-timeout-ms", 0);
     // The eval never probes git or gh: cases carry the meta they need.
     let load_opts = |omit_facts: bool, backend: Option<Arc<dyn Backend>>| engine::LoadOptions {
         system_policy: policy_path.clone(),
-        user_config_dir: "-".into(),
+        user_config_dir: policy::UserConfig::None,
         options: engine::Options {
-            log_path: "-".into(),
+            log: engine::LogTarget::Off,
             no_host_meta: true,
             llm_timeout_ms: llm_timeout,
             omit_facts,

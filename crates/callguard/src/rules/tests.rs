@@ -251,10 +251,7 @@ fn a_drive_relative_path_is_unresolvable() {
             !c.in_project && !c.real_in_project && c.real_path.is_none(),
             "{p}: {c:?}"
         );
-        assert!(
-            !c.path.is_empty(),
-            "{p}: deny and ask keep the lexical text"
-        );
+        assert!(c.path.is_some(), "{p}: deny and ask keep the lexical text");
     }
 }
 
@@ -421,7 +418,7 @@ fn new_call() {
         &unix,
     );
     assert!(
-        c.kind == KIND_READ && c.path == "/w/p/src/a.go" && c.in_project,
+        c.kind == KIND_READ && c.path.as_deref() == Some("/w/p/src/a.go") && c.in_project,
         "{c:?}"
     );
     let c = Call::new(
@@ -436,12 +433,12 @@ fn new_call() {
     assert!(!c.in_project, "/etc/passwd must not be in project");
     let c = Call::new(at("Grep", raw(r#"{"pattern":"x"}"#), "/w/p", "/w/p"), &unix);
     assert!(
-        c.path == "/w/p" && c.in_project,
+        c.path.as_deref() == Some("/w/p") && c.in_project,
         "grep without path defaults to cwd: {c:?}"
     );
     let c = Call::new(at("Write", raw(r#"{"filePath":"a"}"#), "/w/p", ""), &unix);
     assert!(
-        c.path == "/w/p/a" && !c.in_project,
+        c.path.as_deref() == Some("/w/p/a") && !c.in_project,
         "no project dir means not in project: {c:?}"
     );
     let c = Call::new(
@@ -453,7 +450,7 @@ fn new_call() {
         ),
         &unix,
     );
-    assert_eq!(c.path, "/w/n.ipynb");
+    assert_eq!(c.path.as_deref(), Some("/w/n.ipynb"));
     let c = Call::new(input("execute_code", r#"{"code":"print(1)"}"#), &unix);
     assert_eq!(c.command, "print(1)");
     // Both fields count: a harmless `command` is no cover for `code`.
@@ -2980,11 +2977,11 @@ fn a_backslash_newline_is_read_both_ways() {
     // A shell joins with nothing; `a \<NL>b` has its own space.
     let c = call("r\\\nm -rf /");
     assert_eq!(c.command, "r m -rf /");
-    assert_eq!(c.command_joined, "rm -rf /");
+    assert_eq!(c.command_joined.as_deref(), Some("rm -rf /"));
     assert_eq!(b.check(&c).map(|h| h.id), Some("rm-root".into()));
     let c = call("ls -l\\\n /tmp");
-    assert_eq!(c.command_joined, "ls -l /tmp");
-    assert_eq!(call("ls").command_joined, "", "same spelling: none kept");
+    assert_eq!(c.command_joined.as_deref(), Some("ls -l /tmp"));
+    assert_eq!(call("ls").command_joined, None, "same spelling: none kept");
     for (cmd, id) in [
         ("git pu\\\nsh --force", "git-force-push"),
         ("curl x | s\\\nh", "pipe-to-shell"),

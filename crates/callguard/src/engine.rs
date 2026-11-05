@@ -21,7 +21,7 @@ use crate::hostmeta::{self, Meta};
 use crate::judge::{self, JudgeError, JudgeResult};
 use crate::nah::{NahEngine, NahRequest, NahResult, NahVerdict};
 use crate::permissions::Permissions;
-use crate::policy::{self, Policy, quote_string};
+use crate::policy::{self, Policy, UserConfig, quote_string};
 use crate::rules::{self, Builtin, Call, CallInput, Env, Set, input_string_field};
 use crate::schema::{
     Decision, Facts, LAYER_BUILTIN, LAYER_LLM, LAYER_NAH, LAYER_NONE, LAYER_RULES, REQUEST_SCHEMA,
@@ -29,13 +29,25 @@ use crate::schema::{
 };
 use crate::transcript::{self, Message as TMessage};
 
+/// Where the decision log goes.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum LogTarget {
+    /// The policy's `log.path`, else the default location.
+    #[default]
+    Default,
+    /// No log.
+    Off,
+    /// This file, over the policy's `log.path`.
+    File(String),
+}
+
 /// Tunes an [`Engine`]. Unset values mean the policy's settings.
 #[derive(Default)]
 pub struct Options {
     /// Replaces the policy's configured LLM backend (eval and tests).
     pub backend: Option<Arc<dyn Backend>>,
-    /// Overrides the policy's decision log path; "-" disables logging.
-    pub log_path: String,
+    /// Where the decision log goes, over the policy's setting.
+    pub log: LogTarget,
     /// The nah engine; `None` means a supervised child process.
     pub nah_engine: Option<Arc<dyn NahEngine>>,
     /// The clock; `None` means the system clock.
@@ -58,13 +70,13 @@ pub struct Options {
 /// Selects the policy layers for [`Engine::load`].
 #[derive(Default)]
 pub struct LoadOptions {
-    /// System layer file; "" means the platform default. A missing default file
-    /// is not an error; a missing explicit file is.
-    pub system_policy: String,
+    /// System layer file; None means the platform default. A missing default
+    /// file is not an error; a missing explicit file is.
+    pub system_policy: Option<String>,
     /// Selects `<project_dir>/.callguard/policy.json`; "" skips it.
     pub project_dir: String,
-    /// Overrides the user config dir (tests); "-" skips the user layer.
-    pub user_config_dir: String,
+    /// Where the user layer lives, or that there is none.
+    pub user_config_dir: UserConfig,
     pub options: Options,
 }
 
@@ -233,8 +245,8 @@ impl Engine {
             }))
         };
         let logger = match log_path(&pol, &opts) {
-            Ok(p) if p.is_empty() => None,
-            Ok(p) => Some(declog::Logger::new(&p)),
+            Ok(None) => None,
+            Ok(Some(p)) => Some(declog::Logger::new(&p)),
             Err(warning) => {
                 opts.warnings.push(warning);
                 None
@@ -280,14 +292,15 @@ impl Engine {
         // explicit --policy file and the user layer file are protected here.
         let user_file = policy::user_path(&opts.user_config_dir);
         // `rm -rf ~/.config/callguard` names the directory, not the file.
-        let user_dir = std::path::Path::new(&user_file)
-            .parent()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        for p in [opts.system_policy, user_file, user_dir] {
-            if p.is_empty() {
-                continue;
-            }
+        let user_dir = user_file.as_deref().and_then(|f| {
+            std::path::Path::new(f)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+        });
+        for p in [opts.system_policy, user_file, user_dir]
+            .into_iter()
+            .flatten()
+        {
             if let Ok(abs) = std::path::absolute(&p) {
                 o.protect_paths.push(abs.to_string_lossy().into_owned());
             }
@@ -503,7 +516,7 @@ impl Inner {
         // A project that is the home directory or a root says nothing about
         // what is "inside the project"; the in-project rules stay quiet.
         let mut warns: Vec<String> = Vec::new();
-        if call.project_ignored && !call.path.is_empty() {
+        if call.project_ignored && call.path.is_some() {
             warns.push(format!(
                 "project directory {project_dir} is the home directory or a file system root: no path counts as inside the project"
             ));
@@ -968,21 +981,21 @@ pub fn resolve_project_dir(req: &Request) -> String {
     req.cwd.clone()
 }
 
-/// Where the decision log goes for `pol` and `opts` ("" = no log). The error
+/// Where the decision log goes for `pol` and `opts` (None = no log). The error
 /// is a warning: there is no home to put the default log in.
-pub(crate) fn log_path(pol: &Policy, opts: &Options) -> Result<String, String> {
-    if opts.log_path == "-" || pol.log.as_ref().is_some_and(|l| l.disabled) {
-        return Ok(String::new());
+pub(crate) fn log_path(pol: &Policy, opts: &Options) -> Result<Option<String>, String> {
+    if opts.log == LogTarget::Off || pol.log.as_ref().is_some_and(|l| l.disabled) {
+        return Ok(None);
     }
-    if !opts.log_path.is_empty() {
-        return Ok(opts.log_path.clone());
+    if let LogTarget::File(path) = &opts.log {
+        return Ok(Some(path.clone()));
     }
     if let Some(l) = &pol.log
         && !l.path.is_empty()
     {
-        return Ok(l.path.clone());
+        return Ok(Some(l.path.clone()));
     }
-    declog::default_path().ok_or_else(|| {
+    declog::default_path().map(Some).ok_or_else(|| {
         "no decision log: the home directory is unknown (set log.path to choose a place)".into()
     })
 }

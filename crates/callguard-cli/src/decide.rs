@@ -94,7 +94,7 @@ pub fn run(
 
     let lo = engine_child::load_options(
         &req,
-        &f.str("policy"),
+        f.opt_str("policy"),
         f.bool("no-user-policy"),
         &f.str("log"),
         &f.str("test-engine"),

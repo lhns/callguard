@@ -13,7 +13,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::backend::{self, Backend};
-    use crate::engine::{Engine, Options};
+    use crate::engine::{Engine, LogTarget, Options};
     use crate::evalrun::{self, BUCKETS};
     use crate::policy;
     use crate::schema::Decision;
@@ -78,7 +78,7 @@ mod tests {
             policy::default(),
             Options {
                 backend: Some(b),
-                log_path: "-".into(),
+                log: LogTarget::Off,
                 no_host_meta: true,
                 ..Default::default()
             },

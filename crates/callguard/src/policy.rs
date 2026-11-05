@@ -376,12 +376,26 @@ pub struct File {
     pub problems: Vec<String>,
 }
 
-/// Selects the policy files. "-" in `user_config_dir` skips the user layer.
+/// Where the user layer and the trust record live.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum UserConfig {
+    /// The platform's user config directory.
+    #[default]
+    Default,
+    /// No user layer (and no trust record).
+    None,
+    /// This directory (tests).
+    Dir(String),
+}
+
+/// Selects the policy files.
 #[derive(Debug, Clone, Default)]
 pub struct LoadOptions {
-    pub system_policy: String,
+    /// System layer file; None means the platform default. A missing default
+    /// file is not an error; a missing explicit file is.
+    pub system_policy: Option<String>,
     pub project_dir: String,
-    pub user_config_dir: String,
+    pub user_config_dir: UserConfig,
 }
 
 /// The merged policy and how it came about.
@@ -448,21 +462,17 @@ pub fn system_path() -> String {
     }
 }
 
-/// The user policy file path under `config_dir` ("" = the user config dir), or
-/// "" when the layer is skipped ("-") or the directory is unknown.
-pub fn user_path(config_dir: &str) -> String {
-    if config_dir == "-" {
-        return String::new();
-    }
-    let dir = if config_dir.is_empty() {
-        match user_config_dir() {
-            Some(d) => d,
-            None => return String::new(),
-        }
-    } else {
-        config_dir.to_owned()
+/// The user policy file path, None when the layer is skipped or the
+/// directory is unknown.
+pub fn user_path(config: &UserConfig) -> Option<String> {
+    let dir = match config {
+        UserConfig::None => return None,
+        UserConfig::Default => user_config_dir()?,
+        UserConfig::Dir(d) => d.clone(),
     };
-    path_string(Path::new(&dir).join("callguard").join("policy.json"))
+    Some(path_string(
+        Path::new(&dir).join("callguard").join("policy.json"),
+    ))
 }
 
 /// A read failure; `not_found` is a missing file.
@@ -596,18 +606,13 @@ pub fn load(o: &LoadOptions) -> Result<Loaded, PolicyError> {
         policy: default(),
         ..Default::default()
     };
-    let explicit = !o.system_policy.is_empty();
-    let sys_path = if explicit {
-        o.system_policy.clone()
-    } else {
-        system_path()
-    };
+    let explicit = o.system_policy.is_some();
+    let sys_path = o.system_policy.clone().unwrap_or_else(system_path);
     apply(&mut out, &sys_path, LAYER_SYSTEM, explicit, o)?;
     if out.policy.r#final {
         return Ok(out);
     }
-    let user = user_path(&o.user_config_dir);
-    if !user.is_empty() {
+    if let Some(user) = user_path(&o.user_config_dir) {
         apply(&mut out, &user, LAYER_USER, false, o)?;
     }
     if !o.project_dir.is_empty() {

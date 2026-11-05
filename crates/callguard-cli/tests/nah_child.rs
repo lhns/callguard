@@ -1166,7 +1166,10 @@ impl Sandbox {
     }
 
     fn trust_record(&self) -> PathBuf {
-        callguard::trust::record_path(&self.config_dir().to_string_lossy()).unwrap()
+        callguard::trust::record_path(&callguard::policy::UserConfig::Dir(
+            self.config_dir().to_string_lossy().into_owned(),
+        ))
+        .unwrap()
     }
 
     fn set_project_policy(&self, body: &str) {

@@ -698,17 +698,17 @@ pub struct Call {
     /// space.
     pub command: String,
     /// The command with line continuations joined with nothing, as a POSIX
-    /// shell reads `r\<NL>m`; "" if it equals `command`. Deny and ask look at
-    /// both spellings, allow needs both to match (see [`Call::commands`]).
-    pub command_joined: String,
+    /// shell reads `r\<NL>m`; None if it equals `command`. Deny and ask look
+    /// at both spellings, allow needs both to match (see [`Call::commands`]).
+    pub command_joined: Option<String>,
     /// The distinct values of the command field as the host sent them, before
     /// line continuations are joined. Allow rules need exactly one.
     pub raw_commands: Vec<String>,
     /// The distinct non-empty strings of the `url` field (any letter case) and
     /// of a `urls` list, in field-name order. Other list entries are ignored.
     pub urls: Vec<String>,
-    /// Normalized absolute path, "" if none.
-    pub path: String,
+    /// Normalized absolute path, if the call names one.
+    pub path: Option<String>,
     /// The distinct path values as the host wrote them (all path-like keys,
     /// any letter case); a read tool without one gets the working directory.
     pub raw_paths: Vec<String>,
@@ -851,14 +851,13 @@ impl Call {
     /// The spellings of the command a shell may read: line continuations
     /// joined with a space, and with nothing if that differs.
     pub fn commands(&self) -> impl Iterator<Item = &str> {
-        std::iter::once(self.command.as_str())
-            .chain(Some(self.command_joined.as_str()).filter(|j| !j.is_empty()))
+        std::iter::once(self.command.as_str()).chain(self.command_joined.as_deref())
     }
 
     /// The path as written and as resolved, for deny and ask checks.
     fn paths(&self) -> impl Iterator<Item = &str> {
-        Some(self.path.as_str())
-            .filter(|p| !p.is_empty())
+        self.path
+            .as_deref()
             .into_iter()
             .chain(self.real_path.as_deref())
     }
@@ -876,7 +875,8 @@ impl Call {
                 let Some(dir) = pattern_dir(env, &v) else {
                     continue;
                 };
-                let lexical = env.clean_names(&env.normalize(&dir, &self.path));
+                let lexical =
+                    env.clean_names(&env.normalize(&dir, self.path.as_deref().unwrap_or_default()));
                 let real = env.real(&lexical);
                 for (p, is_real) in [(Some(lexical), false), (real, true)] {
                     let Some(p) = p else { continue };
@@ -947,7 +947,7 @@ impl Call {
             c.command = join_continuations(&all, " ");
             let joined = join_continuations(&all, "");
             if joined != c.command {
-                c.command_joined = joined;
+                c.command_joined = Some(joined);
             }
         }
         c.urls = urls_of(&c.fields);
@@ -972,19 +972,20 @@ impl Call {
             c.project_ignored = env.is_broad_dir(p, real.as_deref());
         }
         if !raw_path.is_empty() {
-            c.path = env.clean_names(&env.normalize(&raw_path, &input.cwd));
+            let path = env.clean_names(&env.normalize(&raw_path, &input.cwd));
             let resolvable = !env.drive_relative(&raw_path);
-            c.real_path = env.real(&c.path).filter(|_| resolvable);
+            c.real_path = env.real(&path).filter(|_| resolvable);
             if let Some((dir, real_dir)) = project
                 .as_ref()
                 .filter(|_| !c.project_ignored && resolvable)
             {
-                c.in_project = env.in_dir(&c.path, dir);
+                c.in_project = env.in_dir(&path, dir);
                 c.real_in_project = match (&c.real_path, real_dir) {
                     (Some(p), Some(d)) => env.in_dir(p, d),
                     _ => false,
                 };
             }
+            c.path = Some(path).filter(|p| !p.is_empty());
         }
         if kind == KIND_READ {
             c.add_patterns(env, project.as_ref().filter(|_| !c.project_ignored));
@@ -1304,7 +1305,7 @@ fn trust_guard(c: &Call) -> Option<Hit> {
                 "callguard denies edits to its project trust record; the user runs `callguard trust`",
             );
         }
-        if c.path.is_empty() && named(&c.whole) {
+        if c.path.is_none() && named(&c.whole) {
             return hit(
                 Decision::Ask,
                 "edit names the project trust record; a human should confirm",
@@ -1419,12 +1420,12 @@ impl Builtin {
                     Decision::Deny,
                     format!(
                         "callguard denies edits to hook and policy files ({}); ask the user to change them",
-                        c.path
+                        c.path.as_deref().unwrap_or_default()
                     ),
                 );
             }
             // Patch tools carry their target paths inside the input.
-            if c.path.is_empty() && self.names_protected(&c.whole) {
+            if c.path.is_none() && self.names_protected(&c.whole) {
                 return hit(
                     "self-protect-write",
                     Decision::Ask,
@@ -1533,9 +1534,9 @@ impl Compiled {
                 return false;
             }
         }
-        if call.path.is_empty() {
+        let Some(path) = &call.path else {
             return m.in_project.is_none() && self.path.is_empty();
-        }
+        };
         if m.in_project.is_none() && self.path.is_empty() && self.not_path.is_empty() {
             return true;
         }
@@ -1546,7 +1547,7 @@ impl Compiled {
         // really is. Deny and ask need one of them (a link into a protected
         // place fires), allow needs both, and a path that does not resolve
         // cannot be allowed.
-        let lexical = self.path_ok(&call.path, call.in_project);
+        let lexical = self.path_ok(path, call.in_project);
         let real = call
             .real_path
             .as_deref()

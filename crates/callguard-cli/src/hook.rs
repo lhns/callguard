@@ -92,14 +92,15 @@ pub fn run(
         context_file: f.str("context-file"),
         allow_in_auto: f.bool("allow-in-auto"),
     };
-    let policy_path = f.str("policy");
+    let policy_path = f.opt_str("policy");
     let test_engine = f.str("test-engine");
     let no_user = f.bool("no-user-policy");
     let log_path = f.str("log");
     // The engine is built per request, because the project policy layer
     // depends on the request's project directory.
     let d = move |req: &Request| -> Verdict {
-        let lo = engine_child::load_options(req, &policy_path, no_user, &log_path, &test_engine);
+        let lo =
+            engine_child::load_options(req, policy_path.clone(), no_user, &log_path, &test_engine);
         match Engine::load(lo) {
             Ok(eng) => eng.decide(req),
             Err(e) => fallback_verdict(Some(req), &format!("policy: {e}")),

@@ -3,7 +3,8 @@
 
 use std::io::{Read, Write};
 
-use callguard::engine::{self, LoadOptions, Options};
+use callguard::engine::{self, LoadOptions, LogTarget, Options};
+use callguard::policy::UserConfig;
 use callguard::schema::Request;
 
 /// The most memory the nah child may use (a constant, not a policy setting).
@@ -25,34 +26,39 @@ pub fn run(args: &[String], stdin: &mut dyn Read, stdout: &mut dyn Write) -> i32
 }
 
 /// How `decide` and `hook` load the engine for `req`: the system policy file
-/// ("" = the platform default), the user layer unless `no_user_policy`, the
+/// (None = the platform default), the user layer unless `no_user_policy`, the
 /// project layer of the request's project directory.
 pub fn load_options(
     req: &Request,
-    system_policy: &str,
+    system_policy: Option<String>,
     no_user_policy: bool,
     log_path: &str,
     test_engine: &str,
 ) -> LoadOptions {
     LoadOptions {
-        system_policy: system_policy.to_owned(),
+        system_policy,
         project_dir: engine::resolve_project_dir(req),
         user_config_dir: if no_user_policy {
-            "-".into()
+            UserConfig::None
         } else {
-            String::new()
+            UserConfig::Default
         },
         options: options(log_path, test_engine),
     }
 }
 
-/// Engine options for `decide` and `hook`. With the `test-engines` feature the
+/// Engine options for `decide` and `hook`. `log_path` is the `--log` flag:
+/// "" is the default place, "-" no log. With the `test-engines` feature the
 /// `--test-engine <name>` flag makes the nah child misbehave; the flag is the
 /// only way to choose one, never an environment variable.
 pub fn options(log_path: &str, test_engine: &str) -> Options {
     #[allow(unused_mut)] // only the test-engines build assigns
     let mut o = Options {
-        log_path: log_path.to_owned(),
+        log: match log_path {
+            "" => LogTarget::Default,
+            "-" => LogTarget::Off,
+            file => LogTarget::File(file.to_owned()),
+        },
         ..Default::default()
     };
     #[cfg(feature = "test-engines")]
