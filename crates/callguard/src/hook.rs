@@ -246,11 +246,33 @@ struct ClaudeDecision<'a> {
     permission_decision_reason: &'a str,
 }
 
+/// Whether a Claude payload is for an event that cannot block (PostToolUse,
+/// InstructionsLoaded). False for anything unreadable: that stays fail-closed.
+fn is_advisory_event(body: &[u8]) -> bool {
+    catch_unwind(|| {
+        let Ok(serde_json::Value::Object(o)) = serde_json::from_slice::<serde_json::Value>(body)
+        else {
+            return false;
+        };
+        o.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("hook_event_name")
+                && matches!(v.as_str(), Some("PostToolUse" | "InstructionsLoaded"))
+        })
+    })
+    .unwrap_or(false)
+}
+
 /// Runs `adapter`, which gets `err_out`. A panic is exit 2, the one non-zero
-/// exit that blocks the call for Claude and Hermes.
-fn blocking_on_panic(err_out: &mut dyn Write, adapter: impl FnOnce(&mut dyn Write) -> i32) -> i32 {
+/// exit that blocks the call for Claude and Hermes; except when the adapter
+/// has marked the event `advisory`, which has nothing to block: exit 0.
+fn blocking_on_panic(
+    err_out: &mut dyn Write,
+    advisory: &std::cell::Cell<bool>,
+    adapter: impl FnOnce(&mut dyn Write) -> i32,
+) -> i32 {
     match catch_unwind(AssertUnwindSafe(|| adapter(&mut *err_out))) {
         Ok(code) => code,
+        Err(_) if advisory.get() => 0,
         Err(p) => {
             let _ = writeln!(
                 err_out,
@@ -400,7 +422,10 @@ pub fn claude(
     opt: &Options,
     d: Decider,
 ) -> i32 {
-    blocking_on_panic(err_out, |e| claude_inner(input, &mut *out, e, opt, d, None))
+    let advisory = std::cell::Cell::new(false);
+    blocking_on_panic(err_out, &advisory, |e| {
+        claude_inner(input, &mut *out, e, opt, d, None, &advisory)
+    })
 }
 
 /// [`claude`] that also reviews sub-agent reports with `review`.
@@ -412,8 +437,9 @@ pub fn claude_reviewing(
     d: Decider,
     review: Reviewer,
 ) -> i32 {
-    blocking_on_panic(err_out, |e| {
-        claude_inner(input, &mut *out, e, opt, d, Some(review))
+    let advisory = std::cell::Cell::new(false);
+    blocking_on_panic(err_out, &advisory, |e| {
+        claude_inner(input, &mut *out, e, opt, d, Some(review), &advisory)
     })
 }
 
@@ -424,9 +450,17 @@ fn claude_inner(
     opt: &Options,
     d: Decider,
     review: Option<Reviewer>,
+    advisory: &std::cell::Cell<bool>,
 ) -> i32 {
     let mut req = new_request("claude");
-    let (mut in0, mut err) = parse_partial::<ClaudeInput>(input, CLAUDE_FIELDS);
+    let (mut in0, mut err) = match read_input(input) {
+        Ok(body) => {
+            advisory.set(is_advisory_event(&body));
+            let (v, e) = decode_partial(&body, CLAUDE_FIELDS);
+            (v, e.map(|e| format!("payload: {e}")))
+        }
+        Err(e) => (ClaudeInput::default(), Some(e)),
+    };
     if err.is_none() && in0.hook_event_name.is_empty() {
         err = Some("missing hook_event_name".to_owned());
     }
@@ -560,7 +594,9 @@ pub fn hermes(
     opt: &Options,
     d: Decider,
 ) -> i32 {
-    blocking_on_panic(err_out, |e| hermes_inner(input, &mut *out, e, opt, d))
+    blocking_on_panic(err_out, &std::cell::Cell::new(false), |e| {
+        hermes_inner(input, &mut *out, e, opt, d)
+    })
 }
 
 fn hermes_inner(
@@ -1226,6 +1262,37 @@ use pnpm",
             let (out, err, code) = run_reviewing(&input, &Options::default(), &rv);
             assert_eq!((out.as_str(), err.as_str(), code), ("", "", 0));
             assert_eq!(got.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_panic_outside_the_review_exits_0_for_advisory_events_and_2_for_pre() {
+        struct PanicWrite;
+        impl Write for PanicWrite {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                panic!("writer bug")
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (rv, _) = reviewer(Review::Failed("x".into()));
+        let (d, _) = capture(verdict(Decision::Allow, true));
+        for (file, want) in [
+            ("claude_posttooluse_agent.json", 0),
+            ("claude_pretooluse_bash.json", 2),
+        ] {
+            let body = payload(file);
+            let mut e = Vec::new();
+            let code = claude_reviewing(
+                &mut body.as_bytes(),
+                &mut PanicWrite,
+                &mut e,
+                &Options::default(),
+                &d,
+                &rv,
+            );
+            assert_eq!(code, want, "{file}");
         }
     }
 
