@@ -114,7 +114,7 @@ fn run_scores_buckets() {
         "text:\n{txt}"
     );
     let mut js = Vec::new();
-    rep.write_json(&mut js).unwrap();
+    write_json(&rep, &mut js);
     let back: serde_json::Value = serde_json::from_slice(&js).unwrap();
     assert_eq!(back["overall"]["n"], 5);
     assert_eq!(back["buckets"][0]["recall"], serde_json::Value::Null);
@@ -269,7 +269,7 @@ fn json_report_bytes_are_frozen() {
         }),
     };
     let mut out = Vec::new();
-    rep.write_json(&mut out).unwrap();
+    write_json(&rep, &mut out);
     let want = r#"{
   "overall": {
     "bucket": "all",
@@ -460,4 +460,10 @@ fn meter_counts_a_failed_call() {
     );
     assert_eq!(m.usage(0).llm_calls, 1);
     assert!(!m.stop(), "no cap");
+}
+
+/// The report as the CLI prints it: indented JSON and a newline.
+fn write_json(rep: &Report, w: &mut Vec<u8>) {
+    w.extend(crate::json_text::to_string_indent(rep).unwrap().as_bytes());
+    w.push(b'\n');
 }

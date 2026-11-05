@@ -18,13 +18,13 @@ use crate::policy::{self, quote_string};
 use crate::schema::Decision;
 
 /// Tool kinds (design section 4).
-pub const KIND_SHELL: &str = "shell";
-pub const KIND_READ: &str = "read";
-pub const KIND_WRITE: &str = "write";
-pub const KIND_FETCH: &str = "fetch";
-pub const KIND_AGENT: &str = "agent";
-pub const KIND_MCP: &str = "mcp";
-pub const KIND_OTHER: &str = "other";
+pub(crate) const KIND_SHELL: &str = "shell";
+pub(crate) const KIND_READ: &str = "read";
+pub(crate) const KIND_WRITE: &str = "write";
+pub(crate) const KIND_FETCH: &str = "fetch";
+pub(crate) const KIND_AGENT: &str = "agent";
+pub(crate) const KIND_MCP: &str = "mcp";
+pub(crate) const KIND_OTHER: &str = "other";
 
 /// A rule could not be built (bad regex or glob). The text names the rule.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -34,7 +34,7 @@ pub struct RulesError(pub String);
 /// The kind of the tool called `tool`. Names are case-sensitive and do not
 /// collide across harnesses, so one table serves all of them (a request from
 /// an unknown harness still maps sensibly).
-pub fn kind_of(tool: &str) -> &'static str {
+pub(crate) fn kind_of(tool: &str) -> &'static str {
     match tool {
         // Claude Code
         "Bash" | "PowerShell" => KIND_SHELL,
@@ -204,7 +204,7 @@ fn translate_regex(pat: &str) -> String {
 }
 
 /// Compiles an RE2 pattern with its RE2 meaning (see the module comment).
-pub fn compile_regex(pat: &str) -> Result<Regex, RulesError> {
+pub(crate) fn compile_regex(pat: &str) -> Result<Regex, RulesError> {
     // Octal escapes (`\101`) are RE2 syntax. The size limit stays at its
     // default: a repository's policy must not cost compile time.
     regex::RegexBuilder::new(&translate_regex(pat))
@@ -479,7 +479,7 @@ impl Env {
     /// An absolute, slash-normalized path for `p` relative to `cwd`: expands
     /// `~`, makes `p` absolute against `cwd` and cleans it. A relative `p` with
     /// no `cwd` stays relative.
-    pub fn normalize(&self, p: &str, cwd: &str) -> String {
+    pub(crate) fn normalize(&self, p: &str, cwd: &str) -> String {
         let mut p = self.slash(p);
         if !self.home.is_empty() && (p == "~" || p.starts_with("~/")) {
             p = format!("{}{}", self.slash(&self.home), &p[1..]);
@@ -506,7 +506,7 @@ impl Env {
     }
 
     /// Whether the normalized path `p` is `dir` or below it.
-    pub fn in_dir(&self, p: &str, dir: &str) -> bool {
+    pub(crate) fn in_dir(&self, p: &str, dir: &str) -> bool {
         if dir.is_empty() {
             return false;
         }
@@ -592,7 +592,7 @@ impl Env {
     /// crosses segments, `**/` also matches nothing and a trailing `/**` also
     /// matches the directory itself. A leading `~/` is expanded. The result
     /// matches normalized (slash, absolute) paths.
-    pub fn compile_glob(&self, glob: &str) -> Result<Regex, RulesError> {
+    pub(crate) fn compile_glob(&self, glob: &str) -> Result<Regex, RulesError> {
         let mut g = self.slash(glob);
         if !self.home.is_empty() && g.starts_with("~/") {
             g = format!("{}{}", self.slash(&self.home), &g[1..]);
@@ -1100,7 +1100,7 @@ fn skip_wrapper(toks: &[&str], mut i: usize, valued: &[&str]) -> usize {
 /// `$HOME`, a drive root, `.git`) or passes `--no-preserve-root`, at a command
 /// position: after wrappers such as sudo, timeout or `sh -c`, so text inside
 /// an ordinary argument does not fire it.
-pub fn rm_root(command: &str) -> bool {
+pub(crate) fn rm_root(command: &str) -> bool {
     for seg in SEGMENT_SPLIT.split(command) {
         let unquoted = seg.replace(['"', '\''], "");
         let toks: Vec<&str> = unquoted
@@ -1175,7 +1175,7 @@ pub fn rm_root(command: &str) -> bool {
 /// the shell expands, a renamed copy of the binary and a wrapper that builds
 /// the command at run time; the terminal requirement of the verb is the second
 /// lock.
-pub fn runs_trust_verb(command: &str) -> bool {
+pub(crate) fn runs_trust_verb(command: &str) -> bool {
     // The text as written, and with quotes and backslashes removed, where
     // `tr""ust` is `trust`.
     [command.to_owned(), unquoted(command)].iter().any(|text| {
@@ -1263,7 +1263,7 @@ fn trust_guard(c: &Call) -> Option<Hit> {
 
 /// The always-on layer 0.
 #[derive(Debug)]
-pub struct Builtin {
+pub(crate) struct Builtin {
     env: Env,
     disabled: Vec<String>,
     /// Write targets.
@@ -1573,7 +1573,7 @@ fn compile_rule(r: &policy::Rule, env: &Env) -> Result<Compiled, String> {
 
 /// The rule that decided a call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Matched {
+pub(crate) struct Matched {
     pub id: String,
     pub description: String,
     pub decision: Decision,
@@ -1594,7 +1594,7 @@ impl Set {
 
     /// The matching rule that wins: deny over ask over allow, then list order.
     /// (Named `match_call` because `match` is a keyword.)
-    pub fn match_call(&self, call: &Call) -> Option<Matched> {
+    pub(crate) fn match_call(&self, call: &Call) -> Option<Matched> {
         let mut best: Option<&Compiled> = None;
         for c in &self.rules {
             if !c.matches(call) {

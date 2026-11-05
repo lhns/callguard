@@ -57,7 +57,7 @@ const ALLOW_SHELL_TOOLS: [&str; 3] = ["Bash", "bash", "terminal"];
 
 /// A rule read from its text.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Rule {
+pub enum Rule {
     /// `Bash`, `Bash(spec)`, `PowerShell`, `PowerShell(spec)`.
     Shell {
         powershell: bool,
@@ -405,7 +405,11 @@ pub fn vet_reason(text: &str, layer: Option<&str>) -> Result<(), String> {
 
 /// The allow rules of one policy layer that survive [`vet_allow`], and a
 /// warning for each that does not.
-pub fn vet_allow_list(allow: &[String], layer: &str, src: &str) -> (Vec<String>, Vec<String>) {
+pub(crate) fn vet_allow_list(
+    allow: &[String],
+    layer: &str,
+    src: &str,
+) -> (Vec<String>, Vec<String>) {
     let (mut kept, mut warns) = (Vec::new(), Vec::new());
     for r in allow {
         match vet_allow(r, Some(layer)) {

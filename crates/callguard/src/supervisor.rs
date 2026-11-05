@@ -19,10 +19,10 @@ use crate::nah::{NahEngine, NahError, NahRequest, NahResult};
 
 /// The most bytes the parent reads from the child. Facts of a big command run
 /// to a few hundred KB; more is a runaway.
-pub const MAX_REPLY_BYTES: usize = 8 << 20;
+pub(crate) const MAX_REPLY_BYTES: usize = 8 << 20;
 
 /// The most request bytes the child reads: a tool input is at most a few MB.
-pub const MAX_REQUEST_BYTES: u64 = 64 << 20;
+pub(crate) const MAX_REQUEST_BYTES: u64 = 64 << 20;
 
 /// The hidden verb the child is started with.
 pub const ENGINE_VERB: &str = "__engine";
@@ -31,7 +31,7 @@ pub const ENGINE_VERB: &str = "__engine";
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[allow(clippy::large_enum_variant)]
-pub enum Reply {
+pub(crate) enum Reply {
     Result(NahResult),
     /// The engine ran and reported its own failure.
     Error(String),
@@ -51,7 +51,7 @@ impl SupervisedEngine {
         SupervisedEngine::with_exe(std::env::current_exe().unwrap_or_default())
     }
 
-    pub fn with_exe(exe: PathBuf) -> SupervisedEngine {
+    pub(crate) fn with_exe(exe: PathBuf) -> SupervisedEngine {
         SupervisedEngine {
             exe,
             args: Vec::new(),
@@ -59,7 +59,8 @@ impl SupervisedEngine {
     }
 
     /// Extra arguments after the verb.
-    pub fn with_args(mut self, args: Vec<String>) -> SupervisedEngine {
+    #[cfg(any(test, feature = "test-engines"))]
+    pub(crate) fn with_args(mut self, args: Vec<String>) -> SupervisedEngine {
         self.args = args;
         self
     }

@@ -14,23 +14,23 @@ use crate::json_text;
 use crate::serde_util::{nullable, raw_some};
 
 /// Roles of a [`Message`].
-pub const ROLE_USER: &str = "user";
-pub const ROLE_ASSISTANT: &str = "assistant";
-pub const ROLE_TOOL_CALL: &str = "tool_call";
-pub const ROLE_OUTCOME: &str = "outcome";
+pub(crate) const ROLE_USER: &str = "user";
+pub(crate) const ROLE_ASSISTANT: &str = "assistant";
+pub(crate) const ROLE_TOOL_CALL: &str = "tool_call";
+pub(crate) const ROLE_OUTCOME: &str = "outcome";
 /// Internal marker, never rendered.
-pub const ROLE_THIRD_PARTY: &str = "third_party";
+pub(crate) const ROLE_THIRD_PARTY: &str = "third_party";
 
 /// Outcomes of a tool call, derived from the harness's status and the start of
 /// its error text, never from tool output.
-pub const OUTCOME_OK: &str = "ok";
-pub const OUTCOME_ERROR: &str = "error";
-pub const OUTCOME_INTERRUPTED: &str = "interrupted";
-pub const OUTCOME_REJECTED_BY_USER: &str = "rejected-by-user";
-pub const OUTCOME_BLOCKED_BY_PERMISSIONS: &str = "blocked-by-permissions";
-pub const OUTCOME_BLOCKED_BY_CLASSIFIER: &str = "blocked-by-classifier";
-pub const OUTCOME_BLOCKED_BY_CALLGUARD: &str = "blocked-by-callguard";
-pub const OUTCOME_CLASSIFIER_UNAVAILABLE: &str = "classifier-unavailable";
+pub(crate) const OUTCOME_OK: &str = "ok";
+pub(crate) const OUTCOME_ERROR: &str = "error";
+pub(crate) const OUTCOME_INTERRUPTED: &str = "interrupted";
+pub(crate) const OUTCOME_REJECTED_BY_USER: &str = "rejected-by-user";
+pub(crate) const OUTCOME_BLOCKED_BY_PERMISSIONS: &str = "blocked-by-permissions";
+pub(crate) const OUTCOME_BLOCKED_BY_CLASSIFIER: &str = "blocked-by-classifier";
+pub(crate) const OUTCOME_BLOCKED_BY_CALLGUARD: &str = "blocked-by-callguard";
+pub(crate) const OUTCOME_CLASSIFIER_UNAVAILABLE: &str = "classifier-unavailable";
 
 const TAIL_BYTES: u64 = 2 << 20;
 pub(crate) const DEFAULT_MESSAGES: usize = 20;
@@ -82,7 +82,7 @@ pub struct Message {
 }
 
 /// Whether `s` is a known outcome value.
-pub fn valid_outcome(s: &str) -> bool {
+pub(crate) fn valid_outcome(s: &str) -> bool {
     OUTCOMES.contains(&s)
 }
 
@@ -159,7 +159,7 @@ struct Block {
 /// Thinking and tool_result content are dropped, so tool output never reaches
 /// the judge; a tool_result only yields an outcome label.
 #[cfg(test)]
-pub fn read_claude_jsonl(
+pub(crate) fn read_claude_jsonl(
     path: &str,
     max_messages: usize,
     max_bytes: usize,
@@ -173,7 +173,7 @@ pub fn read_claude_jsonl(
 
 /// The messages in the tail of a Claude Code JSONL transcript, oldest first,
 /// before [`referents`] and [`limit`].
-pub fn read_claude_messages(path: &str) -> io::Result<Vec<Message>> {
+pub(crate) fn read_claude_messages(path: &str) -> io::Result<Vec<Message>> {
     let data = crate::io_util::read_tail(File::open(path)?, TAIL_BYTES)?;
     let mut msgs = Vec::new();
     for line in data.split(|&b| b == b'\n') {
@@ -332,7 +332,7 @@ fn first_text(raw: Option<&str>) -> String {
 /// third-party marker in between, and all assistant text after the last user
 /// message (the agent narrating the pending action), is dropped. Third-party
 /// markers are removed.
-pub fn referents(msgs: Vec<Message>) -> Vec<Message> {
+pub(crate) fn referents(msgs: Vec<Message>) -> Vec<Message> {
     let keep: Vec<bool> = (0..msgs.len())
         .map(|i| match msgs[i].role.as_str() {
             ROLE_THIRD_PARTY => false,
@@ -351,7 +351,7 @@ pub fn referents(msgs: Vec<Message>) -> Vec<Message> {
 
 /// Marks the tool calls whose ids are in `ids` as blocked by callguard: sets
 /// the outcome of each, adding an outcome message after the call if it has none.
-pub fn mark_blocked(msgs: Vec<Message>, ids: &HashSet<String>) -> Vec<Message> {
+pub(crate) fn mark_blocked(msgs: Vec<Message>, ids: &HashSet<String>) -> Vec<Message> {
     if ids.is_empty() {
         return msgs;
     }
@@ -451,7 +451,11 @@ fn cut(s: &str, max: usize) -> String {
 ///
 /// This must run before [`limit`]: a long input is cut to a string there, which
 /// no longer equals the pending input.
-pub fn drop_pending(mut msgs: Vec<Message>, tool: &str, input: Option<&RawValue>) -> Vec<Message> {
+pub(crate) fn drop_pending(
+    mut msgs: Vec<Message>,
+    tool: &str,
+    input: Option<&RawValue>,
+) -> Vec<Message> {
     if let Some(m) = msgs.last()
         && m.role == ROLE_TOOL_CALL
         && m.tool == tool

@@ -67,7 +67,7 @@ fn same_project(a: &str, b: &str) -> bool {
 }
 
 /// SHA-256 over the canonical project and the allow rules in file order.
-pub fn rules_hash(project: &str, allow: &[String]) -> String {
+pub(crate) fn rules_hash(project: &str, allow: &[String]) -> String {
     let mut h = Sha256::new();
     h.update(b"callguard-trust-v1\n");
     // Length-prefixed, so no rule can borrow from its neighbour.

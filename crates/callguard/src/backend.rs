@@ -21,7 +21,7 @@ use crate::policy;
 use crate::serde_util::{is_zero, nullable, raw_some};
 
 /// Identifies the exec plugin wire format.
-pub const CLASSIFY_SCHEMA: &str = "callguard/classify/v1";
+pub(crate) const CLASSIFY_SCHEMA: &str = "callguard/classify/v1";
 
 /// One judge question. `system` and `prompt` are the rendered prompt for
 /// generative models; `input` is the same data in structured form for
@@ -883,14 +883,14 @@ impl Backend for ExecBackend {
 // fake
 
 /// Fake modes (`policy::Backend::fake_mode`).
-pub const FAKE_RULES: &str = "rules";
-pub const FAKE_ALLOW: &str = "allow";
-pub const FAKE_ASK: &str = "ask";
-pub const FAKE_DENY: &str = "deny";
-pub const FAKE_GARBAGE: &str = "garbage";
-pub const FAKE_SLOW: &str = "slow";
-pub const FAKE_ERROR: &str = "error";
-pub const FAKE_OBEY_INJECTION: &str = "obey-injection";
+pub(crate) const FAKE_RULES: &str = "rules";
+pub(crate) const FAKE_ALLOW: &str = "allow";
+pub(crate) const FAKE_ASK: &str = "ask";
+pub(crate) const FAKE_DENY: &str = "deny";
+pub(crate) const FAKE_GARBAGE: &str = "garbage";
+pub(crate) const FAKE_SLOW: &str = "slow";
+pub(crate) const FAKE_ERROR: &str = "error";
+pub(crate) const FAKE_OBEY_INJECTION: &str = "obey-injection";
 const FAKE_RULES_CONFIDENT: f64 = 0.9;
 const FAKE_FIXED_CONFIDENT: f64 = 0.95;
 
@@ -999,35 +999,35 @@ mod res {
     use super::OBEY_PATTERN;
     use crate::rules::builtin_regex as re2;
 
-    pub static OBEY: LazyLock<Regex> = LazyLock::new(|| re2(OBEY_PATTERN));
-    pub static INJECTION: LazyLock<Regex> = LazyLock::new(|| {
+    pub(crate) static OBEY: LazyLock<Regex> = LazyLock::new(|| re2(OBEY_PATTERN));
+    pub(crate) static INJECTION: LazyLock<Regex> = LazyLock::new(|| {
         re2(&format!(
             "{OBEY_PATTERN}|</callguard-data>|</transcript>|reviewer:"
         ))
     });
-    pub static SECRET_PATH: LazyLock<Regex> = LazyLock::new(|| {
+    pub(crate) static SECRET_PATH: LazyLock<Regex> = LazyLock::new(|| {
         re2(
             r"(?i)\.ssh|id_rsa|id_ed25519|\.env\b|\.aws|\.npmrc|credentials|\.pem\b|/etc/shadow|secrets?\b",
         )
     });
-    pub static UPLOAD: LazyLock<Regex> = LazyLock::new(|| {
+    pub(crate) static UPLOAD: LazyLock<Regex> = LazyLock::new(|| {
         re2(
             r"(?i)(curl|wget)\b.*(-d\s*@|--data(-binary|-raw|-urlencode)?[ =]+@|-F\s*\S*=@|-T\s|--upload-file)",
         )
     });
-    pub static COPY_OUT: LazyLock<Regex> =
+    pub(crate) static COPY_OUT: LazyLock<Regex> =
         LazyLock::new(|| re2(r"(?i)\b(scp|nc|ncat|netcat|rsync|sftp)\b"));
-    pub static ENV_LEAK: LazyLock<Regex> = LazyLock::new(|| {
+    pub(crate) static ENV_LEAK: LazyLock<Regex> = LazyLock::new(|| {
         re2(
             r"(?i)\b(env|printenv|set)\b[^|]*\|\s*(curl|wget|nc)\b|(curl|wget)\b.*\$\(\s*(env|printenv)",
         )
     });
-    pub static PIPE_SHELL: LazyLock<Regex> =
+    pub(crate) static PIPE_SHELL: LazyLock<Regex> =
         LazyLock::new(|| re2(r"(?i)(curl|wget)\b[^|]*\|\s*(sudo\s+)?(ba|z)?sh\b"));
-    pub static RM_RF: LazyLock<Regex> = LazyLock::new(|| {
+    pub(crate) static RM_RF: LazyLock<Regex> = LazyLock::new(|| {
         re2(r"(?i)\brm\s+(-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|-r\s+-f|-f\s+-r)\s+(\S+)")
     });
-    pub static ASK: LazyLock<Regex> = LazyLock::new(|| {
+    pub(crate) static ASK: LazyLock<Regex> = LazyLock::new(|| {
         re2(
             r"(?i)\bgit\s+push\b|\bdeploy\b|\bdelete\b|\bpublish\b|chmod\s+(-r\s+)?777|\bterraform\s+(destroy|apply)\b|\bdrop\s+(database|table)\b|\brm\s+-[a-z]*r|\bgit\s+reset\s+--hard|\bgit\s+clean\s+-[a-z]*f",
         )

@@ -88,7 +88,7 @@ impl PathSpec {
     }
 
     /// Nothing but wildcards after the anchor.
-    pub fn is_blanket(&self) -> bool {
+    pub(crate) fn is_blanket(&self) -> bool {
         self.rest
             .split('/')
             .all(|s| s.chars().all(|c| matches!(c, '*' | '?')))

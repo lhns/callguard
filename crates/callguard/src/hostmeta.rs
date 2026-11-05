@@ -19,7 +19,7 @@ use crate::rules::builtin_regex;
 use crate::serde_util::{is_false, is_zero, nullable};
 
 /// Deadline for all probing of one call.
-pub const BUDGET: Duration = Duration::from_millis(300);
+pub(crate) const BUDGET: Duration = Duration::from_millis(300);
 
 /// Host observations about the pending call. Only the host or adapter sets
 /// it, never from agent text.
@@ -64,7 +64,7 @@ pub struct RepoVisibility {
 
 /// Runs a program and returns its stdout. `env` entries ("K=V") are added to
 /// the process environment; the call must not outlive `deadline`.
-pub type Runner = dyn Fn(&[String], &str, &[&str], Instant) -> io::Result<Vec<u8>> + Sync;
+pub(crate) type Runner = dyn Fn(&[String], &str, &[&str], Instant) -> io::Result<Vec<u8>> + Sync;
 
 /// A program ran and exited unsuccessfully (carried inside an `io::Error`).
 #[derive(Debug)]
@@ -99,7 +99,7 @@ impl ExitFailure {
 }
 
 /// The `Runner` that starts real processes.
-pub fn exec_runner(
+pub(crate) fn exec_runner(
     env: &[String],
     name: &str,
     args: &[&str],
@@ -237,7 +237,7 @@ pub fn status(run: &Runner, cwd: &str, deadline: Instant) -> Option<GitStatus> {
 }
 
 /// Counts the entries of `git status --porcelain=v1` output.
-pub fn parse_status(porcelain: &str) -> GitStatus {
+pub(crate) fn parse_status(porcelain: &str) -> GitStatus {
     let mut st = GitStatus::default();
     for line in porcelain.split('\n') {
         let line = line.trim_end_matches('\r');
@@ -288,7 +288,7 @@ fn is_recursive_flag(a: &str) -> bool {
 
 /// Whether a command can destroy uncommitted work or stage, commit or
 /// publish it. `commands` holds one argv per command.
-pub fn needs_status(commands: &[Vec<String>]) -> bool {
+pub(crate) fn needs_status(commands: &[Vec<String>]) -> bool {
     commands.iter().any(|argv| {
         if after_program(argv, "rm").is_some_and(|a| a.iter().any(|a| is_recursive_flag(a)))
             || after_program(argv, "remove-item").is_some_and(|a| {
@@ -335,7 +335,7 @@ fn parse_git(argv: &[String]) -> Option<GitCall<'_>> {
 /// Where a command pushes or publishes: a remote name, a URL or a gh repo
 /// argument. `raw == "origin"` is the default.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Destination {
+pub(crate) struct Destination {
     pub raw: String,
     /// From a gh command: OWNER/REPO means github.com.
     pub gh: bool,
@@ -356,7 +356,7 @@ fn gh_publishes(sub: &str, verb: &str) -> bool {
 /// non-flag argument of `git push` (default origin), the URL of
 /// `git remote add|set-url`, and the --repo/-R value of publishing gh commands
 /// (default origin).
-pub fn destinations(commands: &[Vec<String>]) -> Vec<Destination> {
+pub(crate) fn destinations(commands: &[Vec<String>]) -> Vec<Destination> {
     let mut out: Vec<Destination> = Vec::new();
     let mut add = |d: Destination| {
         if !out.contains(&d) {
@@ -424,7 +424,7 @@ fn first_non_flag(args: &[String], mut n: usize, default: &str) -> String {
 /// Resolves each destination to host/owner/repo and asks gh for its
 /// visibility. Whatever cannot be resolved is "unknown". Same order and length
 /// as `dests`.
-pub fn visibilities(
+pub(crate) fn visibilities(
     run: &Runner,
     cwd: &str,
     dests: &[Destination],
@@ -498,7 +498,7 @@ fn visibility(run: &Runner, cwd: &str, d: &Destination, deadline: Instant) -> Re
 
 /// Turns https://host/o/r(.git), git@host:o/r(.git) and ssh://git@host/o/r into
 /// host/o/r. Returns "" for anything else, such as a local path.
-pub fn normalize_remote(raw: &str) -> String {
+pub(crate) fn normalize_remote(raw: &str) -> String {
     let raw = raw.trim();
     let (host, path) = if raw.contains("://") {
         match parse_url(raw) {

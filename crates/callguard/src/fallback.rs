@@ -9,7 +9,7 @@ use crate::schema::{Decision, LAYER_FALLBACK, Request, VERDICT_SCHEMA, Verdict};
 /// A fresh 32-hex-digit verdict id (it lives here because
 /// the fallback needs it and must never fail). Falls back to a clock-and-counter
 /// id if the system random source is unavailable.
-pub fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     let mut b = [0u8; 16];
     if getrandom::fill(&mut b).is_err() {
         static COUNTER: AtomicU64 = AtomicU64::new(0);

@@ -9,13 +9,13 @@
 use serde::Serialize;
 
 /// Drops whitespace outside strings. `s` must be valid JSON.
-pub fn compact(s: &str) -> String {
+pub(crate) fn compact(s: &str) -> String {
     rewrite(s, true, false)
 }
 
 /// Compacts valid JSON text and escapes its strings (the form of [`to_string`],
 /// raw values included).
-pub fn escape(s: &str) -> String {
+pub(crate) fn escape(s: &str) -> String {
     rewrite(s, true, true)
 }
 

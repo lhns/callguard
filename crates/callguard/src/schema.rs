@@ -11,7 +11,7 @@ pub use crate::hostmeta::{GitStatus, Meta, RepoVisibility};
 use crate::serde_util::{is_false, is_zero, nullable, raw_some, whole_float};
 
 /// Schema identifiers (ADR 0002).
-pub const REQUEST_SCHEMA: &str = "callguard/request/v1";
+pub(crate) const REQUEST_SCHEMA: &str = "callguard/request/v1";
 pub const VERDICT_SCHEMA: &str = "callguard/verdict/v1";
 
 /// The outcome for one tool call. An unknown decision cannot be built,
@@ -54,14 +54,14 @@ impl std::fmt::Display for Decision {
 }
 
 /// Layer names recorded in `Verdict.layer`.
-pub const LAYER_BUILTIN: &str = "builtin";
-pub const LAYER_NAH: &str = "nah";
-pub const LAYER_RULES: &str = "rules";
-pub const LAYER_LLM: &str = "llm";
+pub(crate) const LAYER_BUILTIN: &str = "builtin";
+pub(crate) const LAYER_NAH: &str = "nah";
+pub(crate) const LAYER_RULES: &str = "rules";
+pub(crate) const LAYER_LLM: &str = "llm";
 /// Nothing decided; `enforced` is false.
-pub const LAYER_NONE: &str = "none";
+pub(crate) const LAYER_NONE: &str = "none";
 /// Error, timeout, unavailable backend.
-pub const LAYER_FALLBACK: &str = "fallback";
+pub(crate) const LAYER_FALLBACK: &str = "fallback";
 
 /// callguard/request/v1.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -161,7 +161,7 @@ pub struct ToolCall {
 
 impl ToolCall {
     /// The raw input text, "" if the request had none.
-    pub fn input_str(&self) -> &str {
+    pub(crate) fn input_str(&self) -> &str {
         self.input.as_deref().map_or("", RawValue::get)
     }
 }

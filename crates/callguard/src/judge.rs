@@ -24,11 +24,11 @@ use crate::transcript::{self, TRUNC_MARKER};
 const PROMPT_FILE: &str = include_str!("../assets/prompt.md");
 
 /// The only decisions the judge may return.
-pub const LABELS: [&str; 3] = ["allow", "ask", "deny"];
+pub(crate) const LABELS: [&str; 3] = ["allow", "ask", "deny"];
 
 /// The JSON schema the backend must force the answer into. The reason comes
 /// first so the model reasons before it decides.
-pub const SCHEMA: &str = concat!(
+pub(crate) const SCHEMA: &str = concat!(
     r#"{"type":"object","properties":{"#,
     r#""reason":{"type":"string"},"#,
     r#""rule":{"type":"string"},"#,
@@ -49,7 +49,7 @@ const MAX_RULE_RUNES: usize = 64;
 /// Why the judge gave no usable verdict. The caller turns every error into a
 /// fallback verdict; the judge never returns allow on error.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum JudgeError {
+pub(crate) enum JudgeError {
     /// The backend answered, but not with a usable verdict.
     #[error("judge: invalid backend output: {0}")]
     InvalidOutput(String),
@@ -64,7 +64,7 @@ pub enum JudgeError {
 /// structured `input` sent to non-generative backends.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Input {
+pub(crate) struct Input {
     #[serde(
         skip_serializing_if = "String::is_empty",
         deserialize_with = "nullable"
@@ -113,7 +113,7 @@ pub struct Input {
 
 /// The policy's prose slots and threshold.
 #[derive(Debug, Clone, Default)]
-pub struct Config {
+pub(crate) struct Config {
     pub environment: Vec<String>,
     pub block: Vec<String>,
     pub allow_exceptions: Vec<String>,
@@ -124,7 +124,7 @@ pub struct Config {
 /// `input_cut` is true if the judge saw the tool input cut short (see
 /// [`cap_input`]).
 #[derive(Debug, Clone, PartialEq)]
-pub struct JudgeResult {
+pub(crate) struct JudgeResult {
     pub decision: Decision,
     pub confidence: f64,
     pub rule: String,
@@ -313,7 +313,7 @@ const SLOT_ALLOW: &str = "<!-- slot:allow -->";
 /// The rendered system prompt: prompt.md without its provenance comment, with
 /// the policy slots filled in. It has no timestamps or per-call data, so
 /// backends can cache it.
-pub fn system_prompt(cfg: &Config) -> String {
+pub(crate) fn system_prompt(cfg: &Config) -> String {
     let mut s = PROMPT_FILE.trim();
     if s.starts_with("<!--")
         && let Some((_, rest)) = s.split_once("-->")
@@ -429,7 +429,7 @@ fn meta_line<T: Serialize + ?Sized>(key: &str, v: &T) -> String {
 /// Every line is one escaped JSON object, so `<`, `>` and `&` are escaped and
 /// newlines inside strings stay inside their string: no value can start a
 /// line or close the tag.
-pub fn user_prompt(input: &Input) -> String {
+pub(crate) fn user_prompt(input: &Input) -> String {
     let mut b = String::from("<transcript>\n");
     let mut push = |l: String| {
         b.push_str(&l);
@@ -514,7 +514,7 @@ pub fn user_prompt(input: &Input) -> String {
 /// The rule ids the prompt defines; true marks a HARD rule. The dynamic ids
 /// policy-block-N are HARD too, see [`is_hard`]. prompt.md and this table must
 /// list the same ids.
-pub fn rule_ids() -> &'static BTreeMap<&'static str, bool> {
+pub(crate) fn rule_ids() -> &'static BTreeMap<&'static str, bool> {
     static IDS: LazyLock<BTreeMap<&'static str, bool>> = LazyLock::new(|| {
         let hard = ["data-exfiltration"];
         let soft = [
@@ -593,7 +593,7 @@ pub fn rule_ids() -> &'static BTreeMap<&'static str, bool> {
 }
 
 /// Whether `rule` is a HARD rule (a hard prompt rule or `policy-block-N`).
-pub fn is_hard(rule: &str) -> bool {
+pub(crate) fn is_hard(rule: &str) -> bool {
     rule_ids().get(rule) == Some(&true)
         || rule
             .strip_prefix("policy-block-")

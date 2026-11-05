@@ -21,7 +21,7 @@ const VARS: [&str; 4] = ["clean", "smudge", "process", "required"];
 /// Filter driver names defined in the local or worktree scope of the
 /// repository around `dir`, includes followed. An error means the config could
 /// not be listed; the caller must then not run `git status` at all.
-pub fn local_filter_names(
+pub(crate) fn local_filter_names(
     run: &Runner,
     dir: &str,
     deadline: Instant,
@@ -81,7 +81,7 @@ fn parse_names(out: &[u8]) -> Result<Vec<String>, String> {
 }
 
 /// `-c filter.<name>.clean= ...` for each name, as separate arguments.
-pub fn override_args(names: &[String]) -> Vec<String> {
+pub(crate) fn override_args(names: &[String]) -> Vec<String> {
     let mut args = Vec::new();
     for name in names {
         for var in VARS {

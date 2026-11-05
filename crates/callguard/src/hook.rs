@@ -26,7 +26,7 @@ use crate::serde_util::{decode_object, decode_partial, nullable, raw_some};
 const MAX_CONTEXT_FILE: usize = 1 << 20;
 
 /// Decides one request.
-pub type Decider<'a> = &'a (dyn Fn(&Request) -> Verdict + Sync);
+pub(crate) type Decider<'a> = &'a (dyn Fn(&Request) -> Verdict + Sync);
 
 /// The adapter flags shared by all harnesses.
 #[derive(Debug, Clone, Default)]

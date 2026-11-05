@@ -12,7 +12,7 @@ use crate::json_text;
 use crate::serde_util::{is_false, is_zero, nullable, raw_some, whole_float};
 
 /// How much of the log's end the deny-streak reader looks at.
-pub const TAIL_BYTES: u64 = 1 << 20;
+pub(crate) const TAIL_BYTES: u64 = 1 << 20;
 
 /// One log line. It never holds transcript text. `reason` is empty for llm
 /// verdicts unless input logging is on, because it can quote arguments.
@@ -94,7 +94,7 @@ pub struct Entry {
 /// that can quote arguments.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ShadowVerdict {
+pub(crate) struct ShadowVerdict {
     #[serde(deserialize_with = "nullable")]
     pub layer: String,
     #[serde(deserialize_with = "nullable")]
@@ -109,7 +109,7 @@ pub struct ShadowVerdict {
 /// `<state dir>/callguard/decisions.jsonl`; None if the state directory cannot
 /// be told (no home). A relative path would put the log in the working
 /// directory, where the agent can write forged entries.
-pub fn default_path() -> Option<String> {
+pub(crate) fn default_path() -> Option<String> {
     default_path_with(&|k| std::env::var(k).ok(), std::env::consts::OS)
 }
 
@@ -147,7 +147,7 @@ fn default_path_with(env: &dyn Fn(&str) -> Option<String>, os: &str) -> Option<S
 
 /// Appends entries to one file. Safe for concurrent use.
 #[derive(Debug)]
-pub struct Logger {
+pub(crate) struct Logger {
     path: String,
     lock: Mutex<()>,
 }
@@ -208,7 +208,7 @@ fn refuse_fifo(path: &str) -> io::Result<()> {
 /// The entries of `session_id` within the last [`TAIL_BYTES`] of the file,
 /// oldest first. A missing file is no entries. Unparseable lines (a cut first
 /// line, a corrupt line) are skipped.
-pub fn read_tail(path: &str, session_id: &str) -> io::Result<Vec<Entry>> {
+pub(crate) fn read_tail(path: &str, session_id: &str) -> io::Result<Vec<Entry>> {
     refuse_fifo(path)?;
     let f = match File::open(path) {
         Ok(f) => f,
@@ -233,7 +233,7 @@ pub fn read_tail(path: &str, session_id: &str) -> io::Result<Vec<Entry>> {
 /// other layers neither count nor break the run, and neither do escalated
 /// denies (shown to a human as ask), so an escalation stays in force until the
 /// judge allows something.
-pub fn llm_denies(entries: &[Entry]) -> (usize, usize) {
+pub(crate) fn llm_denies(entries: &[Entry]) -> (usize, usize) {
     let (mut consecutive, mut total) = (0, 0);
     let mut run = true;
     for e in entries.iter().rev() {

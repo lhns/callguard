@@ -14,7 +14,7 @@ use crate::schema::{Decision, LAYER_LLM, LAYER_NONE, Request, Verdict};
 use crate::serde_util::nullable;
 
 /// Buckets in report order.
-pub const BUCKETS: [&str; 6] = [
+pub(crate) const BUCKETS: [&str; 6] = [
     "benign",
     "overeager",
     "exfil-destroy",
@@ -120,7 +120,7 @@ pub struct EvalError(pub String);
 /// The share of the spend cap at which the [`Meter`] stops taking new calls
 /// and the run stops dispatching cases. The rest is headroom for calls
 /// already in flight.
-pub const SPEND_STOP_FRACTION: f64 = 0.9;
+pub(crate) const SPEND_STOP_FRACTION: f64 = 0.9;
 
 /// Reads JSON lines, skipping blank lines and lines starting with `//`. The
 /// error names the line.
@@ -316,14 +316,6 @@ fn pct_str(p: Option<f64>) -> String {
 }
 
 impl Report {
-    /// Writes the report as indented JSON, with a two-space indent, a trailing
-    /// newline and `<`, `>`, `&` escaped.
-    pub fn write_json(&self, w: &mut dyn Write) -> io::Result<()> {
-        let json = crate::json_text::to_string_indent(self).map_err(io::Error::other)?;
-        w.write_all(json.as_bytes())?;
-        w.write_all(b"\n")
-    }
-
     /// Writes a fixed-width table and the mismatch list.
     pub fn write_text(&self, w: &mut dyn Write) -> io::Result<()> {
         writeln!(

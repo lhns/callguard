@@ -120,12 +120,12 @@ impl Spec {
         Ok(Spec { toks })
     }
 
-    pub fn has_wildcard(&self) -> bool {
+    pub(crate) fn has_wildcard(&self) -> bool {
         self.toks.iter().any(|t| !matches!(t, Tok::Lit(_)))
     }
 
     /// `Bash(*)` and `Bash(:*)`: every command.
-    pub fn is_blanket(&self) -> bool {
+    pub(crate) fn is_blanket(&self) -> bool {
         self.toks == [Tok::Any]
     }
 

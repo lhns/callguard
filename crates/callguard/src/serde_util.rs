@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serializer};
 use serde_json::value::RawValue;
 
 /// `null` is accepted for any field and leaves the zero value; serde does not.
-pub fn nullable<'de, D, T>(d: D) -> Result<T, D::Error>
+pub(crate) fn nullable<'de, D, T>(d: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de> + Default,
@@ -16,7 +16,7 @@ where
 
 /// A raw JSON field: keeps the raw text, `null` included (only an absent field
 /// is empty).
-pub fn raw_some<'de, D>(d: D) -> Result<Option<Box<RawValue>>, D::Error>
+pub(crate) fn raw_some<'de, D>(d: D) -> Result<Option<Box<RawValue>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -24,18 +24,18 @@ where
 }
 
 /// For `skip_serializing_if`: a zero value is left out.
-pub fn is_zero<T: Default + PartialEq>(v: &T) -> bool {
+pub(crate) fn is_zero<T: Default + PartialEq>(v: &T) -> bool {
     *v == T::default()
 }
 
 /// For `skip_serializing_if`: `false` is left out.
-pub fn is_false(v: &bool) -> bool {
+pub(crate) fn is_false(v: &bool) -> bool {
     !*v
 }
 
 /// A whole float is written without a fraction (`1`, not `1.0`), as the
 /// confidences in existing logs are; serde_json would write `1.0`.
-pub fn whole_float<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
+pub(crate) fn whole_float<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
     if v.is_finite() && v.fract() == 0.0 && v.abs() < 1e15 {
         s.serialize_i64(*v as i64)
     } else {
@@ -45,7 +45,7 @@ pub fn whole_float<S: Serializer>(v: &f64, s: S) -> Result<S::Ok, S::Error> {
 
 /// Refuses anything but a JSON object: a derived `Deserialize` would also
 /// take an array as a list of field values.
-pub fn require_object(body: &[u8]) -> Result<(), String> {
+pub(crate) fn require_object(body: &[u8]) -> Result<(), String> {
     if body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{') {
         Ok(())
     } else {
@@ -149,7 +149,7 @@ fn prepare(
 /// fields in `nested` are matched the same way with the pair's names. Anything
 /// but an object (also for a nested field) is an error, and so is a field of
 /// the wrong type.
-pub fn decode_object<T: serde::de::DeserializeOwned>(
+pub(crate) fn decode_object<T: serde::de::DeserializeOwned>(
     body: &[u8],
     known: &[&str],
     nested: &[(&str, &[&str])],
@@ -162,7 +162,7 @@ pub fn decode_object<T: serde::de::DeserializeOwned>(
 /// Like [`decode_object`], but a failure still returns what could be read:
 /// the fields that have the right type, so a caller can use them (a
 /// `permission_mode` that makes the fallback a deny) while it reports the error.
-pub fn decode_partial<T: serde::de::DeserializeOwned + Default>(
+pub(crate) fn decode_partial<T: serde::de::DeserializeOwned + Default>(
     body: &[u8],
     known: &[&str],
 ) -> (T, Option<String>) {

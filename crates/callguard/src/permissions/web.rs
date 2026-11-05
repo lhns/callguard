@@ -34,7 +34,7 @@ impl Domain {
         Ok(Domain { pat })
     }
 
-    pub fn is_blanket(&self) -> bool {
+    pub(crate) fn is_blanket(&self) -> bool {
         self.pat.split('.').all(|l| l.chars().all(|c| c == '*'))
     }
 

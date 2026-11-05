@@ -20,16 +20,16 @@ use crate::serde_util::{is_false, is_zero, nullable};
 /// The only supported policy_version.
 pub const VERSION: i64 = 1;
 
-pub const MODE_ENFORCE: &str = "enforce";
-pub const MODE_SHADOW: &str = "shadow";
+pub(crate) const MODE_ENFORCE: &str = "enforce";
+pub(crate) const MODE_SHADOW: &str = "shadow";
 
-pub const LAYER_SYSTEM: &str = "system";
-pub const LAYER_USER: &str = "user";
+pub(crate) const LAYER_SYSTEM: &str = "system";
+pub(crate) const LAYER_USER: &str = "user";
 pub const LAYER_PROJECT: &str = "project";
 
 /// The ids of the built-in layer's rules (`rules`). Only the system layer can
 /// list them in `disable_builtin`.
-pub const BUILTIN_IDS: &[&str] = &[
+pub(crate) const BUILTIN_IDS: &[&str] = &[
     "rm-root",
     "disk-wipe",
     "fork-bomb",
@@ -39,7 +39,7 @@ pub const BUILTIN_IDS: &[&str] = &[
 
 /// Directories whose contents the default write rule does not auto-allow:
 /// they carry hooks, policy and VCS state.
-pub const PROTECTED_DIRS: &[&str] = &[
+pub(crate) const PROTECTED_DIRS: &[&str] = &[
     "**/.git/**",
     "**/.claude/**",
     "**/.callguard/**",
@@ -246,7 +246,7 @@ pub struct Nah {
 
 impl Nah {
     /// Whether the layer runs (default true).
-    pub fn is_enabled(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         self.enabled.unwrap_or(true)
     }
 }
@@ -359,7 +359,7 @@ pub struct Log {
 
 impl Policy {
     /// Whether the LLM layer is on (default true).
-    pub fn llm_enabled(&self) -> bool {
+    pub(crate) fn llm_enabled(&self) -> bool {
         self.llm.as_ref().is_none_or(|l| l.enabled.unwrap_or(true))
     }
 }
@@ -450,7 +450,7 @@ fn path_string(p: PathBuf) -> String {
 }
 
 /// The platform default system policy path.
-pub fn system_path() -> String {
+pub(crate) fn system_path() -> String {
     if cfg!(windows) {
         let pd = std::env::var("ProgramData")
             .ok()
@@ -464,7 +464,7 @@ pub fn system_path() -> String {
 
 /// The user policy file path, None when the layer is skipped or the
 /// directory is unknown.
-pub fn user_path(config: &UserConfig) -> Option<String> {
+pub(crate) fn user_path(config: &UserConfig) -> Option<String> {
     let dir = match config {
         UserConfig::None => return None,
         UserConfig::Default => user_config_dir()?,
@@ -805,7 +805,7 @@ fn walk_unknown(raw: &Value, ty: Ty, path: &str, out: &mut Vec<String>) {
 
 /// Unknown keys of a policy file, as dotted paths ("rules[0].match.foo"),
 /// sorted within each object.
-pub fn unknown_keys(data: &[u8]) -> Vec<String> {
+pub(crate) fn unknown_keys(data: &[u8]) -> Vec<String> {
     let Ok(raw) = serde_json::from_slice::<Value>(data) else {
         return Vec::new();
     };
@@ -1037,7 +1037,7 @@ fn upsert_rule(rules: &mut Vec<Rule>, r: &Rule) {
 
 /// Applies the system layer over `base` with full authority. A rule whose id is
 /// already present replaces that rule; others are appended.
-pub fn merge_system(base: &Policy, sys: &Policy) -> Policy {
+pub(crate) fn merge_system(base: &Policy, sys: &Policy) -> Policy {
     let mut out = base.clone();
     if sys.r#final {
         out.r#final = true;
@@ -1156,7 +1156,7 @@ fn merge_llm(mut b: Llm, s: &Llm) -> Llm {
 /// Applies a user or project layer: it may add deny/ask rules, append
 /// `llm.block` and raise `llm.min_confidence`; everything else is dropped, each
 /// drop reported as a warning naming `src` and the key.
-pub fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy, Vec<String>) {
+pub(crate) fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy, Vec<String>) {
     const ONLY: &str =
         "this layer can only add deny/ask rules, append llm.block and raise llm.min_confidence";
     let mut warns: Vec<String> = Vec::new();
@@ -1266,16 +1266,16 @@ pub fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy, Vec<S
 /// The whole call's deadline. It has to fit nah's hard deadline and the judge
 /// after it, yet stay under the 12 s timeout of the opencode and pi plugins,
 /// which block the call when it passes.
-pub const DEFAULT_DEADLINE_MS: i64 = 11_000;
+pub(crate) const DEFAULT_DEADLINE_MS: i64 = 11_000;
 
 /// The hard deadline for the nah process (see [`Nah::timeout_ms`]).
-pub const DEFAULT_NAH_TIMEOUT_MS: i64 = 10_000;
+pub(crate) const DEFAULT_NAH_TIMEOUT_MS: i64 = 10_000;
 
 /// nah's analysis budget (kept by the load run, `git show 145fe3e:docs/rust-phase0.md`).
 pub const DEFAULT_NAH_BUDGET_MS: i64 = 2_000;
 
 /// The confidence the judge needs for an allow to stand.
-pub const DEFAULT_MIN_CONFIDENCE: f64 = 0.7;
+pub(crate) const DEFAULT_MIN_CONFIDENCE: f64 = 0.7;
 
 /// The built-in policy: the default rules plus the default of every setting.
 pub fn default() -> Policy {
@@ -1287,7 +1287,7 @@ pub fn default() -> Policy {
 }
 
 /// Fills every unset setting with its default. Does not add rules.
-pub fn with_defaults(mut p: Policy) -> Policy {
+pub(crate) fn with_defaults(mut p: Policy) -> Policy {
     if p.policy_version == 0 {
         p.policy_version = VERSION;
     }
@@ -1359,7 +1359,7 @@ fn strings(v: &[&str]) -> Vec<String> {
 }
 
 /// The default rules (design section 4, "Default rules").
-pub fn default_rules() -> Vec<Rule> {
+pub(crate) fn default_rules() -> Vec<Rule> {
     let secret_paths = strings(&[
         "**/.ssh/**",
         "**/.aws/**",
@@ -1500,16 +1500,16 @@ macro_rules! secret_shell_re {
     };
 }
 
-pub const PIPE_TO_SHELL_RE: &str = concat!(
+pub(crate) const PIPE_TO_SHELL_RE: &str = concat!(
     r#"(?i)\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b[^|]*(?:\|[^|][^|]*)*?\|\s*(?:(?:sudo|doas|env)(?:\s+-\S+)*\s+)?(?:\S*/)?(?:sh|bash|zsh|dash|python3?|perl|ruby|node|iex|invoke-expression)\b"#,
     r#"|(?i)\b(?:sh|bash|zsh|dash)\s+(?:-c\s+)?["']?\$\(\s*(?:curl|wget)\b"#,
     r"|(?i)\b(?:sh|bash|zsh|dash)\s+<\(\s*(?:curl|wget)\b"
 );
-pub const GIT_FORCE_PUSH_RE: &str = r"\bgit\b[^;&|\n]*\bpush\b[^;&|\n]*(?:\s--force(?:-with-lease)?\b|\s-[a-zA-Z]*f[a-zA-Z]*(?:\s|$)|\s\+\S)";
-pub const GIT_DISCARD_RE: &str = r"\bgit\b[^;&|\n]*(?:\breset\b[^;&|\n]*\s--hard\b|\bclean\b[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b|\bcheckout\s+(?:--\s+)?\.(?:\s|$)|\bcheckout\b[^;&|\n]*\s--\s+\.|\brestore\b[^;&|\n]*\s\.(?:\s|$))";
-pub const INFRA_DESTROY_RE: &str = r"\b(?:terraform|tofu|pulumi|cdk|terragrunt)\b[^;&|\n]*\bdestroy\b|\bkubectl\b[^;&|\n]*\bdelete\b|\bgh\s+repo\s+delete\b";
-pub const PACKAGE_PUBLISH_RE: &str = r"\b(?:npm|pnpm|yarn)\s+(?:[^;&|\n]*\s)?publish(?:\s|$)|\bcargo\s+publish(?:\s|$)|\btwine\s+upload\b|\bgem\s+push\b";
-pub const SUDO_RE: &str = r"(?:^|[^\w.-])(?:sudo|doas)\s+\S";
+pub(crate) const GIT_FORCE_PUSH_RE: &str = r"\bgit\b[^;&|\n]*\bpush\b[^;&|\n]*(?:\s--force(?:-with-lease)?\b|\s-[a-zA-Z]*f[a-zA-Z]*(?:\s|$)|\s\+\S)";
+pub(crate) const GIT_DISCARD_RE: &str = r"\bgit\b[^;&|\n]*(?:\breset\b[^;&|\n]*\s--hard\b|\bclean\b[^;&|\n]*\s(?:-[a-zA-Z]*f[a-zA-Z]*|--force)\b|\bcheckout\s+(?:--\s+)?\.(?:\s|$)|\bcheckout\b[^;&|\n]*\s--\s+\.|\brestore\b[^;&|\n]*\s\.(?:\s|$))";
+pub(crate) const INFRA_DESTROY_RE: &str = r"\b(?:terraform|tofu|pulumi|cdk|terragrunt)\b[^;&|\n]*\bdestroy\b|\bkubectl\b[^;&|\n]*\bdelete\b|\bgh\s+repo\s+delete\b";
+pub(crate) const PACKAGE_PUBLISH_RE: &str = r"\b(?:npm|pnpm|yarn)\s+(?:[^;&|\n]*\s)?publish(?:\s|$)|\bcargo\s+publish(?:\s|$)|\btwine\s+upload\b|\bgem\s+push\b";
+pub(crate) const SUDO_RE: &str = r"(?:^|[^\w.-])(?:sudo|doas)\s+\S";
 /// `ssh` with a destructive verb in the remote command: the verbs of the
 /// `rm-root` and `disk-wipe` checks, power commands, and cluster and
 /// infrastructure deletes, Linux and Windows (`ssh`, `autossh`, `ssh.exe`). The
@@ -1517,7 +1517,7 @@ pub const SUDO_RE: &str = r"(?:^|[^\w.-])(?:sudo|doas)\s+\S";
 /// `ssh rm@host ls`, `ssh host ls rmdir.txt` and `--format=rm` do not match;
 /// `ssh-add` is not `ssh`. Known limit: a path that ends in a verb
 /// (`ssh host cat /tmp/rm`) also asks.
-pub const SSH_REMOTE_DESTRUCTIVE_RE: &str = concat!(
+pub(crate) const SSH_REMOTE_DESTRUCTIVE_RE: &str = concat!(
     r#"(?i)(?:^|[\s;&|(`'"/\\])(?:auto)?ssh(?:\.exe)?\s[^;&|\n]*[\s'"`;&|(/\\]+"#,
     r"(?:rm|rmdir|rd|del|erase|remove-item|ri|mkfs(?:\.\w+)?|dd|format(?:\.com)?|shutdown|reboot|poweroff|halt|shred|wipefs|stop-computer|restart-computer",
     r"|find\b[^;&|\n]*\s-delete|kubectl\b[^;&|\n]*\bdelete|(?:terraform|tofu)\b[^;&|\n]*\bdestroy)(?:\.exe)?",
@@ -1530,7 +1530,7 @@ pub const SSH_REMOTE_DESTRUCTIVE_RE: &str = concat!(
 /// directory, and a bare one-letter `h:` is taken for a drive. Known limit:
 /// the regex has no lookbehind, so `--exclude .ssh` and `--exclude ~/.aws`
 /// (with a space) are denied like a copy; `--exclude=.ssh` is not.
-pub const SCP_HOME_SECRET_RE: &str = concat!(
+pub(crate) const SCP_HOME_SECRET_RE: &str = concat!(
     r#"(?i)\b(?:scp|rsync|sftp)(?:\.exe)?\s[^;&|\n]*[\s'"]"#,
     r"(?:~|\$home|\$\{home\}|%userprofile%|\$env:userprofile|[a-z]:[\\/]users[\\/][^\\/\s'\x22]+|/(?:home|users)/[^/\s'\x22]+|/root)?",
     r#"[\\/]?\.(?:ssh|aws|gnupg)(?:[\\/]\*?)?['"]?\s"#,
@@ -1538,14 +1538,14 @@ pub const SCP_HOME_SECRET_RE: &str = concat!(
 );
 
 /// Separators include _ - . so file names like IGNORE_PREVIOUS_INSTRUCTIONS match.
-pub const INJECTION_RE: &str = concat!(
+pub(crate) const INJECTION_RE: &str = concat!(
     r"(?i)ignore[\s_.-]+(?:(?:all|any)[\s_.-]+)?(?:previous|prior)[\s_.-]+instructions",
     r"|you[\s_.-]+are[\s_.-]+(?:now[\s_.-]+)?(?:(?:a|the)[\s_.-]+)?(?:security[\s_.-]+)?classifier",
     r"|(?:label|classify|mark|rate)[\s_.-]+(?:this|it|the)(?:[\s_.-]+call)?[\s_.-]+(?:as[\s_.-]+)?(?:allow|safe|benign)",
     r"|callguard\W+(?:allow|approve)|callguard-data"
 );
 /// A network tool and a common secret location in one command.
-pub const SECRET_EXFIL_RE: &str = concat!(
+pub(crate) const SECRET_EXFIL_RE: &str = concat!(
     r"(?i)\b(?:",
     net_tools_re!(),
     r")\b[^;&\n]*",

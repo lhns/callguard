@@ -94,7 +94,7 @@ pub trait NahEngine: Send + Sync {
 /// of this crate, which must not start a nah process.
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default)]
-pub struct DelegatingEngine;
+pub(crate) struct DelegatingEngine;
 
 #[cfg(test)]
 impl NahEngine for DelegatingEngine {
