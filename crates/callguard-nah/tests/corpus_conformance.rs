@@ -28,11 +28,11 @@ use callguard_nah::RealEngine;
 use serde_json::{Value, json};
 
 /// (OS, rows that agree, rows compared) on a full run.
-/// Linux: 8,598 of 8,858 (60 s budget). Windows: 217 of 238 in a
+/// Linux: 8,612 of 8,858 (60 s budget). Windows: 217 of 238 in a
 /// release run, 215 in a debug one; the two root walks that may or may not
 /// answer within the 90 s row limit decide the difference, so 215 is the floor.
 /// macOS has none yet.
-const BASELINES: &[(&str, usize, usize)] = &[("linux", 8598, 8858), ("windows", 215, 238)];
+const BASELINES: &[(&str, usize, usize)] = &[("linux", 8612, 8858), ("windows", 215, 238)];
 
 const BUDGET_MS: u64 = 60_000;
 /// A row that takes longer than this counts as a failure and the run moves on.
