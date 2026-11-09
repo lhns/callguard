@@ -118,6 +118,12 @@ pub fn validate(p: &Policy, merged: bool) -> Vec<String> {
                 quote_string(&l.mode)
             ));
         }
+        if !one_of(&l.when, &["always", "unattended"]) {
+            out.push(format!(
+                "llm.when {} must be always or unattended",
+                quote_string(&l.when)
+            ));
+        }
         if l.min_confidence.is_some_and(|c| !(0.0..=1.0).contains(&c)) {
             out.push("llm.min_confidence must be in [0,1]".into());
         }

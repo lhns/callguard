@@ -656,6 +656,49 @@ fn layer_none() {
 }
 
 #[test]
+fn llm_when_unattended_skips_the_judge_for_attended_calls() {
+    let when = |w: &str| {
+        let w = w.to_owned();
+        test_policy(move |p| p.llm.as_mut().unwrap().when = w)
+    };
+    // Default and "always": an attended call is judged.
+    for w in ["", "always"] {
+        let (e, v) = new_test_engine(when(w), Options::default(), Some(answer("deny", 0.9)));
+        let got = e.decide(&bash("do thing"));
+        assert!(
+            got.decision == Decision::Deny && got.layer == LAYER_LLM && v.calls() == 1,
+            "when {w:?}: {got:?}"
+        );
+    }
+    let (e, v) = new_test_engine(
+        when("unattended"),
+        Options::default(),
+        Some(answer("deny", 0.9)),
+    );
+    // Attended: not judged, no binding opinion.
+    let got = e.decide(&bash("do thing"));
+    assert!(
+        got.layer == LAYER_NONE
+            && !got.enforced
+            && got.rule == "judge-skipped-attended"
+            && v.calls() == 0,
+        "attended: {got:?}"
+    );
+    // Rules still decide an attended call.
+    let got = e.decide(&bash("git push -f"));
+    assert!(
+        got.decision == Decision::Ask && got.enforced && got.layer != LAYER_NONE && v.calls() == 0,
+        "attended rule: {got:?}"
+    );
+    // Unattended: judged as before.
+    let got = e.decide(&unattended(bash("do thing")));
+    assert!(
+        got.decision == Decision::Deny && got.layer == LAYER_LLM && got.enforced && v.calls() == 1,
+        "unattended: {got:?}"
+    );
+}
+
+#[test]
 fn llm_failures() {
     let (e, _) = new_test_engine(
         test_policy(no_mut),

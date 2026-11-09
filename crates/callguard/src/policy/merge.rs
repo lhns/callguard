@@ -102,6 +102,9 @@ fn merge_llm(mut b: Llm, s: &Llm) -> Llm {
     if s.timeout_ms > 0 {
         b.timeout_ms = s.timeout_ms;
     }
+    if !s.when.is_empty() {
+        b.when = s.when.clone();
+    }
     if s.instructions.is_some() {
         b.instructions = s.instructions;
     }
@@ -214,6 +217,9 @@ pub(crate) fn merge_tighten(base: &Policy, layer: &Policy, src: &str) -> (Policy
         }
         if !l.backend.is_empty() {
             dropped("llm.backend", ONLY);
+        }
+        if !l.when.is_empty() {
+            dropped("llm.when", ONLY);
         }
         if l.timeout_ms != 0 {
             dropped("llm.timeout_ms", ONLY);

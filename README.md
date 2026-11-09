@@ -227,6 +227,8 @@ Deny and ask also take:
 
 ### Unattended
 
+`llm.when: "unattended"` (system layer only; default `"always"`) skips the judge for attended calls that no rule decided, so nobody waits for it: they get an unenforced verdict (layer `none`, rule `judge-skipped-attended`) and the harness asks the person itself. Rules, builtins and nah still apply, and unattended calls are still judged.
+
 When nobody can answer a prompt (`--unattended`, or Claude's `dontAsk` mode), `ask` becomes `deny` (`"unattended_ask": "deny"`, the default; only the system layer can set `"ask"`). Errors then deny too.
 
 ### Decision log

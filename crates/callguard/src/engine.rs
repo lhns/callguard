@@ -704,6 +704,23 @@ impl Inner {
             out.shadow = shadow;
             return out;
         }
+        if !req.unattended
+            && self
+                .pol
+                .llm
+                .as_ref()
+                .is_some_and(|l| l.when == "unattended")
+        {
+            // No binding opinion: the harness asks the person itself.
+            let mut v = blank_verdict(Decision::Ask, LAYER_NONE);
+            v.rule = "judge-skipped-attended".into();
+            v.reason =
+                "llm.when is unattended and a person is present, so the judge was skipped".into();
+            let mut out = Outcome::new(v, false);
+            out.warnings = warns;
+            out.shadow = shadow;
+            return out;
+        }
         let facts = self.judge_facts(req, nah_res.as_ref());
         let mut out = self.run_llm(req, &call, &project_dir, facts, nah_res.as_ref(), deadline);
         warns.append(&mut out.warnings);

@@ -544,6 +544,7 @@ fn schema_fields(o: Obj) -> &'static [(&'static str, Ty)] {
             ("enabled", Leaf),
             ("mode", Leaf),
             ("backend", Leaf),
+            ("when", Leaf),
             ("instructions", Leaf),
             ("timeout_ms", Leaf),
             ("min_confidence", Leaf),

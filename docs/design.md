@@ -144,7 +144,7 @@ JSON (ADR 0003). Each file has `"policy_version": 1`. Unknown keys are an error 
   "nah": {"enabled": true, "timeout_ms": 10000, "budget_ms": 2000, "mode": "enforce", "guards": {}},
   "llm": {
     "enabled": true, "mode": "shadow", "backend": "anthropic",
-    "timeout_ms": 3000, "min_confidence": 0.7,
+    "when": "always", "timeout_ms": 3000, "min_confidence": 0.7,
     "transcript": {"max_messages": 20, "max_bytes": 24000}, "instructions": true,
     "environment": ["Trusted repo: the working repository and its remotes"],
     "block": [], "allow_exceptions": []
@@ -350,6 +350,7 @@ Verdict `callguard/verdict/v1`:
 
 - Never `allow` on error. Every error path yields a `fallback` verdict: `ask` interactive, `deny` unattended (with a reason telling the agent to ask a human). This matches Claude Code, which denies when the classifier is unavailable or unparseable.
 - `unattended_ask: "deny"` (default, confirmed by the owner) turns any enforced `ask` into `deny` when unattended, since nobody can answer a prompt; the reason says approval is needed. Only the system layer can set it to `"ask"`, which passes the `ask` to the harness instead.
+- `llm.when: "unattended"` (system layer only; default `"always"`) keeps the judge to calls nobody is watching, because in an attended session a person waits the judge's ~2 s. An attended call that no rule, builtin or nah decided gets a verdict from layer `none`, rule `judge-skipped-attended`, `enforced: false`: no binding opinion, so adapters fall through to the harness's own prompt. The decision log shows the rule, so operators can count these calls. Only the system layer sets it: it removes a deny or ask the judge might add, and the agent can write the user and project layers.
 - Overall deadline `deadline_ms` (default 11000), well under the harness timeouts (Claude 600 s default, Hermes 60 s) and under the 12 s of the opencode and pi plugins. nah's budget (2000) and hard kill (`nah.timeout_ms`, 10000) are in §4; the LLM timeout (`llm.timeout_ms`, default 3000) is cut to what is left of the deadline. On deadline the engine returns the fallback verdict.
 - Budget targets: layers 0 and 2 take milliseconds. nah's analysis over its corpus took p50 78 ms and p95 471 ms on Linux, p50 58 ms and p95 3.8 s on Windows (`git show 145fe3e:docs/rust-phase0.md`), plus the start of the child process; a walk of `/` can take 2 to 9 s. The LLM call typically takes under 2 s with Haiku-class models `[U]`.
 - **Deny streak** (auto mode's 3/20): when `deny_streak` is set and the session's enforced LLM denies reach `consecutive` in a row or `total`, further LLM denies become `ask` for interactive sessions, so a human sees them. Unattended sessions keep `deny`. The counts come from the decision log tail for that session; no other state is kept. Rule and builtin denies are not affected.

@@ -267,6 +267,13 @@ pub struct Llm {
         deserialize_with = "nullable"
     )]
     pub backend: String,
+    /// `"always"` (default, also empty) or `"unattended"`: the judge only sees
+    /// calls nobody is watching. System layer only.
+    #[serde(
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "nullable"
+    )]
+    pub when: String,
     /// `false` keeps the host's instruction text from the judge. Default true;
     /// system and user layers only.
     #[serde(skip_serializing_if = "Option::is_none")]

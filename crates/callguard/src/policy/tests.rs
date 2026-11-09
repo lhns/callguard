@@ -1114,6 +1114,28 @@ fn llm_instructions_is_set_by_system_or_user_and_only_off() {
 }
 
 #[test]
+fn llm_when_is_system_only_and_validated() {
+    let when = |l: &Loaded| llm(&l.policy).when.clone();
+    let sys = r#"{"policy_version":1,"llm":{"when":"unattended"}}"#;
+    let l = load(&layers(sys, "", "").1).unwrap();
+    assert_eq!(when(&l), "unattended", "system");
+    let low = r#"{"policy_version":1,"llm":{"when":"unattended"}}"#;
+    for (user, proj) in [(low, ""), ("", low)] {
+        let l = load(&layers(r#"{"policy_version":1}"#, user, proj).1).unwrap();
+        assert_eq!(when(&l), "", "lower layer");
+        assert!(
+            l.warnings.iter().any(|w| w.contains("llm.when ignored")),
+            "{:?}",
+            l.warnings
+        );
+    }
+    let mut bad = crate::policy::default();
+    bad.llm.as_mut().unwrap().when = "never".into();
+    let probs = validate(&bad, true).join("; ");
+    assert!(probs.contains("llm.when"), "bad value: {probs}");
+}
+
+#[test]
 fn a_project_pair_leaves_the_system_rule_whole() {
     let sys = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)"]}}"#;
     let proj = r#"{"policy_version":1,"permissions":{"deny":["Read(.env)","Read(!.env)"]}}"#;
